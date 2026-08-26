@@ -7,9 +7,9 @@
 ```
 $ cat pyproject.toml
 ```
-关键字段：`name = "sensegate"`、`version = "0.1.0"`、`dependencies = []`、
+关键字段：`name = "perceptkit"`、`version = "0.1.0"`、`dependencies = []`、
 无 PyPI 发布相关配置 —— 确认"还没发布到 PyPI"为真，README 未沿用旧文案
-里的 `pip install sensegate`（那条装不到东西）。
+里的 `pip install perceptkit`（那条装不到东西）。
 
 参照 `/tmp/mg-peek`（memgarden 的 checkout）的 `README.md` 与
 `examples/quickstart.py`，照其结构和"先说不是什么"的开场方式改写。
@@ -72,7 +72,7 @@ $ uv run python3 examples/quickstart.py
 跑通了：没有网络、没有 API key、没有数据库——库只回答判断，
 戳醒之后 agent 继续睡 / 只看一眼 / 开口说话，这三选一从来不是它管的事。
 ```
-（长文本段落在此省略中间部分，完整文本见 `src/sensegate/prompts.py` 的
+（长文本段落在此省略中间部分，完整文本见 `src/perceptkit/prompts.py` 的
 `V1_GLANCE_HOWTO` / `V1_BOARD_HOWTO`，实际运行时是全文打印的。）
 
 验证"裸 python3 找不到包"（README 里明确写了这个预期行为）：
@@ -81,7 +81,7 @@ $ uv run python3 examples/quickstart.py
 $ python3 examples/quickstart.py
 Traceback (most recent call last):
   ...
-ModuleNotFoundError: No module named 'sensegate'
+ModuleNotFoundError: No module named 'perceptkit'
 ```
 
 ## 3. 新增测试
@@ -116,13 +116,13 @@ tests/test_wake.py::test_unknown_signal_name_defaults_to_allow
 
 ```
 $ git remote -v
-origin  git@github.com:teleport-computer/sensegate.git (fetch/push)
+origin  git@github.com:teleport-computer/perceptkit.git (fetch/push)
 
 $ git ls-remote origin
 (空 — 远程仓库目前没有任何 ref，是全新的空仓库)
 
-$ gh repo view teleport-computer/sensegate --json isPrivate,name,url
-{"isPrivate":true,"name":"sensegate","url":"https://github.com/teleport-computer/sensegate"}
+$ gh repo view teleport-computer/perceptkit --json isPrivate,name,url
+{"isPrivate":true,"name":"perceptkit","url":"https://github.com/teleport-computer/perceptkit"}
 ```
 确认私有、确认远程为空（本地 `main` 尚未推送过）。
 
@@ -137,9 +137,9 @@ $ git commit -m "Rewrite README and add a runnable quickstart example"
  create mode 100644 tests/test_examples.py
 
 $ git push -u origin main
-To github.com:teleport-computer/sensegate.git
+To github.com:teleport-computer/perceptkit.git
  * [new branch]      main -> main
 branch 'main' set up to track 'origin/main'.
 ```
 远程之前完全是空仓库（无任何 ref），这次推送是第一次把 `main` 推上去。
-仓库可见性未改动，仍是 `teleport-computer/sensegate` 下的私有仓库。
+仓库可见性未改动，仍是 `teleport-computer/perceptkit` 下的私有仓库。

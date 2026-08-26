@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 
-import sensegate.observation as obs
+import perceptkit.observation as obs
 
 
 def test_a_real_value_is_observed():

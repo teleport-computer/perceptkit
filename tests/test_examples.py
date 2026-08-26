@@ -5,7 +5,7 @@
   · 它能在当前解释器下干净跑完（exit code 0），不炸
   · 它确实走完了全部七步、打印了结尾那句话——不是半路 return 或空转
 
-用 ``sys.executable`` 而不是裸 ``python3``：pytest 本身就是在装好 sensegate
+用 ``sys.executable`` 而不是裸 ``python3``：pytest 本身就是在装好 perceptkit
 （editable install）的解释器下跑的，这样测试环境和 README 里教用户跑的方式
 （``uv run python3 examples/quickstart.py``）用的是同一个解释器，不会出现
 "测试绿、用户手上跑不动"的分裂。

@@ -1,4 +1,4 @@
-"""一分钟跑通：一次"回到常去的地点"，串起 sensegate 的六个判断。
+"""一分钟跑通：一次"回到常去的地点"，串起 perceptkit 的六个判断。
 
     uv run python3 examples/quickstart.py
 
@@ -10,9 +10,9 @@
 """
 from __future__ import annotations
 
-from sensegate import attribution, history, observation, streaks, trend_models, wake
-from sensegate.glance import build_perception_glance
-from sensegate.prompts import V1_BOARD_HOWTO, V1_GLANCE_HOWTO
+from perceptkit import attribution, history, observation, streaks, trend_models, wake
+from perceptkit.glance import build_perception_glance
+from perceptkit.prompts import V1_BOARD_HOWTO, V1_GLANCE_HOWTO
 
 
 def main() -> None:

@@ -1,4 +1,4 @@
-# sensegate
+# perceptkit
 
 **从设备信号到"值不值得戳一下 agent"的判断力。**
 
@@ -9,12 +9,12 @@
 它**不采集数据、不碰存储、不调模型** —— 那些是宿主的事。
 整个包是纯函数，零第三方依赖。
 
-**现状：还没发布到 PyPI**，`pip install sensegate` 现在装不到东西。
+**现状：还没发布到 PyPI**，`pip install perceptkit` 现在装不到东西。
 能确认好用的两条路：
 
 ```bash
-git clone git@github.com:teleport-computer/sensegate.git
-cd sensegate
+git clone git@github.com:teleport-computer/perceptkit.git
+cd perceptkit
 uv run pytest                        # 107 条测试
 uv run python3 examples/quickstart.py   # 一分钟看它怎么判断
 ```
@@ -23,13 +23,13 @@ uv run python3 examples/quickstart.py   # 一分钟看它怎么判断
 
 ```toml
 # 另一个项目的 pyproject.toml
-sensegate = { git = "ssh://git@github.com/teleport-computer/sensegate.git" }
+perceptkit = { git = "ssh://git@github.com/teleport-computer/perceptkit.git" }
 ```
 
 或者本地路径依赖（两个仓库在同一台机器上时）：
 
 ```bash
-uv add --editable ../sensegate
+uv add --editable ../perceptkit
 ```
 
 ---
@@ -71,16 +71,16 @@ uv run python3 examples/quickstart.py
 "该怎么把此刻讲给模型听"。
 
 > 注意：直接 `python3 examples/quickstart.py`（不经过 `uv run`）会报
-> `ModuleNotFoundError: No module named 'sensegate'`——这是预期的，本包
+> `ModuleNotFoundError: No module named 'perceptkit'`——这是预期的，本包
 > 是 src-layout，没有发布安装包时只能通过 `uv run`（或先 `uv sync`/
 > `pip install -e .`）让解释器找到它。
 
 最小代码：
 
 ```python
-from sensegate.observation import classify
-from sensegate.wake import should_wake
-from sensegate.glance import build_perception_glance
+from perceptkit.observation import classify
+from perceptkit.wake import should_wake
+from perceptkit.glance import build_perception_glance
 
 # 一条测量：有值、有观测到零值、没测到、还是不可用？四态分开判断，
 # 不能拿"没测到"直接当"测到是 0"，两者会喂出截然不同的错误结论。
@@ -160,7 +160,7 @@ glance = build_perception_glance({"location": {"place_label": "公司"}})
 ## 五、目录
 
 ```
-src/sensegate/
+src/perceptkit/
   catalog.py       信号有哪些字段、多久算新鲜
   fields.py        agent 能看哪些字段 + 权限判断
   glance.py        此刻的纯 bool 摘要

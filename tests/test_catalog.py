@@ -6,7 +6,7 @@ re-export 壳和内核对象是同一批对象——那是宿主集成测试,不
 """
 from __future__ import annotations
 
-import sensegate.catalog as catalog
+import perceptkit.catalog as catalog
 
 
 def test_capability_and_signal_counts_match_baseline():

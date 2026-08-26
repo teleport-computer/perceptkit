@@ -18,7 +18,7 @@ from __future__ import annotations
 import pytest
 
 
-import sensegate.wake as wake
+import perceptkit.wake as wake
 
 
 def test_disabled_source_never_wakes():

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 
-import sensegate.trend_models as tm
+import perceptkit.trend_models as tm
 
 
 def _rows(pairs):

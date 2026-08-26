@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "sensegate"
+name = "perceptkit"
 version = "0.1.0"
 description = "从设备信号判断:有没有发生值得留意的事、值不值得叫醒一次 agent、以及该怎么把此刻的状况讲给它听。不采集数据、不碰存储、不调模型。"
 readme = "README.md"
@@ -18,7 +18,7 @@ dependencies = []
 dev = ["pytest>=8.0"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/sensegate"]
+packages = ["src/perceptkit"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

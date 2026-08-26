@@ -8,8 +8,8 @@ from __future__ import annotations
 import pytest
 
 
-import sensegate.history as history
-import sensegate.retention as retention
+import perceptkit.history as history
+import perceptkit.retention as retention
 
 
 def test_health_signals_are_kept_forever():
@@ -54,7 +54,7 @@ def test_every_historized_signal_has_a_retention_value():
 
 def test_measured_at_ttl_is_longer_than_the_upload_based_one():
     # 改判测量时间后若沿用旧值，不常测的指标会永远是 null
-    from sensegate.catalog import SIGNALS
+    from perceptkit.catalog import SIGNALS
     for signal, ttl in retention.MEASURED_AT_TTL_SEC.items():
         assert ttl > SIGNALS[signal].ttl_sec, signal
 

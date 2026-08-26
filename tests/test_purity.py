@@ -15,7 +15,7 @@ import ast
 import pathlib
 import sys
 
-SRC = pathlib.Path(__file__).resolve().parent.parent / "src" / "sensegate"
+SRC = pathlib.Path(__file__).resolve().parent.parent / "src" / "perceptkit"
 
 #: 唯一允许的非标准库依赖——空集。这是本包和 memgarden 最大的区别：
 #: memgarden 允许同源的 agent-protocol-core，这个包没有等价的同源伙伴包。
@@ -57,11 +57,11 @@ def test_no_third_party_imports():
     for f in _modules(SRC):
         rel = str(f.relative_to(SRC))
         for mod in _top_level_imports(f.read_text(encoding="utf-8")):
-            if mod in stdlib or mod == "sensegate" or mod in ALLOWED_THIRD_PARTY:
+            if mod in stdlib or mod == "perceptkit" or mod in ALLOWED_THIRD_PARTY:
                 continue
             offenders.append(f"{rel}: {mod}")
     assert not offenders, (
-        "sensegate import 了标准库之外的东西——这个包唯一的承诺就是"
+        "perceptkit import 了标准库之外的东西——这个包唯一的承诺就是"
         "「任何宿主都能直接嵌入，不用装额外依赖」，破了这条就是假的：\n"
         + "\n".join(offenders)
     )

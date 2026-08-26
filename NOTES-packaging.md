@@ -1,16 +1,16 @@
-# sensegate 打包笔记
+# perceptkit 打包笔记
 
 镜像对象：`/tmp/mg-peek`（memgarden，同一个团队更早做的一次同类抽取）。
 布局、`pyproject.toml` 写法、`__init__.py` 语气、守卫测试风格都照它来。
 
 ## 1. 依赖验证
 
-`src/sensegate/*.py` 的全部 import（AST 扫描，排除包自身）：
+`src/perceptkit/*.py` 的全部 import（AST 扫描，排除包自身）：
 
 ```
 $ python3 - <<'EOF'
 import ast, pathlib, sys
-SRC = pathlib.Path("src/sensegate")
+SRC = pathlib.Path("src/perceptkit")
 stdlib = set(sys.stdlib_module_names)
 ...
 EOF
@@ -28,7 +28,7 @@ non-stdlib (excluding self): set()
 （`agent-protocol-core`），这个包没有等价的同源伙伴包，`dependencies = []`
 是真正的空。
 
-## 3. `src/sensegate/__init__.py`
+## 3. `src/perceptkit/__init__.py`
 
 重写成 memgarden 的语气：先说包判断什么，再列一段"不在这里的"（数据采集、
 存储、加解密、账号身份与鉴权、定时器/调度、真正调模型、决定 agent 最终该
@@ -56,7 +56,7 @@ test_wake.py          test_durable_wake_signals_default_allow         1 def -> 7
 
 **改动前实际总数：95 + 3 + 4 + 6 = 108**
 
-**改动后**（`sensegate/tests/`，`uv run python3 -m pytest --collect-only -q`）：
+**改动后**（`perceptkit/tests/`，`uv run python3 -m pytest --collect-only -q`）：
 
 ```
 106 tests collected in 0.02s
@@ -87,12 +87,12 @@ test_wake.py          test_durable_wake_signals_default_allow         1 def -> 7
 两个文件里删掉了宿主集成用例后保留文件名不变（`projection` 原本就是
 `fields.py` + `glance.py` 两个模块的联合测试，没有对应单模块名可用）。
 所有文件里的手写 `sys.path` bootstrap 全部删除，`import perception_kernel.X`
-/`from perception_kernel import X` 全部改成 `import sensegate.X` /
-`from sensegate import X`。
+/`from perception_kernel import X` 全部改成 `import perceptkit.X` /
+`from perceptkit import X`。
 
 ## 5. `tests/test_purity.py`
 
-照抄 memgarden 版本的结构（AST 扫描 `src/sensegate` 下每个文件的顶层
+照抄 memgarden 版本的结构（AST 扫描 `src/perceptkit` 下每个文件的顶层
 import），**唯一差异是允许名单是空集**（memgarden 允许同源的
 `agent-protocol-core`，这个包没有等价的伙伴包）。三条测试：源码树非空
 （护住扫描路径没写错）、无第三方 import、判断内核不碰网络/DB/进程/线程。
@@ -124,10 +124,10 @@ import），**唯一差异是允许名单是空集**（memgarden 允许同源的
 含有这些词，扫自己会自证失败（踩过一次：第一版把 `tests/` 也扫进去，
 测试文件里解释"删掉了什么"的说明文字被自己的正则命中）。
 
-## 7. 一个意外发现：`src/sensegate/*.py`（"已经就位"的文件）本身就在泄漏
+## 7. 一个意外发现：`src/perceptkit/*.py`（"已经就位"的文件）本身就在泄漏
 
 写完 leakage 测试、第一次跑之前先手动 grep 了一遍 `src/`（不是等测试跑起来
-才发现），结果是：这批已经放在 `src/sensegate/` 里的源码**本身携带大量
+才发现），结果是：这批已经放在 `src/perceptkit/` 里的源码**本身携带大量
 宿主内部细节**，集中在 `wake.py`、`prompts.py`、`fields.py`、`catalog.py`、
 `history.py` 五个文件的注释/docstring 里：
 
@@ -163,8 +163,8 @@ import），**唯一差异是允许名单是空集**（memgarden 允许同源的
 ```
 $ uv sync --extra dev
 Resolved 10 packages in 484ms
-Building sensegate @ file:///Users/hx/Projects/sensegate
-Installed 6 packages: iniconfig, packaging, pluggy, pygments, pytest, sensegate
+Building perceptkit @ file:///Users/hx/Projects/perceptkit
+Installed 6 packages: iniconfig, packaging, pluggy, pygments, pytest, perceptkit
 
 $ uv run python3 -m pytest -q
 ........................................................................ [ 67%]
@@ -173,7 +173,7 @@ $ uv run python3 -m pytest -q
 ```
 
 也验证了不带 `uv run`、只激活 `.venv` 后跑纯 `python3 -m pytest` 同样通过
-（`uv sync` 把包装成 editable install，`sensegate` 在 sys.path 上）：
+（`uv sync` 把包装成 editable install，`perceptkit` 在 sys.path 上）：
 
 ```
 $ source .venv/bin/activate
@@ -181,7 +181,7 @@ $ python3 -m pytest -q
 106 passed in 0.06s
 ```
 
-（不激活任何环境、直接用系统 `python3 -m pytest` 会因为 `sensegate` 没装
+（不激活任何环境、直接用系统 `python3 -m pytest` 会因为 `perceptkit` 没装
 而 `ModuleNotFoundError`——这是预期的：测试文件里的手写 `sys.path` bootstrap
 已按任务要求删除，proper packaging 意味着"先装包，再测"，不是"从任意
 目录躲开安装步骤"。）
