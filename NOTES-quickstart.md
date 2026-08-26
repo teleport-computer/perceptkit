@@ -128,6 +128,18 @@ $ gh repo view teleport-computer/sensegate --json isPrivate,name,url
 
 ## 6. 提交与推送
 
-见本次会话的 commit sha 与 `git push -u origin main` 的真实输出（附在
-任务回复里，此文件写作时尚未执行——按顺序：先写完本文件、连同其余改动
-一起提交，再推送）。
+```
+$ git commit -m "Rewrite README and add a runnable quickstart example"
+[main 45dae76] Rewrite README and add a runnable quickstart example
+ 4 files changed, 438 insertions(+), 33 deletions(-)
+ create mode 100644 NOTES-quickstart.md
+ create mode 100644 examples/quickstart.py
+ create mode 100644 tests/test_examples.py
+
+$ git push -u origin main
+To github.com:teleport-computer/sensegate.git
+ * [new branch]      main -> main
+branch 'main' set up to track 'origin/main'.
+```
+远程之前完全是空仓库（无任何 ref），这次推送是第一次把 `main` 推上去。
+仓库可见性未改动，仍是 `teleport-computer/sensegate` 下的私有仓库。
