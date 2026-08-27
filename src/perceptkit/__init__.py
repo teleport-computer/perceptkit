@@ -28,8 +28,11 @@
 """
 from __future__ import annotations
 
+from . import contracts, manifest, ports, processing, rules
 from .attribution import attribute_episode, attribute_instant, split_across_midnight
 from .catalog import CAPABILITIES, SIGNALS
+from .contracts import IngestContext, Observation, PerceptionEvent, ReportEnvelope, WakeReceipt
+from .kit import PerceptionKit
 from .fields import AGENT_PERCEPTION_SIGNALS, project_signal
 from .glance import build_perception_glance
 from .history import is_historized
@@ -48,6 +51,11 @@ from .trend_models import model_for, wake_eligible
 from .wake import is_wake_worthy_signal, is_significant_change, should_wake
 
 __all__ = [
+    # 接入口
+    "PerceptionKit",
+    "ReportEnvelope", "Observation", "PerceptionEvent", "WakeReceipt", "IngestContext",
+    "contracts", "manifest", "ports", "processing", "rules",
+    # 算法
     "attribute_episode",
     "attribute_instant",
     "split_across_midnight",

@@ -25,3 +25,17 @@ __all__ = [
     "aggregating_fields", "fold_into_day",
     "ingest_report", "IngestOutcome", "AGGREGATION_VERSION",
 ]
+
+from .dispatch import (  # noqa: E402
+    DispatchOutcome,
+    RuleOutcome,
+    dispatch_once,
+    drain,
+    evaluate_and_enqueue,
+    event_id_for,
+)
+
+__all__ += [
+    "evaluate_and_enqueue", "RuleOutcome", "event_id_for",
+    "dispatch_once", "drain", "DispatchOutcome",
+]

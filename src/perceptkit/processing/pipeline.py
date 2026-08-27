@@ -22,7 +22,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from ..contracts import receipt as _receipt
 from ..contracts.context import IngestContext
@@ -37,7 +37,9 @@ from ..contracts.records import (
 from ..contracts.report import ReportEnvelope
 from ..manifest.types import SignalDefinition
 from ..ports.storage import StoragePort
+from ..rules.types import EventDefinition
 from . import aggregate as _aggregate
+from .dispatch import evaluate_and_enqueue
 from .normalize import NormalizedObservation, normalize_observations
 
 #: 聚合算法的版本。改了口径就加这个数并重算，**不原地改写旧统计的语义** ——
@@ -58,6 +60,10 @@ class IngestOutcome:
     #: 同一时刻同一版本但内容不同 —— 不静默挑一个，交给宿主决定。
     conflicts: list[NormalizedObservation] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    #: 这批上报产生的事件（已经落进发件箱，还没投）。
+    events: list[Any] = field(default_factory=list)
+    #: 求值了但没触发的规则，带原因。排查"为什么没提醒我"时要用。
+    rule_misses: list[tuple[str, str | None]] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -74,6 +80,8 @@ def ingest_report(
     context: IngestContext,
     storage: StoragePort,
     signals: Mapping[str, SignalDefinition],
+    definitions: Sequence[EventDefinition] = (),
+    extra_evaluators: Mapping[str, Callable[..., Any]] | None = None,
     timezone_fallback: str | None = None,
     max_observations: int = 200,
     max_payload_bytes: int = 256 * 1024,
@@ -127,7 +135,8 @@ def ingest_report(
 
     for item in normalized.normalized:
         sig = signals[item.stored.signal]
-        _apply_one(item, sig, context=context, storage=storage, outcome=outcome)
+        _apply_one(item, sig, context=context, storage=storage, outcome=outcome,
+                   definitions=definitions, extra_evaluators=extra_evaluators)
 
     outcome.receipt = _receipt.IngestReceipt(
         subject_id=claim.subject_id, producer=claim.producer,
@@ -145,8 +154,10 @@ def _apply_one(
     context: IngestContext,
     storage: StoragePort,
     outcome: IngestOutcome,
+    definitions: Sequence[EventDefinition] = (),
+    extra_evaluators: Mapping[str, Callable[..., Any]] | None = None,
 ) -> None:
-    """③~⑦：一条观测的落地。
+    """③~⑨：一条观测的落地，以及命中规则时写发件箱。
 
     整条包在一个事务里：观测、去重身份、当前值、聚合要么一起成功，要么一起
     不生效。分开写的话会出现"观测写了但去重身份没写"——下次重传就会重复累计。
@@ -191,6 +202,17 @@ def _apply_one(
         if sig.stores_history and stored.availability == "observed":
             _update_aggregate(item, sig, context=context, storage=storage)
 
+        # ⑧⑨ 求值 + 写发件箱。**和上面在同一个事务里** —— 事件落地了但观测
+        # 没落地(或反过来)，都会让"为什么会有这个事件"永远解释不清。
+        if definitions:
+            rules = evaluate_and_enqueue(
+                item, context=context, storage=storage,
+                definitions=definitions, extra_evaluators=extra_evaluators,
+            )
+            outcome.events.extend(rules.events)
+            outcome.rule_misses.extend(rules.misses)
+
+    # ⑩ 事务在这里提交。走到这一行,事件就丢不了了 —— 投递由宿主的 worker 驱动。
     outcome.applied.append(item)
 
 
