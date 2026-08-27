@@ -383,3 +383,107 @@ def test_the_payload_byte_cap_is_actually_enforced():
     )
     assert result.receipt.error_code == "payload_too_large"
     assert not s.observations
+
+
+# ---------------------------------------------------------------------------
+# I2 —— 过期 worker 曾经能覆盖新 owner 的状态
+# ---------------------------------------------------------------------------
+
+def test_an_expired_worker_cannot_overwrite_the_new_owners_state():
+    """旧 worker 租约过期、事件被别人接管之后它才返回 —— 让它推进状态，
+    等于一次超时变成一次错误的覆盖，而且看起来完全正常。"""
+    from perceptkit.contracts import WAKE_ACCEPTED
+    from perceptkit.contracts.receipt import WakeReceipt
+    from perceptkit.contracts.records import EventOutboxEntry
+
+    s = InMemoryStorage()
+    s.enqueue_event(EventOutboxEntry(
+        event_id="evt_1", subject_id="u1", definition_id="d", definition_version=1,
+        event_type="t", occurred_at=t("10:00"), detected_at=t("10:00"),
+        fact_snapshot={},
+    ))
+    first = s.claim_pending_event(worker_id="w1", now=t("10:00"), lease_seconds=60)
+    second = s.claim_pending_event(worker_id="w2", now=t("10:05"), lease_seconds=60)
+    assert second is not None and second.claim_token != first.claim_token
+
+    # w1 现在才带着旧令牌回来
+    stale = s.record_wake_receipt(
+        receipt=WakeReceipt("evt_1", "old", WAKE_ACCEPTED, t("10:06")),
+        next_state=delivery.DELIVERED, claim_token=first.claim_token,
+    )
+    assert stale is False
+    assert s.outbox["evt_1"].delivery_state == delivery.CLAIMED   # 状态没被改
+    assert s.receipts                                             # 但进了审计
+
+
+def test_the_current_owner_can_still_finish_normally():
+    from perceptkit.contracts import WAKE_ACCEPTED
+    from perceptkit.contracts.receipt import WakeReceipt
+    from perceptkit.contracts.records import EventOutboxEntry
+
+    s = InMemoryStorage()
+    s.enqueue_event(EventOutboxEntry(
+        event_id="evt_1", subject_id="u1", definition_id="d", definition_version=1,
+        event_type="t", occurred_at=t("10:00"), detected_at=t("10:00"),
+        fact_snapshot={},
+    ))
+    claimed = s.claim_pending_event(worker_id="w1", now=t("10:00"), lease_seconds=60)
+    ok = s.record_wake_receipt(
+        receipt=WakeReceipt("evt_1", "a", WAKE_ACCEPTED, t("10:01")),
+        next_state=delivery.DELIVERED, claim_token=claimed.claim_token,
+    )
+    assert ok is not False
+    assert s.outbox["evt_1"].delivery_state == delivery.DELIVERED
+
+
+# ---------------------------------------------------------------------------
+# I3 —— 两种"配得出来但不生效"的生命周期组合
+# ---------------------------------------------------------------------------
+
+def test_cooldown_now_applies_to_fire_every_as_well():
+    """以前只在 fire=once 时检查冷却，于是 fire=every + rearm=cooldown
+    完全没有冷却 —— 配了个不生效的东西，比配不出来更糟。"""
+    from perceptkit.rules import Lifecycle, RuleState, evaluate
+    rule = EventDefinition(
+        definition_id="r", version=1, signal="steps", field_name="step_count",
+        condition_type="changed", event_type="t",
+        lifecycle=Lifecycle(fire="every", rearm="cooldown", cooldown_seconds=300),
+    )
+    fired = RuleState(previous_value=1, fired_in_scope=True,
+                      last_fired_at=t("10:00").isoformat())
+    assert not evaluate(rule, fired, 2, now=t("10:01")).fired
+    assert evaluate(rule, fired, 2, now=t("10:06")).fired
+
+
+def test_a_lifecycle_that_cannot_work_is_refused_at_construction():
+    from perceptkit.contracts import ContractError
+    from perceptkit.rules import Lifecycle
+    with pytest.raises(ContractError):
+        Lifecycle(scope="local_day", rearm="never")     # 换一天本来就重新武装了
+    with pytest.raises(ContractError):
+        Lifecycle(rearm="cooldown", cooldown_seconds=0)
+
+
+# ---------------------------------------------------------------------------
+# I4 —— 自定义 evaluator 的状态曾经被丢掉
+# ---------------------------------------------------------------------------
+
+def test_a_custom_evaluator_can_keep_its_own_derived_state():
+    """引擎以前无条件用观测值覆盖 previous_value，导致任何需要自己维护
+    派生状态的 evaluator 都没法工作。"""
+    from perceptkit.rules import RuleState, evaluate
+    from perceptkit.rules.types import RuleResult
+
+    def counting(d, s, current, ctx):
+        n = (s.previous_value or 0) + 1
+        return RuleResult(n >= 3, RuleState(previous_value=n), reason=f"第 {n} 次")
+
+    rule = EventDefinition(definition_id="r", version=1, signal="steps",
+                           condition_type="counting", event_type="t")
+    state = RuleState()
+    for expected in (1, 2, 3):
+        result = evaluate(rule, state, 0, now=t("10:00"),
+                          extra_evaluators={"counting": counting})
+        assert result.state.previous_value == expected
+        state = result.state
+    assert result.fired

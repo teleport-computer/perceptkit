@@ -65,8 +65,19 @@ def evaluate(
     lifecycle = definition.lifecycle
 
     # 无论触发与否,前值都要推进 —— 这是 crossing / changed / delta 的前提。
+    #
+    # 但如果 evaluator 自己动了 previous_value(自定义 evaluator 往往要维护
+    # 自己的派生状态),就尊重它的版本 —— 以前无条件覆盖,导致任何需要自己
+    # 管状态的 evaluator 都没法工作。
+    evaluator_moved_previous = outcome.state.previous_value != state.previous_value
+    if evaluator_moved_previous:
+        next_previous = outcome.state.previous_value
+    elif definition.condition_type == "streak":
+        next_previous = outcome.current      # streak 的"前值"是连续长度,不是观测值
+    else:
+        next_previous = current
     advanced = RuleState(
-        previous_value=current if definition.condition_type not in ("streak",) else outcome.current,
+        previous_value=next_previous,
         fired_in_scope=state.fired_in_scope,
         last_fired_at=state.last_fired_at,
         seen_keys=outcome.state.seen_keys,
@@ -76,13 +87,17 @@ def evaluate(
         return RuleResult(False, advanced, outcome.previous, outcome.current,
                           outcome.reason)
 
-    if lifecycle.fire == "once" and state.fired_in_scope:
-        if lifecycle.rearm != "cooldown":
-            return RuleResult(False, advanced, outcome.previous, outcome.current,
-                              "这个范围内已经触发过了")
-        if not _cooled_down(state, now=now, cooldown=lifecycle.cooldown_seconds):
-            return RuleResult(False, advanced, outcome.previous, outcome.current,
-                              "还在冷却中")
+    # 冷却和 fire 模式是两件事。以前只在 fire=once 时检查冷却,
+    # 于是 fire=every + rearm=cooldown 完全没有冷却 —— 配了个不生效的东西。
+    if (lifecycle.rearm == "cooldown"
+            and not _cooled_down(state, now=now,
+                                 cooldown=lifecycle.cooldown_seconds)):
+        return RuleResult(False, advanced, outcome.previous, outcome.current,
+                          "还在冷却中")
+    if (lifecycle.fire == "once" and state.fired_in_scope
+            and lifecycle.rearm != "cooldown"):
+        return RuleResult(False, advanced, outcome.previous, outcome.current,
+                          "这个范围内已经触发过了")
 
     fired_state = RuleState(
         previous_value=advanced.previous_value,

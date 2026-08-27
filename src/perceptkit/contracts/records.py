@@ -95,17 +95,39 @@ class CurrentProjection:
     content_digest: str | None = None
 
 
-def _revision_rank(revision: str | int | None) -> tuple[int, Any]:
-    """把 revision 排成可比的顺序。没有 revision 的排最低。
+def _compare_revisions(new: str | int | None, old: str | int | None) -> int | None:
+    """比较两个 revision。返回 ``1 / 0 / -1``，**比不了时返回 ``None``**。
 
-    整数和字符串不混比（不同来源的 revision 形态不同，硬比会得出无意义的顺序），
-    所以返回一个带类型标记的元组。
+    比不了就说比不了，不要编一个顺序出来。之前的写法给"任何字符串都大于
+    任何整数"、字符串之间按字典序 —— 那是**稳定**，不是**正确**：
+    ``"10" < "2"``，而 HealthKit 的 revision 恰恰可能是数字字符串。
+    编出来的顺序会让一次错误的覆盖看起来完全正常。
+
+    比不了的情况交给调用方当 conflict 处理，由人或宿主决定。
     """
-    if revision is None:
-        return (0, 0)
-    if isinstance(revision, int) and not isinstance(revision, bool):
-        return (1, revision)
-    return (2, str(revision))
+    if new is None and old is None:
+        return 0
+    if old is None:
+        return 1                     # 有版本的比没版本的新
+    if new is None:
+        return -1
+
+    def as_int(v: Any) -> int | None:
+        if isinstance(v, bool):
+            return None
+        if isinstance(v, int):
+            return v
+        if isinstance(v, str) and v.strip().lstrip("-").isdigit():
+            return int(v)
+        return None
+
+    a, b = as_int(new), as_int(old)
+    if a is not None and b is not None:
+        return (a > b) - (a < b)
+    if isinstance(new, str) and isinstance(old, str):
+        # 都是不可解释的字符串(etag 之类)：只能判等,判不了大小。
+        return 0 if new == old else None
+    return None
 
 
 def decide_current_update(
@@ -140,11 +162,14 @@ def decide_current_update(
     if new_occurred_at < existing.observed_at:
         return IGNORE
 
-    new_rank = _revision_rank(new_revision)
-    old_rank = _revision_rank(existing.source_revision)
-    if new_rank > old_rank:
+    order = _compare_revisions(new_revision, existing.source_revision)
+    if order is None:
+        # 版本形态对不上(一个整数一个 etag、或两个不可解释的字符串各不相同)。
+        # 编一个顺序出来会让一次错误的覆盖看起来完全正常。
+        return CONFLICT
+    if order > 0:
         return REPLACE
-    if new_rank < old_rank:
+    if order < 0:
         return IGNORE
 
     # 同时刻、同版本：只可能是重传，或者两个来源打架。
@@ -313,6 +338,11 @@ class EventOutboxEntry:
     #: 当前租约的持有者和到期时间。到期没进展 → 别人可以接管。
     lease_owner: str | None = None
     lease_expires_at: datetime | None = None
+    #: 这一次认领的令牌。**每次认领都必须换一个新的。**
+    #: 存回执时要比对：旧 worker 租约过期后回来，手里拿的是旧令牌，
+    #: 不能推进新 worker 已经接管的记录 —— 否则一次超时会变成一次错误的
+    #: 状态覆盖，而且看起来完全正常。
+    claim_token: str | None = None
     budget_reservation_id: str | None = None
     created_at: datetime | None = None
 

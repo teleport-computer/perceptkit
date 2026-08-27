@@ -234,13 +234,18 @@ class StoragePort(Protocol):
 
     def record_wake_receipt(
         self, *, receipt: WakeReceipt, next_state: str,
+        claim_token: str | None = None,
         next_attempt_at: datetime | None = None,
     ) -> None:
-        """存回执并推进投递状态。
+        """存回执并推进投递状态。返回 ``False`` 表示令牌过期、状态未改。
 
         **必须和"兑现或释放冷却额度占位"在同一个事务里。** 分开的话，
         "已送达但额度没扣"和"额度扣了但状态还是 pending"两种错都会出现，
         后者更糟：用户被打扰了两次。
+
+        **``claim_token`` 对不上时只能记审计，不能改状态。** 旧 worker 租约
+        过期、事件被别人接管之后它才返回 —— 让它推进状态，等于一次超时
+        变成一次错误的覆盖，而且看起来完全正常。
         """
         ...
 

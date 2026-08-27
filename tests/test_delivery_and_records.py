@@ -234,12 +234,37 @@ def test_missing_digests_are_treated_as_a_conflict_not_as_a_retransmission():
     ) == CONFLICT
 
 
-def test_string_and_integer_revisions_are_not_compared_against_each_other():
-    """不同来源的 revision 形态不同，硬比会得出无意义的顺序。"""
+def test_incomparable_revisions_are_a_conflict_not_an_invented_order():
+    """⚠️ 这条测试原来断言的是 REPLACE —— 把一个 bug 写进了断言。
+
+    以前的实现给"任何字符串都大于任何整数"、字符串之间按字典序。那是**稳定**，
+    不是**正确**：`"10" < "2"`，而 HealthKit 的 revision 恰恰可能是数字字符串。
+    编出来的顺序会让一次错误的覆盖看起来完全正常。
+
+    比不了就说比不了，交给宿主处理。"""
     assert decide_current_update(
         new_occurred_at=T0, new_revision="etag-aaa", new_digest="d2",
         existing=_current(source_revision=99),
-    ) == REPLACE      # 字符串 rank 高于整数,但这只是一个稳定的约定,不是"更大"
+    ) == CONFLICT
+
+
+def test_numeric_strings_are_compared_as_numbers_not_lexically():
+    """`"10"` 比 `"2"` 新。按字典序会反过来 —— 而且不会报错。"""
+    assert decide_current_update(
+        new_occurred_at=T0, new_revision="10", new_digest="d2",
+        existing=_current(source_revision="2"),
+    ) == REPLACE
+    assert decide_current_update(
+        new_occurred_at=T0, new_revision="2", new_digest="d2",
+        existing=_current(source_revision="10"),
+    ) == IGNORE
+
+
+def test_two_different_opaque_etags_at_the_same_instant_are_a_conflict():
+    assert decide_current_update(
+        new_occurred_at=T0, new_revision="etag-b", new_digest="d2",
+        existing=_current(source_revision="etag-a"),
+    ) == CONFLICT
 
 
 def test_a_revision_beats_no_revision_at_the_same_instant():

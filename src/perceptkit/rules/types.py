@@ -55,6 +55,14 @@ class Lifecycle:
             problems.append(f"rearm={self.rearm!r} 不在 {sorted(REARM_MODES)}")
         if self.cooldown_seconds < 0:
             problems.append("cooldown_seconds 不能为负")
+        # 这两个组合以前"能配出来但不生效"——比配不出来更糟,因为用户以为配上了。
+        if self.rearm == "never" and self.scope != "forever":
+            problems.append(
+                "rearm=never 只能配 scope=forever："
+                "按天算范围的话，换一天就是一条新状态，本来就重新武装了"
+            )
+        if self.rearm == "cooldown" and self.cooldown_seconds <= 0:
+            problems.append("rearm=cooldown 必须给一个正的 cooldown_seconds")
         if problems:
             raise ContractError(problems)
 

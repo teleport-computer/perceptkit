@@ -204,11 +204,13 @@ class InMemoryStorage:
         for key, item in store.items():
             if key[0] != subject_id or item.last_seen_sync_id == sync_id:
                 continue
-            # 🔴 只删覆盖范围内的。拿局部窗口去删窗口外的数据，
+            # 🔴 只删【能证明落在覆盖范围内】的。拿局部窗口去删窗口外的数据，
             # 会让用户发现自己去年的日程凭空消失，而且不可逆。
+            # **时间不明的条目一律不删** —— 证明不了它在范围内，就没有资格删它。
             start = (item.event_fields.get("start_at")
-                     if isinstance(item, CalendarEventMirror) else None)
-            if start is not None and not (coverage_start <= start <= coverage_end):
+                     if isinstance(item, CalendarEventMirror)
+                     else item.reminder_fields.get("due_at"))
+            if start is None or not (coverage_start <= start <= coverage_end):
                 continue
             doomed.append(key)
         for key in doomed:
@@ -253,16 +255,23 @@ class InMemoryStorage:
                 lease_expires_at=now + timedelta(seconds=lease_seconds),
                 # 额度只是占位，不是消耗 —— delivered 时才兑现。
                 budget_reservation_id=f"resv_{event_id}_{entry.attempt_count + 1}",
+                # 每次认领换一个新令牌 —— 旧 worker 回来时手里是旧的。
+                claim_token=f"{worker_id}:{entry.attempt_count + 1}",
             )
             self.outbox[event_id] = claimed
             return claimed
         return None
 
-    def record_wake_receipt(self, *, receipt, next_state, next_attempt_at=None) -> None:
+    def record_wake_receipt(self, *, receipt, next_state, claim_token=None,
+                            next_attempt_at=None) -> bool:
         from dataclasses import replace
         entry = self.outbox.get(receipt.event_id)
         if entry is None:
             raise KeyError(f"unknown event_id {receipt.event_id!r}")
+        if claim_token is not None and entry.claim_token != claim_token:
+            # 令牌过期:这个事件已经被别人接管了。只记审计,不改状态。
+            self.receipts.append(receipt)
+            return False
         _delivery.assert_transition(entry.delivery_state, next_state)
         self.receipts.append(receipt)
         self.outbox[receipt.event_id] = replace(
@@ -272,11 +281,13 @@ class InMemoryStorage:
             lease_owner=None,
             lease_expires_at=None,
             # 兑现或释放：只有 delivered 会把占位变成真正的消耗。
+            claim_token=None,
             budget_reservation_id=(
                 entry.budget_reservation_id
                 if _delivery.consumes_budget(next_state) else None
             ),
         )
+        return True
 
     def list_pending_events(self, *, subject_id=None, limit=100):
         return [
@@ -287,6 +298,9 @@ class InMemoryStorage:
     # -- 用户数据 --------------------------------------------------------
 
     def purge_subject(self, *, subject_id) -> dict[str, int]:
+        doomed_event_ids = {e.event_id for e in self.outbox.values()
+                            if e.subject_id == subject_id}
+
         def drop(store: dict, pick) -> int:
             doomed = [k for k, v in store.items() if pick(k, v) == subject_id]
             for k in doomed:
@@ -307,7 +321,12 @@ class InMemoryStorage:
         before = len(self.identities)
         self.identities = {i for i in self.identities if i[0] != subject_id}
         counts["identities"] = before - len(self.identities)
-        self.receipts = [r for r in self.receipts]
+        # 回执按它对应事件的 subject 清理。以前这里只是原样复制了一遍列表 ——
+        # "删除我的数据"这件事没有部分成功。
+        doomed_events = {k for k in doomed_event_ids}
+        kept = [r for r in self.receipts if r.event_id not in doomed_events]
+        counts["receipts"] = len(self.receipts) - len(kept)
+        self.receipts = kept
         return counts
 
 

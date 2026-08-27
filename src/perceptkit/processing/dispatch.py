@@ -273,9 +273,15 @@ def dispatch_once(
         now + _backoff(entry.attempt_count)
         if next_state == _delivery.PENDING else None
     )
-    storage.record_wake_receipt(
-        receipt=receipt, next_state=next_state, next_attempt_at=next_at
+    accepted = storage.record_wake_receipt(
+        receipt=receipt, next_state=next_state,
+        claim_token=entry.claim_token, next_attempt_at=next_at,
     )
+    if accepted is False:
+        # 令牌过期:这个事件在我们投递期间被别人接管了。回执只进审计,
+        # 状态归新 owner 管 —— 我们这一次的结果不算数。
+        outcome.retrying.append(entry.event_id)
+        return outcome
 
     bucket = {
         _delivery.DELIVERED: outcome.delivered,
