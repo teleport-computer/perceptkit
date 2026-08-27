@@ -46,7 +46,7 @@ STORAGE_MODES: frozenset[str] = frozenset({
 
 #: 日聚合的算法。名字要能解析到实现。
 AGGREGATION_STRATEGIES: frozenset[str] = frozenset({
-    "none", "daily_total", "daily_max", "numeric_dist",
+    "none", "daily_total", "numeric_dist",
     "duration_by_state", "event_list", "tally", "main_of_day", "cumulative",
 })
 
