@@ -1,13 +1,32 @@
 # perceptkit
 
-**从设备信号到"值不值得戳一下 agent"的判断力。**
+**一套可插拔的主动感知：从设备上报，到"该戳一下 agent 了"。**
 
-给它当下的信号快照（位置、健康数据、屏幕状态、日历……），它告诉你：
-有没有发生什么值得留意的事、这算不算个值得戳一下 agent 的时刻、
-以及该怎么把"此刻"这件事讲给模型听。
+设备把采到的东西按标准格式交给它，它负责校验、标准化、去重、落库编排、
+按你配的规则判断"这算不算一件事"、生成事件、可靠地送到你的 agent runtime。
 
-它**不采集数据、不碰存储、不调模型** —— 那些是宿主的事。
-整个包是纯函数，零第三方依赖。
+你要写的只有两个接口：**数据存哪儿**（`StoragePort`）和**事件交给谁**（`WakePort`）。
+
+```python
+from perceptkit import PerceptionKit, IngestContext
+
+kit = PerceptionKit(storage=my_storage, wake=my_runtime, definitions=my_rules)
+
+result = kit.ingest(report, context=IngestContext(
+    subject_id=user_id,        # 从已认证连接来,绝不信客户端自报
+    received_at=now,           # 你的钟
+))
+# 事件已经落地了。投递由你自己的 worker 驱动:
+kit.dispatch_pending(worker_id="w1", now=now)
+```
+
+它**不采集数据、不实现数据库、不做加解密、不调模型、不读时钟** —— 那些是宿主的事。
+零第三方依赖（有 AST 测试盯着这条）。
+
+**顺序不在你手里，这是有意的。** "先落地再投递""迟到的数据不覆盖当前值"
+"同一件事崩溃重投也只提醒一次" —— 这些是正确性问题，留给每个宿主自己发挥的结果是
+同一个包装到四个宿主上、四种可靠性。所以顺序在包里定死，你只填被调用的方法体。
+就像你写 React 组件但不决定什么时候渲染。
 
 **现状：还没发布到 PyPI**，`pip install perceptkit` 现在装不到东西。
 能确认好用的两条路：
@@ -15,11 +34,11 @@
 ```bash
 git clone git@github.com:teleport-computer/perceptkit.git
 cd perceptkit
-uv run pytest                        # 107 条测试
+uv run pytest                        # 283 条测试
 uv run python3 examples/quickstart.py   # 一分钟看它怎么判断
 ```
 
-想在别的项目里依赖它（这是个私有仓库，需要你本来就有访问权限）：
+想在别的项目里依赖它：
 
 ```toml
 # 另一个项目的 pyproject.toml
@@ -31,6 +50,26 @@ perceptkit = { git = "ssh://git@github.com/teleport-computer/perceptkit.git" }
 ```bash
 uv add --editable ../perceptkit
 ```
+
+---
+
+## 〇、包里有什么
+
+```
+contracts/    四个信封(上报 / 观测 / 事件 / 回执) + 三态 + 可信上下文
+              + 八个逻辑存储对象 + 投递状态机
+manifest/     每个字段的单一声明处(类型/单位/TTL/保留期/聚合/趋势/隐私)
+              + 四条自动检查,让"忘了声明"变成一条红色的测试
+ports/        StoragePort / WakePort —— 你要实现的两个接口
+processing/   校验 → 标准化 → 去重 → 落库 → 当前值 → 聚合 → 求值 → 发件箱
+rules/        九种内置规则 + 生命周期 + 自定义 evaluator 接口
+queries/      读取侧八个函数(带 TTL 判定、趋势模型选择、缺数据显式化、隐私投影)
+conformance/  十条一致性保证的检查套件 + 内存版存储(测试工具)
+algorithms    归属日期 / 连续天数 / 趋势模型 / 日聚合 / 去重键 …(原有纯函数)
+```
+
+**一句话分工**：宿主决定怎么存、怎么投、说不说话；这个包规定存哪些事实、
+按什么顺序、满足什么保证。
 
 ---
 
