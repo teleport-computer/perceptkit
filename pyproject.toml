@@ -22,3 +22,6 @@ packages = ["src/perceptkit"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# 没有这行,pytest 会去 import 已安装的 perceptkit,而不是这个仓库的 src/。
+# 后果:改坏了源码、测试照样全绿(它测的是站点包里的旧版本)。踩过一次。
+pythonpath = ["src"]
