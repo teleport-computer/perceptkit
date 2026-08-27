@@ -77,6 +77,14 @@ ATTRIBUTION_STRATEGIES: frozenset[str] = frozenset({
     "source_local_date",  # 上游直接给了本地日期,原样用
 })
 
+#: 这个字段的历史该用哪种趋势读法。三种算法结论完全不同,选错就是错的:
+#:   fluctuating 有"平时水平",偏离才是信号(睡眠时长、步数)
+#:   drifting    没有平时水平,方向和速率才是信号(体重)
+#:   cyclical    看间隔不看数值高低(经期)
+TREND_MODELS: frozenset[str] = frozenset({
+    "none", "fluctuating", "drifting", "cyclical",
+})
+
 #: agent 能不能看到这个字段。
 QUERY_VISIBILITY: frozenset[str] = frozenset({
     "always",     # 直接进上下文
@@ -117,6 +125,7 @@ class FieldDefinition:
     #: 这个字段的变化能不能触发唤醒。
     wake_eligible: bool = False
     query_visibility: str = "on_demand"
+    trend_model: str = "none"
     #: 标准化函数的名字。``None`` = 原样存。
     normalizer: str | None = None
 
@@ -160,6 +169,6 @@ __all__ = [
     "VALUE_TYPES", "PRIVACY_CLASSES", "STORAGE_MODES",
     "AGGREGATION_STRATEGIES", "COMPARISON_STRATEGIES",
     "IDENTITY_STRATEGIES", "ATTRIBUTION_STRATEGIES",
-    "QUERY_VISIBILITY", "SOURCE_PROFILES", "PERMANENT",
+    "QUERY_VISIBILITY", "TREND_MODELS", "SOURCE_PROFILES", "PERMANENT",
     "FieldDefinition", "SignalDefinition",
 ]

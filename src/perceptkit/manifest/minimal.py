@@ -150,6 +150,9 @@ STEPS = SignalDefinition(
             comparison_strategy="threshold_crossing",
             wake_eligible=True,
             query_visibility="on_demand",
+            # 每天的步数围绕一个"平时水平"上下浮动,偏离才是信号 ——
+            # 不是单调漂移(那是体重),也不是看间隔(那是经期)。
+            trend_model="fluctuating",
         ),
     ),
 )

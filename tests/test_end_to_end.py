@@ -130,12 +130,12 @@ def test_current_and_history_are_queryable_after_ingest():
     kit.ingest(steps_report(3012), context=IngestContext("u1", now("10:30")))
 
     current = kit.get_current(subject_id="u1", signals=["steps"], now=now("10:35"))
-    assert current["steps"]["state"] == "fresh"
-    assert current["steps"]["value"]["step_count"] == 3012
+    assert current["steps"].state == "fresh"
+    assert current["steps"].value["step_count"] == 3012
 
     daily = kit.get_daily(subject_id="u1", signal="steps",
                           start=date(2026, 8, 27), end=date(2026, 8, 27))
-    assert daily[0]["value"]["step_count"]["total"] == 3012
+    assert daily[0].value["step_count"]["total"] == 3012
 
 
 def test_a_stale_current_value_does_not_pretend_to_be_now():
@@ -145,15 +145,16 @@ def test_a_stale_current_value_does_not_pretend_to_be_now():
                context=IngestContext("u1", now("10:30")))
     # steps 的 TTL 是 1 小时
     later = kit.get_current(subject_id="u1", signals=["steps"], now=now("13:00"))
-    assert later["steps"]["state"] == "stale"
-    assert later["steps"]["value"] is None
-    assert later["steps"]["last_known"]["as_of"].startswith("2026-08-27T10:30")
+    assert later["steps"].state == "stale"
+    assert later["steps"].value is None                      # 不冒充当前
+    assert later["steps"].last_known["step_count"] == 3012   # 但最后一次值还给
+    assert later["steps"].as_of.startswith("2026-08-27T10:30")
 
 
 def test_a_signal_with_no_data_reports_that_instead_of_guessing():
     _, _, kit = make()
     got = kit.get_current(subject_id="u1", signals=["battery"], now=now("10:00"))
-    assert got["battery"]["state"] == "no_data"
+    assert got["battery"].state == "no_data"
 
 
 # ---------------------------------------------------------------------------

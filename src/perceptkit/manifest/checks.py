@@ -19,6 +19,7 @@ from typing import Iterable, Mapping
 
 from .types import (
     AGGREGATION_STRATEGIES,
+    TREND_MODELS,
     ATTRIBUTION_STRATEGIES,
     COMPARISON_STRATEGIES,
     IDENTITY_STRATEGIES,
@@ -150,6 +151,18 @@ def check_named_implementations_exist(
                 problems.append(
                     f"{key}.{f.key}: comparison_strategy={f.comparison_strategy!r} "
                     f"不在 {sorted(COMPARISON_STRATEGIES)}"
+                )
+            if f.trend_model not in TREND_MODELS:
+                problems.append(
+                    f"{key}.{f.key}: trend_model={f.trend_model!r} "
+                    f"不在 {sorted(TREND_MODELS)}"
+                )
+            if (f.value_type in ("integer", "number")
+                    and f.aggregation_strategy != "none"
+                    and f.trend_model == "none"):
+                problems.append(
+                    f"{key}.{f.key}: 数值字段会进日聚合却没声明 trend_model"
+                    f"（趋势查询只能瞎猜用哪种算法,而三种结论完全不同）"
                 )
             if f.normalizer is not None and f.normalizer not in known:
                 problems.append(

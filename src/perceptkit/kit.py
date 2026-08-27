@@ -25,6 +25,7 @@ from .ports.storage import StoragePort
 from .ports.wake import WakePort
 from .processing.dispatch import DispatchOutcome, drain
 from .processing.pipeline import IngestOutcome, ingest_report
+from .queries import api as _queries
 from .rules.types import EventDefinition
 
 
@@ -101,51 +102,50 @@ class PerceptionKit:
     # -- 读取侧 ----------------------------------------------------------
     #
     # 这条路和写入侧共用存储，方向相反：agent 主动来查。
-    # 完整的八个查询函数在批 5，这里先给最常用的两个。
+    # 八个函数的实现在 queries/api.py —— 这里只是绑上 manifest 的薄封装。
 
-    def get_current(
-        self, *, subject_id: str, signals: Sequence[str], now: datetime,
-    ) -> dict[str, dict[str, Any]]:
-        """取当前值，**带 TTL 判定**。
-
-        过期的值不会冒充当前事实：返回 ``state="stale"`` 加上带 ``as_of`` 的
-        ``last_known``。让模型自己说"你电量还有 87%"（其实是四小时前的），
-        是这类系统最常见的一种说错话。
-        """
-        out: dict[str, dict[str, Any]] = {}
-        raw = self.storage.get_current(subject_id=subject_id, signals=list(signals))
-        for signal, projections in raw.items():
-            for proj in projections:
-                fresh = proj.expires_at is None or proj.expires_at > now
-                out[signal] = {
-                    "state": "fresh" if fresh else "stale",
-                    "value": proj.typed_value if fresh else None,
-                    "availability": proj.availability,
-                    "last_known": {
-                        "value": proj.typed_value,
-                        "as_of": proj.observed_at.isoformat(),
-                    },
-                }
-        for signal in signals:
-            out.setdefault(signal, {
-                "state": "no_data", "value": None,
-                "availability": "no_data", "last_known": None,
-            })
-        return out
-
-    def get_daily(
-        self, *, subject_id: str, signal: str, start: date, end: date,
-    ) -> list[dict[str, Any]]:
-        """取日聚合。空缺的日子**不补零** —— ``no_data`` 不是 0。"""
-        rows = self.storage.get_aggregate(
-            subject_id=subject_id, signal=signal,
-            start_date=start, end_date=end, aggregation_kind="daily",
+    def get_current(self, *, subject_id: str, signals: Sequence[str],
+                    now: datetime) -> dict[str, _queries.CurrentView]:
+        """取当前值，**带 TTL 判定**：过期的不冒充现在。"""
+        return _queries.get_current(
+            self.storage, subject_id=subject_id, signals=signals,
+            manifest=self.signals, now=now,
         )
-        return [
-            {"date": r.local_date.isoformat(), "value": r.typed_aggregate,
-             "coverage": r.source_coverage}
-            for r in sorted(rows, key=lambda r: r.local_date)
-        ]
+
+    def get_last_known(self, *, subject_id: str, signal: str):
+        return _queries.get_last_known(
+            self.storage, subject_id=subject_id, signal=signal, manifest=self.signals,
+        )
+
+    def list_timeline(self, *, subject_id: str, signal: str, **kw):
+        return _queries.list_timeline(
+            self.storage, subject_id=subject_id, signal=signal,
+            manifest=self.signals, **kw,
+        )
+
+    def get_daily(self, *, subject_id: str, signal: str, start: date, end: date):
+        """日聚合。空缺的日子**不补零** —— `no_data` 不是 0。"""
+        return _queries.get_daily_aggregates(
+            self.storage, subject_id=subject_id, signal=signal,
+            start_date=start, end_date=end,
+        )
+
+    def get_trend(self, *, subject_id: str, signal: str, field: str,
+                  start: date, end: date) -> dict[str, Any]:
+        """趋势。按 manifest 声明的模型选算法，并报出缺了几天。"""
+        return _queries.get_trend(
+            self.storage, subject_id=subject_id, signal=signal, field=field,
+            manifest=self.signals, start_date=start, end_date=end,
+        )
+
+    def list_calendar_events(self, *, subject_id: str, **kw):
+        return _queries.list_calendar_events(self.storage, subject_id=subject_id, **kw)
+
+    def list_reminders(self, *, subject_id: str, **kw):
+        return _queries.list_reminders(self.storage, subject_id=subject_id, **kw)
+
+    def list_events(self, *, subject_id: str, **kw):
+        return _queries.list_events(self.storage, subject_id=subject_id, **kw)
 
 
 __all__ = ["PerceptionKit"]
