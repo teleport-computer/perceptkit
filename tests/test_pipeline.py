@@ -228,13 +228,17 @@ def test_an_unknown_signal_is_rejected_without_touching_the_others():
 # 顺序与事务边界
 # ---------------------------------------------------------------------------
 
-def test_each_observation_lands_inside_one_transaction():
-    """观测、去重身份、当前值、聚合必须一起成功 —— 只写了观测没写身份，
-    下次重传就会重复累计。"""
+def test_the_whole_batch_lands_inside_one_transaction():
+    """🔴 整批一个事务，不是每条观测一个。
+
+    以前是"先认领这批、再逐条各自提交"。第 1 条提交后崩溃，重试会直接拿到
+    duplicate（批级幂等认为处理过了），**剩下的观测永久丢失** —— 一次中断被
+    伪装成了"已处理完"。代价是单个事务变长，所以 max_observations 是必须的。
+    """
     s = InMemoryStorage()
     run(s, report([steps_obs(sample="a"), steps_obs(sample="b",
                                                     at="2026-08-27T11:00:00+08:00")]))
-    assert s.transactions_opened == 2
+    assert s.transactions_opened == 1
     assert s.transaction_depth == 0
 
 

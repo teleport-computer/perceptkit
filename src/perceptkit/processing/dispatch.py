@@ -99,7 +99,13 @@ def evaluate_and_enqueue(
 
     values = stored.typed_value or {}
     for definition in relevant:
-        scope = scope_key(definition, local_date=stored.effective_local_date)
+        # 状态键带上定义版本：当天把阈值规则从 v1 改成 v2,v1 的
+        # "今天已经触发过"不该继续压制 v2 —— 用户改了规则却不生效,
+        # 而且没有任何地方报错。
+        scope = "%s@v%d" % (
+            scope_key(definition, local_date=stored.effective_local_date),
+            definition.version,
+        )
         raw_state = storage.get_rule_state(
             subject_id=context.subject_id,
             definition_id=definition.definition_id,
@@ -161,11 +167,9 @@ def evaluate_and_enqueue(
             context={"scope": scope, "reason": result.reason},
         )
 
-        if not definition.wake_enabled:
-            # 规则命中了但不唤醒：事件仍然是事实，只是不打扰用户。
-            outcome.events.append(event)
-            continue
-
+        # 🔴 事件【一律落地】。wake_enabled 只决定进不进可投递状态,
+        #    不决定这个事实存不存 —— 之前不唤醒的事件只放进内存返回值,
+        #    进程一崩就永久丢失,而规则状态已经推进、不会再产生它。
         entry = EventOutboxEntry(
             event_id=event.event_id,
             subject_id=context.subject_id,
@@ -177,6 +181,8 @@ def evaluate_and_enqueue(
             fact_snapshot=event.to_dict(),
             dedupe_key=event.event_id,
             created_at=stored.received_at,
+            delivery_state=(_delivery.PENDING if definition.wake_enabled
+                            else _delivery.NOT_DISPATCHED),
         )
         if storage.enqueue_event(entry):
             outcome.events.append(event)

@@ -48,13 +48,18 @@ REJECTED = "rejected"
 #: 终态：重试次数用尽。留着给人看，不再自动投。
 DEAD_LETTER = "dead_letter"
 
+#: 终态：规则说了这条不唤醒。**事件仍然是事实、仍然落地**，只是不投。
+#: 和 ``suppressed`` 不同 —— 那是 runtime 收到之后自己选择不响应，
+#: 这个是压根没打算投。两者混用会让"到底送没送到"说不清。
+NOT_DISPATCHED = "not_dispatched"
+
 DELIVERY_STATES: frozenset[str] = frozenset({
-    PENDING, CLAIMED, DELIVERED, SUPPRESSED, REJECTED, DEAD_LETTER,
+    PENDING, CLAIMED, DELIVERED, SUPPRESSED, REJECTED, DEAD_LETTER, NOT_DISPATCHED,
 })
 
 #: 终态：不会再变，也不再占用额度占位。
 TERMINAL_STATES: frozenset[str] = frozenset({
-    DELIVERED, SUPPRESSED, REJECTED, DEAD_LETTER,
+    DELIVERED, SUPPRESSED, REJECTED, DEAD_LETTER, NOT_DISPATCHED,
 })
 
 #: 合法的状态转移。任何不在这里的转移都是 bug，不是"边界情况"。
@@ -67,6 +72,7 @@ _TRANSITIONS: dict[str, frozenset[str]] = {
     SUPPRESSED: frozenset(),
     REJECTED: frozenset(),
     DEAD_LETTER: frozenset(),
+    NOT_DISPATCHED: frozenset(),
 }
 
 
@@ -154,6 +160,7 @@ class DeliveryAttempt:
 
 __all__ = [
     "PENDING", "CLAIMED", "DELIVERED", "SUPPRESSED", "REJECTED", "DEAD_LETTER",
+    "NOT_DISPATCHED",
     "DELIVERY_STATES", "TERMINAL_STATES",
     "IllegalTransition", "can_transition", "assert_transition", "is_terminal",
     "next_state_for_receipt", "consumes_budget", "DeliveryAttempt",

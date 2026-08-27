@@ -28,12 +28,30 @@ from ..manifest.types import FieldDefinition, SignalDefinition
 
 @dataclass(frozen=True)
 class NormalizedObservation:
-    """标准化的结果：一条可落库的观测，外加算好的去重身份。"""
+    """标准化的结果：一条可落库的观测，外加两种身份。
+
+    **两种身份必须分开，混用会造成两类静默错误。**
+
+        fact_key         这是【哪一条事实】。同一个 HealthKit 样本、同一个
+                         电量槽位，永远是同一个 fact_key —— 修订它的时候
+                         靠这个找到旧记录。
+        identity_digest  这是【哪一次投递】。fact_key + 版本 + 内容。
+                         去重问的是这个。
+
+    混用的后果（都发生过，是这两个字段被拆开的原因）：
+
+        用 fact_key 去重 → 电量第二次上报被当成重传丢掉，current 冻结在
+                          第一次；同一个样本从 revision 1 改到 2 也被当成
+                          重传，用户在健康 App 里的纠错永远生效不了。
+        用 identity 找旧记录 → 每次内容一变就成了"新事实"，修订无从谈起。
+    """
 
     stored: StoredObservation
-    #: 去重用的不可逆摘要。明细按保留期删掉之后，这是唯一还能回答
-    #: "这条处理过没有"的东西。
+    #: 这是哪一次投递。去重问它。明细按保留期删掉之后，
+    #: 这是唯一还能回答"这条处理过没有"的东西。
     identity_digest: str
+    #: 这是哪一条事实。修订同一条事实时靠它找到旧记录。
+    fact_key: str
     #: 内容摘要。用来分辨"同一时刻的重传"和"同一时刻的不同内容"。
     content_digest: str
     #: 跨午夜的区间会摊到多天：``[(本地日期, 分钟数), ...]``。其余为空。
@@ -114,6 +132,40 @@ def validate_value(sig: SignalDefinition, value: Mapping[str, Any] | None) -> li
     return problems
 
 
+def sanitize_value(
+    sig: SignalDefinition, value: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """落库前把不该存的字段去掉。返回 ``(干净的 payload, 被丢掉了什么)``。
+
+    丢两类：
+
+        privacy_class="restricted"  manifest 明说永不持久化(精确坐标、BSSID)。
+                                    **在写入边界丢,不是在读取边界过滤** ——
+                                    靠读取点自觉过滤,漏一个点就是泄漏,
+                                    而且数据已经在库里了,泄漏是既成事实。
+        manifest 里没声明的字段      不报错(让 producer 可以先发新字段),
+                                    但也不进 canonical value —— 否则任何
+                                    未声明字段都能被存下来并查出去。
+
+    被丢掉的字段名会记在 warning 里，方便排查"我发了它怎么查不到"。
+    """
+    if value is None:
+        return None, []
+    known = sig.field_map()
+    clean: dict[str, Any] = {}
+    dropped: list[str] = []
+    for key, raw in value.items():
+        fd = known.get(key)
+        if fd is None:
+            dropped.append(f"{sig.key}.{key}（manifest 未声明）")
+            continue
+        if fd.privacy_class == "restricted":
+            dropped.append(f"{sig.key}.{key}（privacy_class=restricted，永不持久化）")
+            continue
+        clean[key] = raw
+    return clean, dropped
+
+
 # ---------------------------------------------------------------------------
 # 时区与归属日期
 # ---------------------------------------------------------------------------
@@ -187,32 +239,42 @@ def effective_date(
 # ---------------------------------------------------------------------------
 
 def identity_for(
-    obs: Observation, sig: SignalDefinition, ctx: IngestContext, *, source: str,
-) -> tuple[str, list[str]]:
-    """按信号声明的策略算去重身份。"""
+    obs: Observation, sig: SignalDefinition, ctx: IngestContext, *,
+    source: str, content_digest: str,
+) -> tuple[str, str, list[str]]:
+    """算两种身份，返回 ``(投递身份, 事实身份, 问题清单)``。
+
+    见 :class:`NormalizedObservation` 的文档 —— 这两个混用会造成两类静默错误。
+    """
     problems: list[str] = []
     strategy = sig.identity_strategy
 
+    if strategy == "source_event_id" and not obs.source_event_id:
+        # 声明了要用上游 id 却没给。**退回确定性摘要而不是拒收** ——
+        # 拒收会让一整类信号（音乐、照片，见 FACTS.md）一条都进不来。
+        problems.append(
+            f"{sig.key}: 声明了 source_event_id 但没给，退回确定性摘要"
+            f"（去重强度下降：挡不住「同一事实换个时间戳重发」）"
+        )
+        strategy = "deterministic_digest"
+
     if strategy == "source_event_id":
-        if not obs.source_event_id:
-            # 声明了要用上游 id 却没给。**退回确定性摘要而不是拒收** ——
-            # 拒收会让一整类信号（音乐、照片，见 FACTS.md）一条都进不来。
-            # 但要记一笔：确定性摘要挡不住"同一事实换个时间戳重发"。
-            problems.append(
-                f"{sig.key}: 声明了 source_event_id 但没给，退回确定性摘要"
-                f"（去重强度下降）"
-            )
-            strategy = "deterministic_digest"
-        else:
-            return _digest(ctx.subject_id, source, sig.key, obs.source_event_id), problems
+        fact = _digest(ctx.subject_id, source, sig.key, obs.source_event_id or "")
+    elif strategy == "singleton":
+        # 每个 subject+signal 只有一条事实，后来的是它的新版本。
+        fact = _digest(ctx.subject_id, source, sig.key)
+    else:
+        # 没有上游身份：同一时刻同一内容才算同一条事实。
+        fact = _digest(ctx.subject_id, source, sig.key, to_iso(obs.occurred_at))
 
-    if strategy == "singleton":
-        return _digest(ctx.subject_id, source, sig.key), problems
-
-    return _digest(
-        ctx.subject_id, source, sig.key, to_iso(obs.occurred_at),
-        _canonical(obs.value or {}),
-    ), problems
+    # 投递身份 = 事实 + 这一版的时刻、版本、内容。
+    # 少了任何一项，都会有一类"新数据"被误判成重传而静默丢掉。
+    delivery = _digest(
+        fact, to_iso(obs.occurred_at),
+        "" if obs.source_revision is None else str(obs.source_revision),
+        content_digest,
+    )
+    return delivery, fact, problems
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +330,11 @@ def normalize_observations(
             rejected.append((index, tuple(problems)))
             continue
 
+        # 落库边界过滤：受限字段和未声明字段到此为止，不进 canonical value。
+        clean, dropped = sanitize_value(sig, obs.value)
+        if dropped:
+            warnings.append(f"{obs.signal}: 丢弃了 {', '.join(dropped)}")
+
         tz_name, _ = resolve_timezone(obs, fallback=timezone_fallback)
         if tz_name is None:
             warnings.append(
@@ -277,10 +344,11 @@ def normalize_observations(
         day, slices, day_problems = effective_date(obs, sig, timezone_name=tz_name)
         warnings += day_problems
 
-        identity, id_problems = identity_for(obs, sig, context, source=source)
+        content = _digest(_canonical(clean), obs.availability)
+        identity, fact_key, id_problems = identity_for(
+            obs, sig, context, source=source, content_digest=content,
+        )
         warnings += id_problems
-
-        content = _digest(_canonical(obs.value or {}), obs.availability)
         obs_id = (observation_id_for(obs) if callable(observation_id_for) else identity)
 
         out.append(NormalizedObservation(
@@ -294,12 +362,13 @@ def normalize_observations(
                 received_at=context.received_at,
                 availability=obs.availability,
                 effective_local_date=day,
-                typed_value=obs.value,
+                typed_value=clean,
                 timezone=tz_name,
                 source_event_id=obs.source_event_id,
                 source_revision=obs.source_revision,
             ),
             identity_digest=identity,
+            fact_key=fact_key,
             content_digest=content,
             day_slices=slices,
         ))
@@ -309,5 +378,6 @@ def normalize_observations(
 
 __all__ = [
     "NormalizedObservation", "NormalizeResult", "normalize_observations",
-    "validate_value", "resolve_timezone", "effective_date", "identity_for",
+    "validate_value", "sanitize_value", "resolve_timezone", "effective_date",
+    "identity_for",
 ]

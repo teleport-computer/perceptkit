@@ -40,7 +40,7 @@ from ..ports.storage import StoragePort
 from ..rules.types import EventDefinition
 from . import aggregate as _aggregate
 from .dispatch import evaluate_and_enqueue
-from .normalize import NormalizedObservation, normalize_observations
+from .normalize import NormalizedObservation, _canonical, normalize_observations
 
 #: 聚合算法的版本。改了口径就加这个数并重算，**不原地改写旧统计的语义** ——
 #: 否则同一张表里一半是老口径一半是新口径，而且看不出来。
@@ -94,6 +94,25 @@ def ingest_report(
     """
     payload_digest = _batch_digest(report)
 
+    # 真的量一下，而不是摆一个从不生效的参数。
+    # ⚠️ 这里量的是【已经解析完】的结构 —— 真正的防线必须在宿主的 HTTP 层
+    # （Content-Length / 流式读取上限）。到这一步内存和解析 CPU 已经花掉了。
+    approx_bytes = len(payload_digest) + sum(
+        len(_canonical(o.value or {})) for o in report.observations
+    )
+    if approx_bytes > max_payload_bytes:
+        return IngestOutcome(
+            receipt=_receipt.IngestReceipt(
+                subject_id=context.subject_id, producer=report.producer,
+                report_id=report.report_id, payload_digest=payload_digest,
+                received_at=context.received_at, status=_receipt.INGEST_REJECTED,
+                error_code="payload_too_large",
+            ),
+            rejected=[(-1, (
+                f"payload 约 {approx_bytes} 字节，超过上限 {max_payload_bytes}",
+            ))],
+        )
+
     if len(report.observations) > max_observations:
         return IngestOutcome(
             receipt=_receipt.IngestReceipt(
@@ -107,36 +126,42 @@ def ingest_report(
             ))],
         )
 
-    # ① 批级幂等。同 identity 同摘要 -> 返回原结果不重复处理；
-    #    同 identity 异摘要 -> conflict，不静默覆盖。
-    claim = storage.claim_report(
-        subject_id=context.subject_id,
-        producer=report.producer,
-        report_id=report.report_id,
-        payload_digest=payload_digest,
-        received_at=context.received_at,
-    )
-    if claim.status != _receipt.INGEST_ACCEPTED:
-        return IngestOutcome(receipt=claim)
+    # 🔴 【整批一个事务】。认领、全部观测、最终回执必须一起成功或一起不生效。
+    #
+    # 之前是"先认领、再逐条各自提交"：第 1 条提交后崩溃，重试会直接拿到
+    # duplicate，剩下的观测【永久丢失】——批级幂等把一次中断伪装成了"已处理完"。
+    # 代价是单个事务变长，所以 max_observations 是必须的,不是可选的。
+    with storage.transaction():
+        # ① 批级幂等。同 identity 同摘要 -> 返回原结果不重复处理；
+        #    同 identity 异摘要 -> conflict，不静默覆盖。
+        claim = storage.claim_report(
+            subject_id=context.subject_id,
+            producer=report.producer,
+            report_id=report.report_id,
+            payload_digest=payload_digest,
+            received_at=context.received_at,
+        )
+        if claim.status != _receipt.INGEST_ACCEPTED:
+            return IngestOutcome(receipt=claim)
 
-    # ② 校验 + 标准化。
-    normalized = normalize_observations(
-        report.observations,
-        context=context,
-        signals=signals,
-        source=report.producer,
-        timezone_fallback=timezone_fallback,
-    )
-    outcome = IngestOutcome(
-        receipt=claim,
-        rejected=list(normalized.rejected),
-        warnings=list(normalized.warnings),
-    )
+        # ② 校验 + 标准化。
+        normalized = normalize_observations(
+            report.observations,
+            context=context,
+            signals=signals,
+            source=report.producer,
+            timezone_fallback=timezone_fallback,
+        )
+        outcome = IngestOutcome(
+            receipt=claim,
+            rejected=list(normalized.rejected),
+            warnings=list(normalized.warnings),
+        )
 
-    for item in normalized.normalized:
-        sig = signals[item.stored.signal]
-        _apply_one(item, sig, context=context, storage=storage, outcome=outcome,
-                   definitions=definitions, extra_evaluators=extra_evaluators)
+        for item in normalized.normalized:
+            sig = signals[item.stored.signal]
+            _apply_one(item, sig, context=context, storage=storage, outcome=outcome,
+                       definitions=definitions, extra_evaluators=extra_evaluators)
 
     outcome.receipt = _receipt.IngestReceipt(
         subject_id=claim.subject_id, producer=claim.producer,
@@ -163,57 +188,81 @@ def _apply_one(
     不生效。分开写的话会出现"观测写了但去重身份没写"——下次重传就会重复累计。
     """
     stored = item.stored
-    with storage.transaction():
-        # ③ 观测级幂等。明细可能已经按保留期删掉了，所以问的是去重身份，
-        #    不是"这条观测还在不在"。
-        if storage.has_seen_identity(
-            subject_id=context.subject_id, signal=stored.signal,
-            source=stored.source, digest=item.identity_digest,
-        ):
+
+    # ③ 观测级幂等。问的是【投递身份】不是【事实身份】——用事实身份去重会把
+    #    "同一条事实的新版本"(电量的新读数、样本的修订)误判成重传丢掉。
+    #    也不是问"这条观测还在不在"：明细可能已经按保留期删掉了。
+    if storage.has_seen_identity(
+        subject_id=context.subject_id, signal=stored.signal,
+        source=stored.source, digest=item.identity_digest,
+    ):
+        outcome.duplicates.append(item)
+        return
+
+    # ④ 写观测。只留当前值的信号不写明细 —— 否则 current_only 名不副实。
+    if sig.stores_history:
+        if not storage.append_observation(stored):
             outcome.duplicates.append(item)
             return
 
-        # ④ 写观测。
-        appended = storage.append_observation(stored)
-        if not appended:
-            outcome.duplicates.append(item)
-            return
+    # ⑤ 记住身份。并发下可能有另一个事务刚记过同一条 —— 那说明它赢了，
+    #    我们退出，避免两边都往聚合里加一遍。
+    if not storage.remember_identity(DurableDedupeIdentity(
+        subject_id=context.subject_id,
+        signal=stored.signal,
+        source=stored.source,
+        source_event_identity_digest=item.identity_digest,
+        first_applied_at=context.received_at,
+        aggregate_scope=sig.key if sig.keeps_history_forever else None,
+        # 永久聚合依赖的身份必须永久保留：明细删了之后，
+        # 它是唯一还能挡住重放的东西。
+        retain_until=None,
+    )):
+        outcome.duplicates.append(item)
+        return
 
-        # ⑤ 记住身份。**必须和 ④ 同事务** —— 只写了观测没写身份，
-        #    下次重传会当成新数据再加一遍聚合。
-        storage.remember_identity(DurableDedupeIdentity(
-            subject_id=context.subject_id,
-            signal=stored.signal,
-            source=stored.source,
-            source_event_identity_digest=item.identity_digest,
-            first_applied_at=context.received_at,
-            aggregate_scope=sig.key if sig.keeps_history_forever else None,
-            # 永久聚合依赖的身份必须永久保留：明细删了之后，
-            # 它是唯一还能挡住重放的东西。
-            retain_until=None,
-        ))
+    # ⑥ 当前值。只有 observed 会更新数值；no_data / unavailable 不覆盖
+    #    最后一次可靠值。
+    decision = IGNORE
+    if stored.availability == "observed":
+        decision = _update_current(item, sig, context=context, storage=storage,
+                                   outcome=outcome)
 
-        # ⑥ 当前值。只有 observed 会更新数值；no_data / unavailable 不覆盖
-        #    最后一次可靠值。
-        if stored.availability == "observed":
-            _update_current(item, sig, context=context, storage=storage, outcome=outcome)
+    # 🔴 冲突时暂停一切派生。"到底哪份数据生效了"都说不清的时候，
+    #    再去更新聚合、推进规则状态、产生事件，只会把错误扩散。
+    if decision == CONFLICT:
+        outcome.applied.append(item)
+        return
 
-        # ⑦ 聚合。
-        if sig.stores_history and stored.availability == "observed":
-            _update_aggregate(item, sig, context=context, storage=storage)
+    # ⑦ 聚合。迟到的旧数据(IGNORE)【要】进历史 —— 它只是不该改当前值。
+    if sig.stores_history and stored.availability == "observed":
+        _update_aggregate(item, sig, context=context, storage=storage)
 
-        # ⑧⑨ 求值 + 写发件箱。**和上面在同一个事务里** —— 事件落地了但观测
-        # 没落地(或反过来)，都会让"为什么会有这个事件"永远解释不清。
-        if definitions:
-            rules = evaluate_and_enqueue(
-                item, context=context, storage=storage,
-                definitions=definitions, extra_evaluators=extra_evaluators,
-            )
-            outcome.events.extend(rules.events)
-            outcome.rule_misses.extend(rules.misses)
+    # ⑧⑨ 求值 + 写发件箱。和上面同事务 —— 事件落地了但观测没落地(或反过来)，
+    #    都会让"为什么会有这个事件"永远解释不清。
+    #
+    #    只在 observed 且当前值真的推进了(REPLACE)时才跑值变化型规则：
+    #    拿 no_data 去喂 `changed`，会把"100 → 没数据"当成一次变化，
+    #    还会把 previous 推成 None，之后的 threshold_crossing 全废。
+    #    迟到数据(IGNORE)同理 —— 它的 previous/current 讲的不是当前故事。
+    if definitions and decision == REPLACE:
+        rules = evaluate_and_enqueue(
+            item, context=context, storage=storage,
+            definitions=definitions, extra_evaluators=extra_evaluators,
+        )
+        outcome.events.extend(rules.events)
+        outcome.rule_misses.extend(rules.misses)
+    elif definitions:
+        outcome.rule_misses.append(
+            ("*", f"未求值：availability={stored.availability}，当前值决策={decision}")
+        )
 
-    # ⑩ 事务在这里提交。走到这一行,事件就丢不了了 —— 投递由宿主的 worker 驱动。
     outcome.applied.append(item)
+
+
+#: compare-and-put 失败后重读重判几次。并发下"读到旧版本 -> 写失败"是正常的，
+#: 但不能无限重试 —— 那会在热点上把一个事务拖到超时。
+MAX_CAS_RETRIES = 3
 
 
 def _update_current(
@@ -223,56 +272,69 @@ def _update_current(
     context: IngestContext,
     storage: StoragePort,
     outcome: IngestOutcome,
-) -> None:
+) -> str:
+    """更新当前值，返回决策（``REPLACE`` / ``IGNORE`` / ``CONFLICT``）。
+
+    **compare-and-put 的返回值必须认。** 忽略它的话，两个并发事务都读到旧版本、
+    较新的那个 CAS 失败被静默丢掉 —— 当前值停在旧数据上，没有任何地方报错。
+    """
     from datetime import timedelta
+
+    from ..contracts.records import decide_current_update
 
     stored = item.stored
     dimension = sig.key
-    existing_map = storage.get_current(
-        subject_id=context.subject_id, signals=[stored.signal]
-    )
-    existing = None
-    for candidate in existing_map.get(stored.signal, ()):
-        if candidate.dimension_key == dimension:
-            existing = candidate
-            break
 
-    from ..contracts.records import decide_current_update
-    decision = decide_current_update(
-        new_occurred_at=stored.occurred_at,
-        new_revision=stored.source_revision,
-        new_digest=item.content_digest,
-        existing=existing,
-    )
-    if decision == IGNORE:
-        return
-    if decision == CONFLICT:
-        # 不静默挑一个。"到底哪份数据生效了"说不清，比多一条冲突记录糟得多。
-        outcome.conflicts.append(item)
-        return
+    for attempt in range(MAX_CAS_RETRIES):
+        existing = None
+        for candidate in storage.get_current(
+            subject_id=context.subject_id, signals=[stored.signal],
+        ).get(stored.signal, ()):
+            if candidate.dimension_key == dimension:
+                existing = candidate
+                break
 
-    assert decision == REPLACE
-    expires = (
-        stored.occurred_at + timedelta(seconds=sig.current_ttl_sec)
-        if sig.current_ttl_sec > 0 else None
+        decision = decide_current_update(
+            new_occurred_at=stored.occurred_at,
+            new_revision=stored.source_revision,
+            new_digest=item.content_digest,
+            existing=existing,
+        )
+        if decision == IGNORE:
+            return IGNORE
+        if decision == CONFLICT:
+            # 不静默挑一个。"到底哪份数据生效了"说不清，比多一条冲突记录糟得多。
+            outcome.conflicts.append(item)
+            return CONFLICT
+
+        expires = (
+            stored.occurred_at + timedelta(seconds=sig.current_ttl_sec)
+            if sig.current_ttl_sec > 0 else None
+        )
+        if storage.compare_and_put_current(
+            CurrentProjection(
+                subject_id=context.subject_id,
+                signal=stored.signal,
+                dimension_key=dimension,
+                typed_value=stored.typed_value,
+                availability=stored.availability,
+                observed_at=stored.occurred_at,
+                received_at=stored.received_at,
+                expires_at=expires,
+                source_observation_id=stored.observation_id,
+                source_revision=stored.source_revision,
+                version=(existing.version + 1) if existing else 0,
+                content_digest=item.content_digest,
+            ),
+            expected_version=existing.version if existing else -1,
+        ):
+            return REPLACE
+        # 有人在我们读之后写了。重读、重新判断 —— 说不定这次该 IGNORE 了。
+
+    outcome.warnings.append(
+        f"{stored.signal}: 当前值连续 {MAX_CAS_RETRIES} 次写入竞争失败，本次放弃"
     )
-    storage.compare_and_put_current(
-        CurrentProjection(
-            subject_id=context.subject_id,
-            signal=stored.signal,
-            dimension_key=dimension,
-            typed_value=stored.typed_value,
-            availability=stored.availability,
-            observed_at=stored.occurred_at,
-            received_at=stored.received_at,
-            expires_at=expires,
-            source_observation_id=stored.observation_id,
-            source_revision=stored.source_revision,
-            version=(existing.version + 1) if existing else 0,
-            content_digest=item.content_digest,
-        ),
-        expected_version=existing.version if existing else -1,
-    )
+    return IGNORE
 
 
 def _update_aggregate(
@@ -285,10 +347,16 @@ def _update_aggregate(
     stored = item.stored
     day = stored.effective_local_date
     kind = "daily"
-    existing = storage.get_aggregate(
-        subject_id=context.subject_id, signal=stored.signal,
-        start_date=day, end_date=day, aggregation_kind=kind,
-    )
+    # 按当前算法版本挑。算法升级后旧版本的文档要留着(供对照/回滚),
+    # 但绝不能拿旧口径的文档继续 fold 新数据 —— 那会得到一份两种口径混合的统计,
+    # 而且看不出来。
+    existing = [
+        a for a in storage.get_aggregate(
+            subject_id=context.subject_id, signal=stored.signal,
+            start_date=day, end_date=day, aggregation_kind=kind,
+        )
+        if a.aggregation_version == AGGREGATION_VERSION
+    ]
     prev = existing[0].typed_aggregate if existing else None
     doc = _aggregate.fold_into_day(
         prev, sig, stored.typed_value or {}, ts=_epoch(stored.occurred_at),
