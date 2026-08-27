@@ -28,6 +28,7 @@ from .availability import (
     normalize,
     updates_current,
 )
+from . import delivery, records
 from .context import IngestContext
 from .errors import ContractError
 from .event import EventCondition, PerceptionEvent
@@ -45,6 +46,20 @@ from .receipt import (
     WAKE_SUPPRESSED,
     IngestReceipt,
     WakeReceipt,
+)
+from .records import (
+    CONFLICT,
+    IGNORE,
+    REPLACE,
+    CalendarEventMirror,
+    CurrentProjection,
+    DailyAggregate,
+    DurableDedupeIdentity,
+    EventOutboxEntry,
+    ReminderItemMirror,
+    SourceSyncState,
+    StoredObservation,
+    decide_current_update,
 )
 from .report import ReportEnvelope
 from .versioning import (
@@ -70,6 +85,13 @@ __all__ = [
     # versioning
     "REPORT_SCHEMA_VERSION", "EVENT_SCHEMA_VERSION", "SUPPORTED_REPORT_VERSIONS",
     "UnsupportedSchemaVersion", "check_report_version",
+    # 逻辑存储对象
+    "StoredObservation", "CurrentProjection", "DailyAggregate",
+    "CalendarEventMirror", "ReminderItemMirror", "SourceSyncState",
+    "DurableDedupeIdentity", "EventOutboxEntry",
+    "decide_current_update", "REPLACE", "IGNORE", "CONFLICT",
+    # 投递状态机
+    "delivery", "records",
     # errors
     "ContractError",
 ]
