@@ -25,6 +25,7 @@ from .ports.storage import StoragePort
 from .ports.wake import WakePort
 from .processing.dispatch import DispatchOutcome, drain
 from .processing.pipeline import IngestOutcome, ingest_report
+from .processing.scheduled import ScheduledOutcome, evaluate_absence, evaluate_daily
 from .queries import api as _queries
 from .rules.types import EventDefinition
 
@@ -97,6 +98,39 @@ class PerceptionKit:
         return drain(
             storage=self.storage, wake=self.wake, worker_id=worker_id,
             now=now, limit=limit, lease_seconds=lease_seconds,
+        )
+
+    # -- 时钟驱动的两种规则 ----------------------------------------------
+    #
+    # 九种规则里有两种主管线跑不到:streak 要按天判(跟着观测跑是一天几千次,
+    # 而它一天只可能变化一次)、absence 是【没有数据才该触发】(跟着观测跑
+    # 永远等不到自己被调用)。
+    #
+    # 宿主不用为此多起一个东西 —— 投递那条线本来就需要定时循环,搭上去就行:
+    #
+    #     while True:
+    #         kit.dispatch_pending(worker_id="w1", now=now())
+    #         kit.evaluate_absence(subject_id=..., now=now())
+    #         sleep(60)
+
+    def evaluate_daily(
+        self, *, subject_id: str, local_date: date, now: datetime,
+    ) -> ScheduledOutcome:
+        """某天的聚合算完后调一次，跑 ``streak`` 这类按天判的规则。"""
+        return evaluate_daily(
+            storage=self.storage, subject_id=subject_id, local_date=local_date,
+            now=now, signals=self.signals, definitions=self.definitions,
+            extra_evaluators=self.extra_evaluators,
+        )
+
+    def evaluate_absence(
+        self, *, subject_id: str, now: datetime,
+    ) -> ScheduledOutcome:
+        """定时调，跑 ``absence``（该来的没来）。"""
+        return evaluate_absence(
+            storage=self.storage, subject_id=subject_id, now=now,
+            signals=self.signals, definitions=self.definitions,
+            extra_evaluators=self.extra_evaluators,
         )
 
     # -- 读取侧 ----------------------------------------------------------

@@ -103,6 +103,10 @@ class EventDefinition:
     subject_id: str | None = None
     #: ``occurrence`` 型用什么去重。默认用 ``source_event_id``。
     dedupe_field: str = "source_event_id"
+    #: 某些规则型需要的额外参数。放一个口袋，而不是给每种规则各开一个字段。
+    #: ``streak`` 用 ``{"periods": 3}``（连续几个周期）—— 它的 ``operator`` /
+    #: ``value`` 已经被"每天的条件"占用了（比如"睡眠 < 360 分钟"）。
+    params: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.lifecycle is None:
@@ -171,6 +175,7 @@ class EventDefinition:
             wake_enabled=bool(wake.get("enabled", True)),
             subject_id=payload.get("subject_id"),
             dedupe_field=(payload.get("deduplication") or {}).get("key", "source_event_id"),
+            params=dict(condition.get("params") or {}),
         )
 
 

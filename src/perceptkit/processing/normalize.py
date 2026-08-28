@@ -26,6 +26,10 @@ from ..contracts.records import StoredObservation
 from ..manifest.types import FieldDefinition, SignalDefinition
 
 
+class AttributionError(ValueError):
+    """算不出这条观测属于哪一天。**只拒这一条，不影响同批其他观测。**"""
+
+
 @dataclass(frozen=True)
 class NormalizedObservation:
     """标准化的结果：一条可落库的观测，外加两种身份。
@@ -223,13 +227,18 @@ def effective_date(
                 f"退回按 occurred_at 归属"
             )
             return _parse(attribution.attribute_instant(iso)), (), problems
-        if strategy == "episode_end":
-            return _parse(attribution.attribute_episode(start, end)), (), problems
-        slices = tuple(attribution.split_across_midnight(start, end, tz=timezone_name))
-        # 归属日取结束那天；跨午夜的分摊由聚合层按 slices 处理。
-        return _parse(slices[-1][0]) if slices else _parse(
-            attribution.attribute_episode(start, end)
-        ), slices, problems
+        # producer 可能发来不合法的区间（结束早于开始、时间戳格式不对）。
+        # **只拒这一条，不能炸掉整批** —— 一批十条里一条有问题就全丢，
+        # 是最容易让人骂街的设计，管线其他地方都守住了这条，这里以前漏了。
+        try:
+            if strategy == "episode_end":
+                return _parse(attribution.attribute_episode(start, end)), (), problems
+            slices = tuple(attribution.split_across_midnight(start, end, tz=timezone_name))
+            return _parse(slices[-1][0]) if slices else _parse(
+                attribution.attribute_episode(start, end)
+            ), slices, problems
+        except (ValueError, TypeError) as exc:
+            raise AttributionError(f"{sig.key}: {exc}") from exc
 
     return _parse(attribution.attribute_instant(iso)), (), problems
 
@@ -341,7 +350,11 @@ def normalize_observations(
                 f"{obs.signal}: 没有时区，按 occurred_at 的偏移归属日期"
                 f"（夏令时切换当天可能算错）"
             )
-        day, slices, day_problems = effective_date(obs, sig, timezone_name=tz_name)
+        try:
+            day, slices, day_problems = effective_date(obs, sig, timezone_name=tz_name)
+        except AttributionError as exc:
+            rejected.append((index, (str(exc),)))
+            continue
         warnings += day_problems
 
         content = _digest(_canonical(clean), obs.availability)
@@ -379,5 +392,5 @@ def normalize_observations(
 __all__ = [
     "NormalizedObservation", "NormalizeResult", "normalize_observations",
     "validate_value", "sanitize_value", "resolve_timezone", "effective_date",
-    "identity_for",
+    "identity_for", "AttributionError",
 ]

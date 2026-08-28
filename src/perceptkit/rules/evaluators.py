@@ -159,13 +159,19 @@ def eval_occurrence(d: EventDefinition, s: RuleState, current: Any, ctx) -> Rule
 def eval_streak(d: EventDefinition, s: RuleState, current: Any, ctx) -> RuleResult:
     """连续 N 个周期满足条件。
 
+    两个参数分开：``operator`` / ``value`` 是**每天的条件**（"睡眠 < 360 分钟"），
+    ``params["periods"]`` 是**连续几天**。挤在一个字段里表达不了。
+
     连续长度由调用方通过 ``ctx["streak_length"]`` 给 —— 它要读历史，
-    而 evaluator 只看单次观测。真正的连续计算在 ``streaks`` 模块里。
+    而 evaluator 只看单次观测。
+
+    **由日聚合完成时驱动，不是每条观测都跑**：前台每 30 秒一条观测，
+    但"连续三天"这件事一天只可能变化一次。
 
     **边缘触发**：只在恰好跨到 N 的那一次触发。第 N+1 天仍然连续，
     但不再提醒 —— 否则"连续三天睡不好"会变成天天念叨。
     """
-    need = int(_numeric(d.value) or 0)
+    need = int(_numeric(d.params.get("periods")) or _numeric(d.value) or 0)
     length = int(_numeric(ctx.get("streak_length")) or 0)
     prev_length = int(_numeric(s.previous_value) or 0)
     if need <= 0:

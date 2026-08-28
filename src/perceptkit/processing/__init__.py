@@ -35,7 +35,15 @@ from .dispatch import (  # noqa: E402
     event_id_for,
 )
 
+from .scheduled import (  # noqa: E402
+    ScheduledOutcome,
+    evaluate_absence,
+    evaluate_daily,
+    streak_length,
+)
+
 __all__ += [
     "evaluate_and_enqueue", "RuleOutcome", "event_id_for",
     "dispatch_once", "drain", "DispatchOutcome",
+    "evaluate_daily", "evaluate_absence", "streak_length", "ScheduledOutcome",
 ]
