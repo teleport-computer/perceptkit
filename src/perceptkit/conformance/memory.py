@@ -14,7 +14,10 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+
+#: 排序时给「没有时间」的条目垫底用的哨兵，不参与任何业务判断。
+_EPOCH = datetime(1, 1, 1, tzinfo=timezone.utc)
 from typing import Any, Iterator, Sequence
 
 from ..contracts import delivery as _delivery
@@ -193,6 +196,34 @@ class InMemoryStorage:
         for r in items:
             self.reminders[(subject_id, r.source_account_id, r.source_list_id,
                             r.source_reminder_id)] = r
+
+    def list_calendar_events(self, *, subject_id, start=None, end=None, limit=50):
+        rows = [v for k, v in self.calendar.items() if k[0] == subject_id]
+        keep = []
+        for item in rows:
+            at = item.event_fields.get("start_at")
+            # 时间不明的条目**保留** —— 和删除那边同一条纪律：证明不了它在
+            # 范围外，就不能替用户把它藏起来。
+            if at is not None and start is not None and at < start:
+                continue
+            if at is not None and end is not None and at > end:
+                continue
+            keep.append(item)
+        keep.sort(key=lambda i: (i.event_fields.get("start_at") is None,
+                                 i.event_fields.get("start_at") or _EPOCH,
+                                 i.source_event_id))
+        return keep[:limit]
+
+    def list_reminders(self, *, subject_id, include_completed=False, limit=50):
+        keep = [
+            v for k, v in self.reminders.items()
+            if k[0] == subject_id
+            and (include_completed or not v.reminder_fields.get("is_completed"))
+        ]
+        keep.sort(key=lambda i: (i.reminder_fields.get("due_at") is None,
+                                 i.reminder_fields.get("due_at") or _EPOCH,
+                                 i.source_reminder_id))
+        return keep[:limit]
 
     def apply_source_snapshot(self, *, subject_id, source, collection_kind, sync_id,
                               coverage_start, coverage_end, snapshot_kind) -> int:

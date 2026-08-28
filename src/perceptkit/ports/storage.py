@@ -176,6 +176,24 @@ class StoragePort(Protocol):
     ) -> None:
         ...
 
+    def list_calendar_events(
+        self, *, subject_id: str,
+        start: datetime | None = None, end: datetime | None = None,
+        limit: int = 50,
+    ) -> Sequence[CalendarEventMirror]:
+        """镜像里现在还存在的日程，按开始时间排序。
+
+        产品规范的端口清单里只有写入没有读取 —— 但读取侧要用，不给它一个
+        端口方法，实现就只能去摸具体存储的内部结构，换个宿主就静默返回空。
+        """
+        ...
+
+    def list_reminders(
+        self, *, subject_id: str, include_completed: bool = False, limit: int = 50,
+    ) -> Sequence[ReminderItemMirror]:
+        """镜像里现在还存在的提醒事项。理由同上。"""
+        ...
+
     def apply_source_snapshot(
         self, *, subject_id: str, source: str, collection_kind: str,
         sync_id: str, coverage_start: datetime, coverage_end: datetime,

@@ -248,37 +248,22 @@ def list_calendar_events(
     ⚠️ 同步长期失败时应该显示 stale，而不是继续声称这是最新完整的数据 ——
     调用方要自己去看 ``SourceSyncState.last_successful_sync_at``。
     """
-    mirror = getattr(storage, "calendar", None)
-    if mirror is None:
-        return []
-    rows = [v for k, v in mirror.items() if k[0] == subject_id]
-    out = []
-    for item in rows:
-        start_at = item.event_fields.get("start_at")
-        if start is not None and start_at is not None and start_at < start:
-            continue
-        if end is not None and start_at is not None and start_at > end:
-            continue
-        out.append({"source_event_id": item.source_event_id, **item.event_fields})
-    return out[:_clamp(limit)]
+    rows = storage.list_calendar_events(
+        subject_id=subject_id, start=start, end=end, limit=_clamp(limit),
+    )
+    return [{"source_event_id": e.source_event_id, **e.event_fields} for e in rows]
 
 
 def list_reminders(
     storage: StoragePort, *, subject_id: str, include_completed: bool = False,
     limit: int = DEFAULT_LIMIT,
 ) -> list[dict[str, Any]]:
-    mirror = getattr(storage, "reminders", None)
-    if mirror is None:
-        return []
-    out = []
-    for key, item in mirror.items():
-        if key[0] != subject_id:
-            continue
-        if not include_completed and item.reminder_fields.get("is_completed"):
-            continue
-        out.append({"source_reminder_id": item.source_reminder_id,
-                    **item.reminder_fields})
-    return out[:_clamp(limit)]
+    rows = storage.list_reminders(
+        subject_id=subject_id, include_completed=include_completed,
+        limit=_clamp(limit),
+    )
+    return [{"source_reminder_id": r.source_reminder_id, **r.reminder_fields}
+            for r in rows]
 
 
 def list_events(
