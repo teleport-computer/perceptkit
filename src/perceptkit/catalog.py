@@ -101,7 +101,7 @@ SIGNALS: dict[str, Signal] = {s.input: s for s in [
     # always-on
     Signal("time", "time", ("local_time", "timezone", "locale"),
            resolver="time", ttl_sec=300.0, significant=False),
-    Signal("battery", "device", ("battery_level", "charging"),
+    Signal("battery", "device", ("battery_level", "charging", "low_power_mode"),
            resolver="battery", ttl_sec=600.0, significant=False),
     Signal("broadcast", "broadcast", ("broadcast_state", "broadcast_active"),
            resolver="broadcast", ttl_sec=300.0, significant=True),
@@ -225,6 +225,17 @@ SENSITIVE_PHOTO_SCENES = {"private", "receipt", "document", "id_card", "medical"
 PHOTO_METADATA_FIELDS = (
     "has_faces", "face_count", "scene_hint", "scene_confidence",
     "time_of_day", "is_burst", "is_indoor", "has_text_block", "is_screenshot",
+    # Stable per-photo identity + capture time. Both are new; older clients
+    # simply omit them and every consumer must treat them as optional.
+    #
+    # `source_event_id` is an on-device HMAC of PHAsset.localIdentifier under a
+    # device-local random key -- stable across re-reports, never reversible to
+    # the user's library. It is deliberately NOT the envelope id: that one is
+    # bound into the ciphertext's AAD and must stay random.
+    #
+    # `occurred_at` is when the photo was taken, which is not when it reaches
+    # us -- an import backfills months of photos in one session.
+    "source_event_id", "occurred_at",
 )
 # "Back after long lock" wake threshold.
 UNLOCK_BACK_THRESHOLD_SEC = 1800.0  # 30 min
