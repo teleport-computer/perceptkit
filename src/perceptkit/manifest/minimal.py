@@ -897,12 +897,103 @@ HEALTH_MOOD = SignalDefinition(
 
 
 #: manifest 的全部内容。逐条过完 Seven 的文档后往里加。
+# ---------------------------------------------------------------------------
+# proximity_anchor —— 「此刻在哪个东西旁边」
+# ---------------------------------------------------------------------------
+
+PROXIMITY_ANCHOR = SignalDefinition(
+    key="proximity_anchor",
+    label="连接性锚点",
+    schema_version=1,
+    capability="location",
+    storage_mode="current_timeline_aggregate",
+    # 和 location_city 一样取 900s：它同样跟着整份快照走，
+    # 前台 30s / 后台保活 5min / 被挂起后不可控。
+    current_ttl_sec=900.0,
+    # anchor_id 本身就是稳定身份，但一次「连着」不是一个事件 ——
+    # 用 (signal, occurred_at, 值摘要) 造确定性键，重传能对上。
+    identity_strategy="deterministic_digest",
+    attribution_strategy="split_at_midnight",
+    history_retention_days=PERMANENT,
+    source_profile="location",
+    note=(
+        "和 location_city 是【两个信号，不是一个字段的粗细两档】。城市回答"
+        "「在哪座城」，锚点回答「在哪个地方」—— 混进同一个字段，搬家之后"
+        "新旧两个「home」就看不出区别了（产品规范 §5.2-6 点名的场景）。\n"
+        "两处和规范不一致，都是 iOS 平台限制：\n"
+        "① anchor_type 的 bluetooth 这一档基本拿不到 —— iOS 不给第三方看"
+        "系统级蓝牙连接，只有音频输出设备这一个子集，那部分走 audio_route。\n"
+        "② connect/disconnect 边缘取决于「app 被后台唤起时还读不读得到 Wi-Fi」，"
+        "这一条正在真机实测。读不到的话 dwell 只能从相邻快照推，"
+        "精度 = 上报间隔，且用户全程在后台的那段会整块漏掉。"
+    ),
+    fields=(
+        FieldDefinition(
+            key="anchor_id",
+            value_type="string",
+            privacy_class="personal",
+            nullable=False,
+            comparison_strategy="exact",
+            wake_eligible=True,
+            query_visibility="always",
+            note=(
+                "端上算的 HMAC 假名（iOS 拿 BSSID 算，截断 64bit），"
+                "稳定但不可逆 —— 后端能认出「又是这个网络」，还原不出 BSSID。"
+                "重装 app 会换一批密钥，锚点重新学，这是可接受的代价。"
+            ),
+        ),
+        FieldDefinition(
+            key="anchor_type",
+            value_type="enum",
+            privacy_class="personal",
+            nullable=False,
+            enum=("wifi", "bluetooth"),
+            comparison_strategy="exact",
+            query_visibility="always",
+            note="bluetooth 这一档 iOS 基本给不了，见信号级 note。",
+        ),
+        FieldDefinition(
+            key="label",
+            value_type="string",
+            privacy_class="personal",
+            comparison_strategy="none",
+            query_visibility="always",
+            note=(
+                "用户给这个锚点起的名字。**可以改名，改名不影响 anchor_id** ——"
+                "身份和标签分开正是规范 §5.2-4 要的。"
+            ),
+        ),
+        FieldDefinition(
+            key="is_connected",
+            value_type="boolean",
+            privacy_class="personal",
+            nullable=False,
+            comparison_strategy="state_change",
+            aggregation_strategy="duration_by_state",
+            wake_eligible=True,
+            query_visibility="always",
+        ),
+        FieldDefinition(
+            # 和 location_city.coordinate 同一个道理：声明出来，是为了让
+            # 「永不持久化、永不给 agent」成为一条可被测试检查的规则。
+            key="raw_identifier",
+            value_type="string",
+            privacy_class="restricted",
+            query_visibility="never",
+            note="原始 BSSID / 设备地址。端上算完假名就丢弃，永远不该出设备。",
+        ),
+    ),
+)
+
+
 MINIMAL_SIGNALS: dict[str, SignalDefinition] = {
     s.key: s for s in (
         # 阶段二的五个代表信号
         BATTERY, PRESENCE_RECOVERY, STEPS, LOCATION_CITY, FOCUS_STATE,
         # §5.1 时间、设备与短期环境
         TIME_CONTEXT, BROADCAST, SCREEN_CHANGE, AUDIO_ROUTE, WEATHER,
+        # §5.2 位置与连接性锚点
+        PROXIMITY_ANCHOR,
         # §5.3 行为、应用与媒体
         MOTION_STATE, PHOTO_LIBRARY_ADDED,
         # §5.5 健康与长期趋势
@@ -924,6 +1015,7 @@ DECLINED_SIGNALS: dict[str, str] = {
 __all__ = [
     "BATTERY", "PRESENCE_RECOVERY", "STEPS", "LOCATION_CITY", "FOCUS_STATE",
     "TIME_CONTEXT", "BROADCAST", "SCREEN_CHANGE", "AUDIO_ROUTE", "WEATHER",
+    "PROXIMITY_ANCHOR",
     "MOTION_STATE", "PHOTO_LIBRARY_ADDED",
     "HEALTH_SLEEP", "HEALTH_WORKOUT", "HEALTH_VITALS", "HEALTH_ACTIVITY",
     "HEALTH_BODY", "HEALTH_METABOLIC", "HEALTH_CYCLE", "HEALTH_MOOD",

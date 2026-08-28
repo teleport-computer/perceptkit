@@ -138,6 +138,10 @@ class FieldDefinition:
     trend_model: str = "none"
     #: 标准化函数的名字。``None`` = 原样存。
     normalizer: str | None = None
+    #: 这个字段为什么长这样 —— 和规范不一致的地方、平台限制、放弃的替代方案。
+    #: **写进数据结构而不是注释**：读 manifest 的人(和 dump 出来的文档)一定
+    #: 看得到,注释只有读源码的人看得到。信号级有同名字段,这里补上字段级。
+    note: str | None = None
 
 
 @dataclass(frozen=True)

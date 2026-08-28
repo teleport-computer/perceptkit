@@ -260,3 +260,70 @@ def test_the_city_signal_only_ever_holds_city_level_information():
     visible = api.visible_fields(sig)
     assert set(visible) == {"locality", "country_code"}
     assert "place_label" not in visible and "anchor_id" not in visible
+
+
+# ---------------------------------------------------------------------------
+# §22-17  锚点身份稳定，且不和城市混成同一语义
+# ---------------------------------------------------------------------------
+
+def test_the_anchor_and_the_city_are_two_signals_not_one_field_at_two_zoom_levels():
+    """规范 §22-17。城市回答「在哪座城」，锚点回答「在哪个地方」。
+
+    混进同一个字段的后果很具体：搬家之后，新旧两个「home」就分不出来了。
+    """
+    s = InMemoryStorage()
+    s.append_observation(obs("location_city", "2026-08-01",
+                             {"locality": "上海", "country_code": "CN"}, oid="c"))
+    s.append_observation(obs("proximity_anchor", "2026-08-01", {
+        "anchor_id": "a1b2c3", "anchor_type": "wifi",
+        "label": "home", "is_connected": True,
+    }, oid="p"))
+
+    city, _ = api.list_timeline(s, subject_id="u1", signal="location_city",
+                                manifest=MINIMAL_SIGNALS)
+    anchor, _ = api.list_timeline(s, subject_id="u1", signal="proximity_anchor",
+                                  manifest=MINIMAL_SIGNALS)
+
+    # 各查各的，互相看不到对方的字段
+    assert "anchor_id" not in city[0]["value"] and "label" not in city[0]["value"]
+    assert "locality" not in anchor[0]["value"]
+    assert anchor[0]["value"]["label"] == "home"
+
+
+def test_moving_house_leaves_two_distinguishable_anchors_both_called_home():
+    """规范 §5.2-6 点名的场景：搬家后新旧都叫 home，靠 anchor_id 区分。"""
+    s = InMemoryStorage()
+    s.append_observation(obs("proximity_anchor", "2026-08-01", {
+        "anchor_id": "old-place", "anchor_type": "wifi",
+        "label": "home", "is_connected": True}, oid="p1"))
+    s.append_observation(obs("proximity_anchor", "2026-09-01", {
+        "anchor_id": "new-place", "anchor_type": "wifi",
+        "label": "home", "is_connected": True}, oid="p2"))
+
+    rows, _ = api.list_timeline(s, subject_id="u1", signal="proximity_anchor",
+                                manifest=MINIMAL_SIGNALS)
+    assert [r["value"]["label"] for r in rows] == ["home", "home"]
+    assert len({r["value"]["anchor_id"] for r in rows}) == 2
+
+
+def test_renaming_an_anchor_does_not_change_its_identity():
+    """规范 §5.2-4：anchor_id 是身份，label 只是用户起的名字，改名不影响身份。"""
+    sig = MINIMAL_SIGNALS["proximity_anchor"]
+    fields = sig.field_map()
+    # 身份字段参与比较，标签不参与 —— 改个名不该被当成"换了个地方"
+    assert fields["anchor_id"].comparison_strategy == "exact"
+    assert fields["label"].comparison_strategy == "none"
+
+
+def test_the_raw_wifi_identifier_never_reaches_the_agent():
+    """BSSID 原文和精确坐标同一个待遇：声明成规则，让它可被测试检查。"""
+    s = InMemoryStorage()
+    s.append_observation(obs("proximity_anchor", "2026-08-01", {
+        "anchor_id": "a1b2c3", "anchor_type": "wifi", "label": "home",
+        "is_connected": True, "raw_identifier": "aa:bb:cc:dd:ee:ff",
+    }, oid="p"))
+
+    rows, _ = api.list_timeline(s, subject_id="u1", signal="proximity_anchor",
+                                manifest=MINIMAL_SIGNALS)
+    assert "raw_identifier" not in rows[0]["value"]
+    assert rows[0]["value"]["anchor_id"] == "a1b2c3"
