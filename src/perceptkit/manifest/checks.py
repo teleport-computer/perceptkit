@@ -164,6 +164,23 @@ def check_named_implementations_exist(
                     f"{key}.{f.key}: 数值字段会进日聚合却没声明 trend_model"
                     f"（趋势查询只能瞎猜用哪种算法,而三种结论完全不同）"
                 )
+            if f.accepted_units:
+                from .units import can_convert
+                if not f.unit:
+                    problems.append(
+                        f"{key}.{f.key}: 声明了 accepted_units 却没有标准单位"
+                    )
+                else:
+                    for u in f.accepted_units:
+                        if not can_convert(u, f.unit):
+                            problems.append(
+                                f"{key}.{f.key}: 声明接受 {u!r} 但没有 "
+                                f"{u!r} -> {f.unit!r} 的换算实现"
+                            )
+            if f.max_relative_jump is not None and f.max_relative_jump <= 0:
+                problems.append(
+                    f"{key}.{f.key}: max_relative_jump 必须为正数"
+                )
             if f.normalizer is not None and f.normalizer not in known:
                 problems.append(
                     f"{key}.{f.key}: normalizer={f.normalizer!r} 没有对应实现"

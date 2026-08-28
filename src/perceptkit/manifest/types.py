@@ -112,9 +112,19 @@ class FieldDefinition:
     key: str
     value_type: str
     privacy_class: str
-    #: 单位。无量纲的(布尔、枚举、标签)写 ``None``,但**数值型必须有** ——
+    #: **标准**单位。无量纲的(布尔、枚举、标签)写 ``None``,但**数值型必须有** ——
     #: 没有单位的数字在跨宿主传递时必然被解释错。
     unit: str | None = None
+    #: producer 还可能发来哪些单位。收到这些一律换算成 ``unit``,
+    #: 原始单位留作 metadata。不在这个名单里的单位**拒收** ——
+    #: 一个磅的数字当公斤存进去,比拒收难查得多(没有报错,只有一个悄悄
+    #: 错掉一半的体重)。
+    accepted_units: tuple[str, ...] = ()
+    #: 相邻两次测量的相对变化上限。超过就报 conflict(**不拒收**,交给宿主决定)。
+    #: 这是唯一能挡住"单位标错"的一道:体重一次掉一半,不管单位对不对都不正常。
+    #: 值域校验拦不住它 —— 31.8 kg 完全合法。
+    #: 会误伤(用户真换了体重计),所以只报冲突。``None`` = 不检查。
+    max_relative_jump: float | None = None
     nullable: bool = True
     #: 数值型的合法区间 ``(min, max)``,任一端可为 ``None``。
     valid_range: tuple[float | None, float | None] | None = None
