@@ -22,19 +22,26 @@ from .checks import (
     validate_manifest,
 )
 from .minimal import (
+    AUDIO_ROUTE,
     BATTERY,
+    BROADCAST,
+    DECLINED_SIGNALS,
     FOCUS_STATE,
     LOCATION_CITY,
     MINIMAL_SIGNALS,
     PRESENCE_RECOVERY,
+    SCREEN_CHANGE,
     STEPS,
+    TIME_CONTEXT,
+    WEATHER,
 )
 from .types import PERMANENT, FieldDefinition, SignalDefinition
 
 __all__ = [
     "SignalDefinition", "FieldDefinition", "PERMANENT",
-    "MINIMAL_SIGNALS",
+    "MINIMAL_SIGNALS", "DECLINED_SIGNALS",
     "BATTERY", "PRESENCE_RECOVERY", "STEPS", "LOCATION_CITY", "FOCUS_STATE",
+    "TIME_CONTEXT", "BROADCAST", "SCREEN_CHANGE", "AUDIO_ROUTE", "WEATHER",
     "validate_manifest",
     "check_types_and_units", "check_history_has_retention",
     "check_named_implementations_exist",

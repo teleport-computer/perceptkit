@@ -43,12 +43,44 @@ def test_the_minimal_manifest_is_clean():
     assert validate_manifest(MINIMAL_SIGNALS) == []
 
 
+def test_section_5_1_signals_are_all_present():
+    """§5.1「时间、设备与短期环境」逐条对完之后加进来的。
+    少一个就是漏了一条已确认的产品要求。"""
+    for key in ("time_context", "battery", "broadcast", "screen_change",
+                "presence_recovery", "audio_route", "weather"):
+        assert key in MINIMAL_SIGNALS, key
+
+
+def test_the_signal_we_decided_not_to_build_is_written_down():
+    """明确「不做」也要写下来 —— 否则下一个人会当成漏项又捡回来。"""
+    from perceptkit.manifest import DECLINED_SIGNALS
+    assert "network_connection" in DECLINED_SIGNALS
+    assert DECLINED_SIGNALS["network_connection"].strip()
+
+
+def test_screen_change_keeps_no_fingerprint():
+    """指纹序列存久了能反推用户屏幕上出现过什么。
+    这个信号只许有「变了/没变」这一个布尔。"""
+    sig = MINIMAL_SIGNALS["screen_change"]
+    assert [f.key for f in sig.fields] == ["changed"]
+    assert not sig.stores_history
+
+
+def test_timezone_is_declared_as_an_iana_name_that_can_wake():
+    """只有偏移不够：纽约冬天 -05:00、夏天 -04:00 是同一个时区，
+    光看偏移分不出来，夏令时切换那天就会算错。"""
+    fields = MINIMAL_SIGNALS["time_context"].field_map()
+    assert fields["time_zone_id"].wake_eligible
+    assert MINIMAL_SIGNALS["time_context"].keeps_history_forever
+
+
 def test_the_five_signals_cover_the_shapes_the_pipeline_has_to_handle():
     """选这五个的意义就在覆盖面——少一种形态，管线就有一条路没走过。"""
     modes = {s.storage_mode for s in MINIMAL_SIGNALS.values()}
     identities = {s.identity_strategy for s in MINIMAL_SIGNALS.values()}
     attributions = {s.attribution_strategy for s in MINIMAL_SIGNALS.values()}
-    assert modes == {"current_only", "current_timeline_aggregate"}
+    assert {"current_only", "current_timeline_aggregate",
+            "current_short_timeline"} <= modes
     assert identities == {"singleton", "source_event_id", "deterministic_digest"}
     assert "split_at_midnight" in attributions      # 跨午夜的路要有信号走过
     assert "source_local_date" in attributions      # 上游直接给日期的路也要有

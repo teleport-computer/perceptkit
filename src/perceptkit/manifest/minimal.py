@@ -250,13 +250,265 @@ FOCUS_STATE = SignalDefinition(
 )
 
 
-#: 最小 manifest 的全部内容。批 8 往里加剩下的信号。
+# ---------------------------------------------------------------------------
+# 以下是 §5.1「时间、设备与短期环境」逐条对完之后加进来的
+# ---------------------------------------------------------------------------
+
+TIME_CONTEXT = SignalDefinition(
+    key="time_context",
+    label="时间语境",
+    schema_version=1,
+    capability="time",
+    storage_mode="current_timeline_aggregate",
+    # 产品规范给的是 300s。时区一年可能才变两次 —— 5 分钟就过期，等于用户
+    # 不在前台时我们几乎永远不知道他在哪个时区，而「这条数据算哪一天」恰恰靠它。
+    # 改成不失效，由查询层返回「这个信息多久之前的」。（hx 2026-08-28）
+    current_ttl_sec=0.0,
+    identity_strategy="deterministic_digest",
+    attribution_strategy="instant",
+    history_retention_days=PERMANENT,
+    note=(
+        "只记录时区【变化】，本地时间不存历史 —— 有时区 + UTC 时刻就能算出来。"
+        "TTL 改成不失效，原因见 current_ttl_sec 上面。"
+    ),
+    fields=(
+        FieldDefinition(
+            key="time_zone_id",
+            value_type="string",
+            privacy_class="personal",
+            nullable=False,
+            # 必须是 IANA 名字，不能只有偏移：纽约冬天 -05:00、夏天 -04:00
+            # 是同一个时区，光看偏移分不出来，夏令时切换那天就会算错。
+            comparison_strategy="exact",
+            aggregation_strategy="event_list",
+            wake_eligible=True,
+            query_visibility="always",
+        ),
+        FieldDefinition(
+            key="utc_offset_seconds",
+            value_type="integer",
+            unit="seconds",
+            privacy_class="personal",
+            comparison_strategy="none",
+            query_visibility="always",
+        ),
+        FieldDefinition(
+            key="locale",
+            value_type="string",
+            privacy_class="personal",
+            comparison_strategy="none",
+            query_visibility="always",
+        ),
+    ),
+)
+
+
+BROADCAST = SignalDefinition(
+    key="broadcast",
+    label="屏幕采集会话",
+    schema_version=1,
+    capability="broadcast",
+    storage_mode="current_short_timeline",
+    current_ttl_sec=300.0,
+    identity_strategy="deterministic_digest",
+    attribution_strategy="split_at_midnight",
+    history_retention_days=7,
+    note=(
+        "和 screen_change 是两件事：这个表示【采集会话开着没有】（一天开关几次），"
+        "screen_change 表示【画面变了没有】（采集期间每几秒可能一次）。"
+    ),
+    fields=(
+        FieldDefinition(
+            key="is_active",
+            value_type="boolean",
+            privacy_class="personal",
+            nullable=False,
+            comparison_strategy="state_change",
+            aggregation_strategy="duration_by_state",
+            wake_eligible=True,
+            query_visibility="always",
+        ),
+    ),
+)
+
+
+SCREEN_CHANGE = SignalDefinition(
+    key="screen_change",
+    label="画面是否发生变化",
+    schema_version=1,
+    capability="broadcast",
+    storage_mode="current_only",
+    current_ttl_sec=60.0,
+    identity_strategy="singleton",
+    attribution_strategy="instant",
+    history_retention_days=0,
+    note=(
+        "🔴 只存「变了 / 没变」这个布尔。**画面指纹不进这个信号，也不落库** —— "
+        "指纹序列存久了，理论上能反推用户屏幕上出现过什么。"
+        "比较放在设备端做（设备本地记着上一次的指纹，只上报布尔），"
+        "iOS 其他信号的 changed 标志已经是这套机制，screen 这条跟上即可。"
+    ),
+    fields=(
+        FieldDefinition(
+            key="changed",
+            value_type="boolean",
+            privacy_class="personal",
+            nullable=False,
+            comparison_strategy="occurrence",
+            wake_eligible=True,
+            query_visibility="always",
+        ),
+    ),
+)
+
+
+AUDIO_ROUTE = SignalDefinition(
+    key="audio_route",
+    label="声音从哪个设备出",
+    schema_version=1,
+    capability="audio_route",
+    storage_mode="current_short_timeline",
+    current_ttl_sec=600.0,
+    identity_strategy="deterministic_digest",
+    attribution_strategy="split_at_midnight",
+    history_retention_days=7,
+    note=(
+        "当场景线索用：连车机大概率在开车、戴 AirPods 可能在通勤或想专注。"
+        "它也是蓝牙锚点唯一能拿到的残片 —— iOS 不给第三方 app 看系统级蓝牙连接，"
+        "只有音频输出设备这一个子集。"
+    ),
+    fields=(
+        FieldDefinition(
+            key="output_type",
+            value_type="enum",
+            privacy_class="personal",
+            nullable=False,
+            enum=("builtin", "headphones", "car_audio",
+                  "bluetooth_a2dp", "bluetooth_hfp", "bluetooth_le", "other"),
+            comparison_strategy="state_change",
+            aggregation_strategy="duration_by_state",
+            wake_eligible=True,
+            query_visibility="always",
+        ),
+        FieldDefinition(
+            key="is_bluetooth",
+            value_type="boolean",
+            privacy_class="personal",
+            comparison_strategy="state_change",
+            query_visibility="always",
+        ),
+        FieldDefinition(
+            key="device_label",
+            value_type="string",
+            privacy_class="personal",
+            comparison_strategy="none",
+            query_visibility="on_demand",
+        ),
+    ),
+)
+
+
+WEATHER = SignalDefinition(
+    key="weather",
+    label="天气",
+    schema_version=1,
+    capability="weather",
+    storage_mode="current_short_timeline",
+    current_ttl_sec=1800.0,
+    identity_strategy="deterministic_digest",
+    attribution_strategy="instant",
+    history_retention_days=7,
+    note=(
+        "天气是【预报】不是测量 —— valid_at 说明这份数据什么时候有效，"
+        "和「我们什么时候收到的」是两件事。"
+    ),
+    fields=(
+        FieldDefinition(
+            key="condition",
+            value_type="string",
+            privacy_class="public",
+            comparison_strategy="exact",
+            query_visibility="always",
+        ),
+        FieldDefinition(
+            key="temperature_c",
+            value_type="number",
+            unit="celsius",
+            privacy_class="public",
+            valid_range=(-90.0, 60.0),
+            comparison_strategy="numeric_delta",
+            aggregation_strategy="numeric_dist",
+            trend_model="fluctuating",
+            query_visibility="always",
+        ),
+        FieldDefinition(
+            key="apparent_temperature_c",
+            value_type="number", unit="celsius", privacy_class="public",
+            valid_range=(-90.0, 70.0), query_visibility="always",
+        ),
+        FieldDefinition(
+            key="humidity_ratio",
+            value_type="number", unit="ratio", privacy_class="public",
+            valid_range=(0.0, 1.0), query_visibility="always",
+        ),
+        FieldDefinition(
+            key="precipitation_probability",
+            value_type="number", unit="ratio", privacy_class="public",
+            valid_range=(0.0, 1.0), query_visibility="always",
+        ),
+        FieldDefinition(
+            key="uv_index",
+            value_type="number", unit="index", privacy_class="public",
+            valid_range=(0.0, 20.0), query_visibility="always",
+        ),
+        FieldDefinition(
+            key="is_daylight",
+            value_type="boolean", privacy_class="public",
+            comparison_strategy="state_change", query_visibility="always",
+        ),
+        FieldDefinition(
+            key="alerts",
+            value_type="array", privacy_class="public",
+            comparison_strategy="exact", wake_eligible=True,
+            query_visibility="always",
+        ),
+        FieldDefinition(
+            # 这份预报什么时候有效 —— 和"我们什么时候收到的"不是一回事。
+            key="valid_at",
+            value_type="timestamp", privacy_class="public",
+            query_visibility="always",
+        ),
+        FieldDefinition(
+            key="location_scope",
+            value_type="string", privacy_class="personal",
+            query_visibility="always",
+        ),
+    ),
+)
+
+
+#: manifest 的全部内容。逐条过完 Seven 的文档后往里加。
 MINIMAL_SIGNALS: dict[str, SignalDefinition] = {
-    s.key: s for s in (BATTERY, PRESENCE_RECOVERY, STEPS, LOCATION_CITY, FOCUS_STATE)
+    s.key: s for s in (
+        # 阶段二的五个代表信号
+        BATTERY, PRESENCE_RECOVERY, STEPS, LOCATION_CITY, FOCUS_STATE,
+        # §5.1 时间、设备与短期环境
+        TIME_CONTEXT, BROADCAST, SCREEN_CHANGE, AUDIO_ROUTE, WEATHER,
+    )
+}
+
+#: 明确【不做】的信号，写下来免得以后有人当成漏项。
+DECLINED_SIGNALS: dict[str, str] = {
+    "network_connection": (
+        "不做。产品规范标的是「建议/待确认」不是要求。理由：我们能收到的上报，"
+        "必然是「有网」那一刻发出的 —— 「没网」那段永远传不到服务端，"
+        "这个信号自证不了自己。（hx 2026-08-28）"
+    ),
 }
 
 
 __all__ = [
     "BATTERY", "PRESENCE_RECOVERY", "STEPS", "LOCATION_CITY", "FOCUS_STATE",
-    "MINIMAL_SIGNALS",
+    "TIME_CONTEXT", "BROADCAST", "SCREEN_CHANGE", "AUDIO_ROUTE", "WEATHER",
+    "MINIMAL_SIGNALS", "DECLINED_SIGNALS",
 ]
