@@ -487,6 +487,106 @@ WEATHER = SignalDefinition(
 )
 
 
+# ---------------------------------------------------------------------------
+# §5.3「行为、应用与媒体」逐条对完之后加进来的
+# ---------------------------------------------------------------------------
+
+MOTION_STATE = SignalDefinition(
+    key="motion_state",
+    label="活动状态",
+    schema_version=1,
+    capability="motion",
+    storage_mode="current_timeline_aggregate",
+    current_ttl_sec=900.0,
+    identity_strategy="deterministic_digest",
+    attribution_strategy="split_at_midnight",
+    # 产品规范给的是"永久"。改成明细 1 年 + 聚合永久 —— 明细是聚合的 60 倍体量,
+    # 但能答的问题正好反过来:明细答「上周三下午」时间越久越没人问,
+    # 聚合答「今年比去年」时间越久越值钱。（hx 2026-08-28）
+    history_retention_days=365,
+    note=(
+        "保留期偏离规范：明细 1 年（规范给「永久」），聚合仍然永久。"
+        "TTL 也偏离（规范 300s → 900s）：后台保活上报间隔正好是 300s，"
+        "TTL 等于上报间隔意味着用户不在前台时这个值几乎永远是 stale。"
+        "另外：同一状态重复上报只刷新当前值、不写明细 —— 否则用户开着专注模式"
+        "工作四小时会在历史里留下 48 条一模一样的记录。"
+    ),
+    fields=(
+        FieldDefinition(
+            key="state",
+            value_type="enum",
+            privacy_class="personal",
+            nullable=False,
+            enum=("stationary", "walking", "running", "cycling",
+                  "automotive", "unknown"),
+            comparison_strategy="state_change",
+            aggregation_strategy="duration_by_state",
+            wake_eligible=False,
+            query_visibility="always",
+        ),
+        FieldDefinition(
+            # Core Motion 本来就给置信度。低置信度的「可能在跑步」不该当事实用 ——
+            # 带上它，调用方才能自己决定信不信。
+            key="confidence",
+            value_type="number",
+            unit="ratio",
+            privacy_class="public",
+            valid_range=(0.0, 1.0),
+            query_visibility="always",
+        ),
+    ),
+)
+
+
+PHOTO_LIBRARY_ADDED = SignalDefinition(
+    key="photo_library_added",
+    label="相册新增照片",
+    schema_version=1,
+    capability="photos",
+    storage_mode="current_timeline_aggregate",
+    current_ttl_sec=0.0,          # 「最近一次新增」，不按普通 TTL 失效
+    identity_strategy="source_event_id",
+    attribution_strategy="instant",
+    history_retention_days=7,
+    source_profile="device_occurrence",
+    note=(
+        "一张照片一条 count=1，不是「今天 5 张」报一次 —— 拆成一条条才能让照片"
+        "走通用管线：跨午夜天然各归各的日、某条字段有问题只拒那一条。"
+        "传输上仍然可以一个信封装多条，不多发请求。\n"
+        "🔴 删照片【不回减】过去某日的数量：它记的是「那天发生过什么」，"
+        "不是「现在还剩几张」。\n"
+        "🔴 前提未满足：iOS 现在上报的是随机 id，同一张照片两次上报算出两个不同"
+        "身份 —— 去重表再完美也挡不住。要 iOS 改成用 PHAsset.localIdentifier 的"
+        "端上哈希（和 wifi_anchor_id 同一套做法）。已列入 iOS 待办。\n"
+        "去重指纹的保留期：规范建议永久；我们查下来当前实现【找不到超过 7 天的"
+        "重放路径】，所以按「覆盖明细保留期 + 富余」取 30 天更实在。"
+        "规范自己也是条件句：「若 producer 可以在超过 7 天后重放，才必须永久保留」。"
+    ),
+    fields=(
+        FieldDefinition(
+            key="count",
+            value_type="integer",
+            unit="count",
+            privacy_class="personal",
+            nullable=False,
+            valid_range=(1, 1),        # 永远是 1 —— 一张照片一条
+            aggregation_strategy="daily_total",
+            comparison_strategy="occurrence",
+            trend_model="fluctuating",
+            wake_eligible=True,
+            query_visibility="on_demand",
+        ),
+        FieldDefinition(
+            key="added_at",
+            value_type="timestamp",
+            privacy_class="personal",
+            nullable=False,
+            query_visibility="on_demand",
+        ),
+    ),
+)
+
+
 #: manifest 的全部内容。逐条过完 Seven 的文档后往里加。
 MINIMAL_SIGNALS: dict[str, SignalDefinition] = {
     s.key: s for s in (
@@ -494,6 +594,8 @@ MINIMAL_SIGNALS: dict[str, SignalDefinition] = {
         BATTERY, PRESENCE_RECOVERY, STEPS, LOCATION_CITY, FOCUS_STATE,
         # §5.1 时间、设备与短期环境
         TIME_CONTEXT, BROADCAST, SCREEN_CHANGE, AUDIO_ROUTE, WEATHER,
+        # §5.3 行为、应用与媒体
+        MOTION_STATE, PHOTO_LIBRARY_ADDED,
     )
 }
 
@@ -510,5 +612,6 @@ DECLINED_SIGNALS: dict[str, str] = {
 __all__ = [
     "BATTERY", "PRESENCE_RECOVERY", "STEPS", "LOCATION_CITY", "FOCUS_STATE",
     "TIME_CONTEXT", "BROADCAST", "SCREEN_CHANGE", "AUDIO_ROUTE", "WEATHER",
+    "MOTION_STATE", "PHOTO_LIBRARY_ADDED",
     "MINIMAL_SIGNALS", "DECLINED_SIGNALS",
 ]
