@@ -1032,6 +1032,113 @@ PROXIMITY_ANCHOR = SignalDefinition(
 )
 
 
+# ---------------------------------------------------------------------------
+# music_playback —— 在听什么
+# ---------------------------------------------------------------------------
+
+MUSIC_PLAYBACK = SignalDefinition(
+    key="music_playback",
+    label="正在播放",
+    schema_version=1,
+    capability="now_playing",
+    storage_mode="current_timeline_aggregate",
+    # 产品规范给 600s，照做。音乐这个信号的采集节奏和 focus/motion 不一样 ——
+    # 系统播放器是事件驱动的，切歌 2 秒后就有新值，不靠保活轮询兜底。
+    current_ttl_sec=600.0,
+    identity_strategy="deterministic_digest",
+    attribution_strategy="split_at_midnight",
+    # 明细 1 年、聚合永久（hx 2026-08-28，同 focus/motion 那条决定）。
+    history_retention_days=365,
+    aggregate_retention_days=PERMANENT,
+    note=(
+        "两处和产品规范不同，都是 iOS 平台限制：\n"
+        "① **没有 track_id**。Apple 是给歌曲持久化 ID 的，但 iOS 侧当初为隐私"
+        "主动砍掉了 —— 那个 ID 能反查用户整个曲库。我们用 (title, artist) 的"
+        "哈希当稳定身份，代价是同名同歌手的两首（现场版 / 录音室版）会被"
+        "当成同一首。\n"
+        "② **播放边缘只覆盖一半播放器**。iOS 订阅的是 systemMusicPlayer，"
+        "也就是 Apple Music / 系统播放器：切歌 2 秒后就上报，起止时刻是准的。"
+        "Spotify、网易云用自己的播放器，不发这些通知，只能靠快照采到的那几个点。"
+        "所以派生 session 的 quality **不能一刀切成 estimated** —— 规范 §5.3 "
+        "写的是「只有轮询样本就标 estimated」，实际是同一个信号两种精度并存，"
+        "一律标 estimated 会把本来准确的那一半信息丢掉。"
+    ),
+    fields=(
+        FieldDefinition(
+            key="track_key",
+            value_type="string",
+            privacy_class="sensitive",
+            nullable=False,
+            comparison_strategy="exact",
+            wake_eligible=True,
+            query_visibility="on_demand",
+            note=(
+                "(title, artist) 的哈希，替代规范里的 track_id。"
+                "**不是 Apple 的持久化 ID** —— 那个能反查曲库，iOS 侧不给。"
+            ),
+        ),
+        FieldDefinition(
+            key="title",
+            value_type="string",
+            privacy_class="sensitive",
+            comparison_strategy="none",
+            query_visibility="on_demand",
+        ),
+        FieldDefinition(
+            key="artist",
+            value_type="string",
+            privacy_class="sensitive",
+            comparison_strategy="none",
+            query_visibility="on_demand",
+        ),
+        FieldDefinition(
+            key="album",
+            value_type="string",
+            privacy_class="sensitive",
+            comparison_strategy="none",
+            query_visibility="on_demand",
+        ),
+        FieldDefinition(
+            key="playback_state",
+            value_type="enum",
+            privacy_class="sensitive",
+            nullable=False,
+            enum=("playing", "paused", "stopped"),
+            comparison_strategy="state_change",
+            aggregation_strategy="duration_by_state",
+            wake_eligible=True,
+            query_visibility="on_demand",
+        ),
+        FieldDefinition(
+            key="position_seconds",
+            value_type="number",
+            unit="s",
+            privacy_class="sensitive",
+            valid_range=(0, None),
+            comparison_strategy="none",
+            query_visibility="on_demand",
+            note="播放进度。不参与比较 —— 它每秒都在变，当成变化会把每次采样都算成一次事件。",
+        ),
+        FieldDefinition(
+            key="edge_quality",
+            value_type="enum",
+            privacy_class="sensitive",
+            nullable=False,
+            enum=("measured", "estimated"),
+            comparison_strategy="none",
+            query_visibility="always",
+            note=(
+                "这条记录的起止时刻是**真事件**还是**从相邻快照推的**。\n"
+                "systemMusicPlayer（Apple Music）来的标 measured，"
+                "第三方播放器只能靠快照采到，标 estimated。\n"
+                "**把这个写进数据本身**，是因为读到值的人不一定读过文档 —— "
+                "同一个信号两种精度并存，不说出来就会被当成一样准。"
+            ),
+        ),
+    ),
+)
+
+
 MINIMAL_SIGNALS: dict[str, SignalDefinition] = {
     s.key: s for s in (
         # 阶段二的五个代表信号
@@ -1041,7 +1148,7 @@ MINIMAL_SIGNALS: dict[str, SignalDefinition] = {
         # §5.2 位置与连接性锚点
         PROXIMITY_ANCHOR,
         # §5.3 行为、应用与媒体
-        MOTION_STATE, PHOTO_LIBRARY_ADDED,
+        MOTION_STATE, PHOTO_LIBRARY_ADDED, MUSIC_PLAYBACK,
         # §5.5 健康与长期趋势
         HEALTH_SLEEP, HEALTH_WORKOUT, HEALTH_VITALS, HEALTH_ACTIVITY,
         HEALTH_BODY, HEALTH_METABOLIC, HEALTH_CYCLE, HEALTH_MOOD,
@@ -1062,7 +1169,7 @@ __all__ = [
     "BATTERY", "PRESENCE_RECOVERY", "STEPS", "LOCATION_CITY", "FOCUS_STATE",
     "TIME_CONTEXT", "BROADCAST", "SCREEN_CHANGE", "AUDIO_ROUTE", "WEATHER",
     "PROXIMITY_ANCHOR",
-    "MOTION_STATE", "PHOTO_LIBRARY_ADDED",
+    "MOTION_STATE", "PHOTO_LIBRARY_ADDED", "MUSIC_PLAYBACK",
     "HEALTH_SLEEP", "HEALTH_WORKOUT", "HEALTH_VITALS", "HEALTH_ACTIVITY",
     "HEALTH_BODY", "HEALTH_METABOLIC", "HEALTH_CYCLE", "HEALTH_MOOD",
     "MINIMAL_SIGNALS", "DECLINED_SIGNALS",

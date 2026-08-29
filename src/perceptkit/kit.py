@@ -24,7 +24,8 @@ from .manifest.types import SignalDefinition
 from .ports.storage import StoragePort
 from .ports.wake import WakePort
 from .processing.dispatch import DispatchOutcome, drain
-from .processing.pipeline import IngestOutcome, ingest_report
+from .processing.pipeline import AGGREGATION_VERSION, IngestOutcome, ingest_report
+from .processing.recompute import RecomputeOutcome, recompute_range
 from .processing.scheduled import ScheduledOutcome, evaluate_absence, evaluate_daily
 from .queries import api as _queries
 from .rules.types import EventDefinition
@@ -121,6 +122,24 @@ class PerceptionKit:
             storage=self.storage, subject_id=subject_id, local_date=local_date,
             now=now, signals=self.signals, definitions=self.definitions,
             extra_evaluators=self.extra_evaluators,
+        )
+
+    def recompute_aggregates(
+        self, *, subject_id: str, signal: str, start: date, end: date,
+        now: datetime, version: int | None = None,
+        allow_incomplete: bool = False,
+    ):
+        """聚合算法升级之后，按新版本把历史重算一遍。
+
+        **默认拒绝重算明细可能已经被保留期清掉的日子** —— 拿残缺明细折出来的
+        永久统计会错一个数量级，而且旧值已经被覆盖、救不回来。真要算就显式
+        传 ``allow_incomplete=True``，结果里会标出来。
+        """
+        return recompute_range(
+            storage=self.storage, signals=self.signals, subject_id=subject_id,
+            signal=signal, start_date=start, end_date=end,
+            version=AGGREGATION_VERSION if version is None else version,
+            now=now, allow_incomplete=allow_incomplete,
         )
 
     def evaluate_absence(

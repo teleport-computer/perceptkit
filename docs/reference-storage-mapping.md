@@ -22,6 +22,7 @@
 | `health_workout` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | episode_end |
 | `location_city` | CurrentProjection + StoredObservation + DailyAggregate | 900s | 永久 | 同明细 | deterministic_digest | instant |
 | `motion_state` | CurrentProjection + StoredObservation + DailyAggregate | 900s | 365 天 | 永久 | deterministic_digest | split_at_midnight |
+| `music_playback` | CurrentProjection + StoredObservation + DailyAggregate | 600s | 365 天 | 永久 | deterministic_digest | split_at_midnight |
 | `photo_library_added` | CurrentProjection + StoredObservation + DailyAggregate | — | 7 天 | 同明细 | source_event_id | instant |
 | `presence_recovery` | CurrentProjection | — | 不存 | 不适用 | source_event_id | instant |
 | `proximity_anchor` | CurrentProjection + StoredObservation + DailyAggregate | 900s | 7 天 | 永久 | deterministic_digest | split_at_midnight |
@@ -75,6 +76,12 @@
 ### `motion_state`
 
 保留期偏离规范：明细 1 年（规范给「永久」），聚合仍然永久。TTL 也偏离（规范 300s → 900s）：后台保活上报间隔正好是 300s，TTL 等于上报间隔意味着用户不在前台时这个值几乎永远是 stale。另外：同一状态重复上报只刷新当前值、不写明细 —— 否则用户开着专注模式工作四小时会在历史里留下 48 条一模一样的记录。
+
+### `music_playback`
+
+两处和产品规范不同，都是 iOS 平台限制：
+① **没有 track_id**。Apple 是给歌曲持久化 ID 的，但 iOS 侧当初为隐私主动砍掉了 —— 那个 ID 能反查用户整个曲库。我们用 (title, artist) 的哈希当稳定身份，代价是同名同歌手的两首（现场版 / 录音室版）会被当成同一首。
+② **播放边缘只覆盖一半播放器**。iOS 订阅的是 systemMusicPlayer，也就是 Apple Music / 系统播放器：切歌 2 秒后就上报，起止时刻是准的。Spotify、网易云用自己的播放器，不发这些通知，只能靠快照采到的那几个点。所以派生 session 的 quality **不能一刀切成 estimated** —— 规范 §5.3 写的是「只有轮询样本就标 estimated」，实际是同一个信号两种精度并存，一律标 estimated 会把本来准确的那一半信息丢掉。
 
 ### `photo_library_added`
 
