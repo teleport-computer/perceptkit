@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Mapping
 
 from . import versioning
 from ._time import to_iso
@@ -44,6 +44,34 @@ class EventCondition:
         return out
 
 
+#: 事件 ``context`` 允许出现的键。**白名单，不是建议** —— 事件会被存下来、
+#: 投出去、进模型上下文，任何"顺手多带一点"都会同时撑上下文和漏隐私。
+#: 宿主要更多信息，应该拿 ``signal`` + ``occurred_at`` 自己去查，而不是让
+#: kit 把存储 doc 塞进信封。
+ALLOWED_CONTEXT_KEYS = ("scope", "reason", "streak_length", "silent_seconds")
+
+#: 单个 context 值序列化后的字符数上限。主要防的是 ``reason`` ——
+#: 它来自 evaluator，而宿主可以注册自己的 evaluator，返回什么完全不受我们控制。
+MAX_CONTEXT_VALUE_CHARS = 200
+
+
+def safe_context(raw: Mapping[str, Any] | None) -> dict[str, Any]:
+    """把任意来源的 context 收敛成信封允许的形状。
+
+    白名单外的键**丢掉**（不是报错：一条规则多带了个字段，不该让整个事件消失）；
+    超长的值截断并留一个显式的省略号，让读到的人知道这里被截过。
+    """
+    out: dict[str, Any] = {}
+    for key in ALLOWED_CONTEXT_KEYS:
+        if raw is None or key not in raw:
+            continue
+        value = raw[key]
+        if isinstance(value, str) and len(value) > MAX_CONTEXT_VALUE_CHARS:
+            value = value[:MAX_CONTEXT_VALUE_CHARS] + "…(截断)"
+        out[key] = value
+    return out
+
+
 @dataclass(frozen=True)
 class PerceptionEvent:
     """一次规则命中产生的不可变事实。"""
@@ -63,8 +91,9 @@ class PerceptionEvent:
     #: 变化前后的值。``occurrence`` 型两者都是 ``None``。
     previous: Any = None
     current: Any = None
-    #: 受控的附加事实(scope、单位等)。**有大小和字段白名单**,
-    #: 不许把整个存储 doc 透传进来 —— 那既撑爆上下文,也漏隐私。
+    #: 受控的附加事实。键限定在 ``ALLOWED_CONTEXT_KEYS``、值有长度上限,
+    #: 都由 ``safe_context`` 收敛 —— 不许把整个存储 doc 透传进来,
+    #: 那既撑爆上下文,也漏隐私。
     context: dict[str, Any] = field(default_factory=dict)
     schema_version: int = versioning.EVENT_SCHEMA_VERSION
 
@@ -88,4 +117,5 @@ class PerceptionEvent:
         }
 
 
-__all__ = ["EventCondition", "PerceptionEvent"]
+__all__ = ["ALLOWED_CONTEXT_KEYS", "MAX_CONTEXT_VALUE_CHARS",
+           "EventCondition", "PerceptionEvent", "safe_context"]

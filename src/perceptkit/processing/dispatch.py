@@ -24,7 +24,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from ..contracts import delivery as _delivery
 from ..contracts.context import IngestContext
-from ..contracts.event import EventCondition, PerceptionEvent
+from ..contracts.event import EventCondition, PerceptionEvent, safe_context
 from ..contracts.records import EventOutboxEntry
 from ..contracts.receipt import WakeReceipt
 from ..ports.storage import StoragePort
@@ -164,7 +164,9 @@ def evaluate_and_enqueue(
             previous=result.previous,
             current=result.current,
             # 受控的附加事实。**不透传整个存储 doc** —— 那既撑爆上下文也漏隐私。
-            context={"scope": scope, "reason": result.reason},
+            # reason 来自 evaluator，而宿主可以注册自己的 evaluator，所以这里
+            # 不能直接信它 —— 一律过 safe_context。
+            context=safe_context({"scope": scope, "reason": result.reason}),
         )
 
         # 🔴 事件【一律落地】。wake_enabled 只决定进不进可投递状态,
@@ -248,7 +250,7 @@ def dispatch_once(
         field_name=entry.fact_snapshot.get("field"),
         previous=entry.fact_snapshot.get("previous"),
         current=entry.fact_snapshot.get("current"),
-        context=entry.fact_snapshot.get("context") or {},
+        context=safe_context(entry.fact_snapshot.get("context")),
     )
     attempt = _delivery.DeliveryAttempt(
         event_id=entry.event_id,
