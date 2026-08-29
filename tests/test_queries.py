@@ -19,6 +19,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from perceptkit.conformance import InMemoryStorage
+from perceptkit.contracts import IngestContext
 from perceptkit.contracts.records import DailyAggregate, StoredObservation
 from perceptkit.manifest.minimal import MINIMAL_SIGNALS
 from perceptkit.kit import PerceptionKit
@@ -410,3 +411,61 @@ def test_a_disabled_rule_is_listed_and_marked_rather_than_hidden():
     kit = PerceptionKit(storage=InMemoryStorage(), definitions=[off])
     assert kit.list_definitions()[0]["enabled"] is False
     assert kit.list_definitions(include_disabled=False) == []
+
+
+# ---------------------------------------------------------------------------
+# §10.1 last_known 必须带 as_of，不能冒充 current
+# ---------------------------------------------------------------------------
+
+def test_the_last_known_value_always_says_when_it_was_true():
+    """规范 §10.1：最近可靠值可以作为 last_known 返回，**但必须带 as_of**。
+
+    不带的话，一个三天前的读数和刚刚的读数在调用方眼里长得一模一样 ——
+    这正是"把旧值当当前事实"的另一种形态。
+    """
+    s = InMemoryStorage()
+    kit = PerceptionKit(storage=s)
+    kit.ingest({
+        "schema_version": 1, "report_id": "r1", "producer": "ios",
+        "observations": [{
+            "signal": "steps", "signal_schema_version": 1,
+            "occurred_at": t("2026-08-01").isoformat(), "availability": "observed",
+            "source_event_id": "hk-1", "local_date": "2026-08-01",
+            "value": {"step_count": 8000}}],
+    }, context=IngestContext("u1", t("2026-08-01")))
+
+    view = kit.get_last_known(subject_id="u1", signal="steps")
+    assert view.state == "last_known"
+    assert view.as_of is not None and view.as_of.startswith("2026-08-01")
+    # **永远不说 fresh，也不把值放在 value 上** —— 放上去调用方会当成现在的事实
+    assert view.value is None
+    assert view.last_known["step_count"] == 8000
+
+
+def test_asking_for_the_last_known_of_a_signal_with_no_data_says_so():
+    s = InMemoryStorage()
+    kit = PerceptionKit(storage=s)
+    view = kit.get_last_known(subject_id="u1", signal="steps")
+    assert view.state == "no_data" and view.last_known is None
+
+
+def test_a_stale_current_still_reports_when_it_was_true():
+    """get_current 过了 TTL 之后同样要带 as_of —— 否则调用方拿到一个
+    state=stale 的值，却不知道它 stale 了多久，也就无从判断还能不能用。"""
+    s = InMemoryStorage()
+    kit = PerceptionKit(storage=s)
+    kit.ingest({
+        "schema_version": 1, "report_id": "r1", "producer": "ios",
+        "observations": [{
+            "signal": "steps", "signal_schema_version": 1,
+            "occurred_at": t("2026-08-01", "09:00").isoformat(),
+            "availability": "observed", "source_event_id": "hk-1",
+            "local_date": "2026-08-01", "value": {"step_count": 8000}}],
+    }, context=IngestContext("u1", t("2026-08-01", "09:00")))
+
+    # steps 的 TTL 是 1 小时
+    view = kit.get_current(subject_id="u1", signals=["steps"],
+                           now=t("2026-08-01", "23:00"))["steps"]
+    assert view.state == "stale"
+    assert view.value is None                  # 不冒充现在
+    assert view.as_of.startswith("2026-08-01")  # 但说得出是什么时候的

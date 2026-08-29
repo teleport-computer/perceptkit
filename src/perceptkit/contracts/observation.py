@@ -90,7 +90,12 @@ class Observation:
         except TimestampError as exc:
             errors.append(str(exc))
 
-        raw_state = payload.get("availability")
+        # 产品规范 §7.1 的最小契约把这个字段叫 `state`，把身份字段叫
+        # `sample_id`。我们内部用更长的名字（`state` 这个词在别处已经被
+        # 用作"规则状态"，`sample_id` 又太偏健康样本），但**两种写法都收** ——
+        # 照着规范文档实现的 producer 必须能直接接上，否则它的每一条观测
+        # 都会以"availability 缺失"被拒，而实现者手里那份文档写的就是 `state`。
+        raw_state = payload.get("availability", payload.get("state"))
         if not isinstance(raw_state, str):
             errors.append("availability: required, must be a string")
             state = _availability.UNAVAILABLE
@@ -116,7 +121,8 @@ class Observation:
         elif value is not None and not isinstance(value, dict):
             errors.append(f"value: must be an object when present, got {type(value).__name__}")
 
-        source_event_id = payload.get("source_event_id")
+        source_event_id = payload.get("source_event_id",
+                                     payload.get("sample_id"))
         if source_event_id is not None and (
             not isinstance(source_event_id, str) or not source_event_id.strip()
         ):

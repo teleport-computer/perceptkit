@@ -260,3 +260,52 @@ def test_ingest_receipt_carries_the_identity_that_makes_retries_idempotent():
                       contracts.INGEST_DUPLICATE)
     assert (r.subject_id, r.producer, r.report_id) == ("user_1", "ios", "report_9")
     assert r.observations_applied == 0
+
+
+# ---------------------------------------------------------------------------
+# 规范 §7.1 的最小契约用的是另外两个字段名
+# ---------------------------------------------------------------------------
+
+def test_a_producer_written_from_the_spec_document_is_accepted():
+    """规范 §7.1 把状态字段叫 `state`、身份字段叫 `sample_id`。
+
+    只认我们内部名字的话，照着那份文档实现的 producer 每一条观测都会以
+    「availability 缺失」被拒 —— 而实现者手里那份文档写的就是 `state`。
+    """
+    from perceptkit.contracts.observation import Observation
+    obs = Observation.parse({
+        "signal": "steps",
+        "signal_schema_version": 1,
+        "occurred_at": "2026-08-26T13:30:00Z",
+        "state": "observed",
+        "value": {"step_count": 3012},
+        "sample_id": "optional_source_identity",
+    })
+    assert obs.availability == "observed"
+    assert obs.source_event_id == "optional_source_identity"
+
+
+def test_our_own_field_names_still_work():
+    from perceptkit.contracts.observation import Observation
+    obs = Observation.parse({
+        "signal": "steps", "signal_schema_version": 1,
+        "occurred_at": "2026-08-26T13:30:00Z",
+        "availability": "observed", "value": {"step_count": 1},
+        "source_event_id": "hk-1",
+    })
+    assert obs.availability == "observed" and obs.source_event_id == "hk-1"
+
+
+def test_the_unavailable_reason_the_spec_allows_survives_parsing():
+    """§7.3：unavailable 可以带一个粗粒度 reason。
+
+    `permission_denied` 和 `not_supported` 对宿主是两件事 ——
+    前者该引导用户去开权限，后者永远不该问。
+    """
+    from perceptkit.contracts.observation import Observation
+    obs = Observation.parse({
+        "signal": "steps", "signal_schema_version": 1,
+        "occurred_at": "2026-08-26T13:30:00Z",
+        "state": "unavailable", "reason": "permission_denied",
+    })
+    assert obs.availability == "unavailable" and obs.reason == "permission_denied"
