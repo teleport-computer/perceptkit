@@ -30,6 +30,7 @@ from .. import history as _history
 from .. import trend_models as _trend
 from ..manifest.types import SignalDefinition
 from ..ports.storage import StoragePort
+from ..processing import recurrence as _recurrence
 
 #: 所有 list 查询的默认与硬上限。agent 问一句"我这个月都去过哪"，
 #: 不设上限就是几千条直接塞进模型上下文。
@@ -251,7 +252,32 @@ def list_calendar_events(
     rows = storage.list_calendar_events(
         subject_id=subject_id, start=start, end=end, limit=_clamp(limit),
     )
-    return [{"source_event_id": e.source_event_id, **e.event_fields} for e in rows]
+    out: list[dict[str, Any]] = []
+    for e in rows:
+        base = {"source_event_id": e.source_event_id, **e.event_fields}
+        rule_raw = e.event_fields.get("recurrence")
+        if not rule_raw or start is None or end is None:
+            # 没有窗口就不展开 —— "把所有重复日程都给我"对一条无限重复的
+            # 规则没有答案，只有一个上限截断出来的假象。
+            out.append(base)
+            continue
+        try:
+            rule = _recurrence.RecurrenceRule.parse(rule_raw)
+            occurrences = _recurrence.expand(
+                e.event_fields["start_at"], rule,
+                window_start=start.date(), window_end=end.date(),
+            )
+        except (_recurrence.RecurrenceUnsupported, KeyError, ValueError) as exc:
+            # 展不开就把系列本身交出去并说清原因，**不猜日期**。
+            # 算错重复日程会让用户准时出现在一个不存在的会议上。
+            out.append({**base, "recurrence_expanded": False,
+                        "recurrence_note": str(exc)})
+            continue
+        for at in occurrences:
+            out.append({**base, "start_at": at, "recurrence_expanded": True,
+                        "recurrence_identity": e.recurrence_identity
+                        or e.source_event_id})
+    return out[:_clamp(limit)]
 
 
 def list_reminders(
