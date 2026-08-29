@@ -131,3 +131,49 @@ def test_the_scheduled_rules_context_keys_are_on_the_list():
     忘了加进白名单的话，它们的事件会安静地少掉解释信息。"""
     assert "streak_length" in ALLOWED_CONTEXT_KEYS
     assert "silent_seconds" in ALLOWED_CONTEXT_KEYS
+
+
+def test_the_triggering_fields_unit_travels_with_the_event():
+    """产品规范 §13 的信封示例里 context 就带着 unit。
+
+    一个只说 "current: 3012" 的事件，读到的人（和模型）分不出这是步数、
+    毫升还是分钟。manifest 花大力气要求数值必须有单位，到事件这层丢掉，
+    等于前功尽弃。
+    """
+    from datetime import timedelta
+
+    from perceptkit.conformance import InMemoryStorage
+    from perceptkit.contracts import IngestContext
+    from perceptkit.kit import PerceptionKit
+    from perceptkit.rules import EventDefinition
+
+    rule = EventDefinition.parse({
+        "id": "steps_3000", "version": 1,
+        "source": {"signal": "steps", "field": "step_count"},
+        "condition": {"type": "threshold_crossing", "operator": "gte",
+                      "value": 3000},
+        "event": {"type": "activity.step_goal_reached"},
+    })
+    s = InMemoryStorage()
+    kit = PerceptionKit(storage=s, definitions=[rule])
+
+    def send(count: int, minute: int):
+        at = NOW + timedelta(minutes=minute)
+        return kit.ingest({
+            "schema_version": 1, "report_id": f"r{minute}", "producer": "ios",
+            "observations": [{
+                "signal": "steps", "signal_schema_version": 1,
+                "occurred_at": at.isoformat(), "availability": "observed",
+                "source_event_id": f"hk-{minute}", "local_date": "2026-08-28",
+                "value": {"step_count": count}}],
+        }, context=IngestContext("u1", at))
+
+    send(2975, 0)
+    out = send(3012, 1)
+    assert out.events[0].to_dict()["context"]["unit"] == "count"
+
+
+def test_a_dimensionless_field_carries_no_unit_rather_than_a_fake_one():
+    """布尔和枚举没有单位。编一个（比如 "bool"）比留空更糟。"""
+    from perceptkit.contracts.event import safe_context
+    assert "unit" not in safe_context({"scope": "d", "unit": None})

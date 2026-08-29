@@ -171,6 +171,7 @@ def evaluate_daily(
             item, context=context, storage=storage, definitions=[definition],
             extra_evaluators=extra_evaluators,
             extra_context={"streak_length": length},
+            signal_definition=signal,
         )
         outcome.events.extend(rules.events)
         outcome.misses.extend(rules.misses)
@@ -219,6 +220,7 @@ def evaluate_absence(
             item, context=context, storage=storage, definitions=[definition],
             extra_evaluators=extra_evaluators,
             extra_context={"silent_seconds": silent},
+            signal_definition=signal,
         )
         outcome.events.extend(rules.events)
         outcome.misses.extend(rules.misses)

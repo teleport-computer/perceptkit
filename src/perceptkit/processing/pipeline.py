@@ -254,6 +254,7 @@ def _apply_one(
         rules = evaluate_and_enqueue(
             item, context=context, storage=storage,
             definitions=definitions, extra_evaluators=extra_evaluators,
+            signal_definition=sig,
         )
         outcome.events.extend(rules.events)
         outcome.rule_misses.extend(rules.misses)

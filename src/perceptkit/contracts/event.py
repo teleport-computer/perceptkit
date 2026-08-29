@@ -48,7 +48,17 @@ class EventCondition:
 #: 投出去、进模型上下文，任何"顺手多带一点"都会同时撑上下文和漏隐私。
 #: 宿主要更多信息，应该拿 ``signal`` + ``occurred_at`` 自己去查，而不是让
 #: kit 把存储 doc 塞进信封。
-ALLOWED_CONTEXT_KEYS = ("scope", "reason", "streak_length", "silent_seconds")
+ALLOWED_CONTEXT_KEYS = (
+    "scope",
+    # 触发字段的单位。产品规范 §13 的信封示例里就带着它，而且它是必要的：
+    # 一个只说 "current: 3012" 的事件，读到的人（和模型）分不出这是步数、
+    # 毫升还是分钟 —— manifest 花那么大力气要求数值必须有单位，
+    # 到了事件这一层丢掉，等于前功尽弃。
+    "unit",
+    "reason",
+    "streak_length",
+    "silent_seconds",
+)
 
 #: 单个 context 值序列化后的字符数上限。主要防的是 ``reason`` ——
 #: 它来自 evaluator，而宿主可以注册自己的 evaluator，返回什么完全不受我们控制。
@@ -66,6 +76,12 @@ def safe_context(raw: Mapping[str, Any] | None) -> dict[str, Any]:
         if raw is None or key not in raw:
             continue
         value = raw[key]
+        # 值是 None 的键**整个省掉**，不写成 `"unit": null`。
+        # 布尔和枚举本来就没有单位，给它编一个空位比不给更糟 ——
+        # 读到的人会以为"这里本该有个单位，只是没填"。
+        # 和信封里 condition 省略 operator 是同一条约定。
+        if value is None:
+            continue
         if isinstance(value, str) and len(value) > MAX_CONTEXT_VALUE_CHARS:
             value = value[:MAX_CONTEXT_VALUE_CHARS] + "…(截断)"
         out[key] = value

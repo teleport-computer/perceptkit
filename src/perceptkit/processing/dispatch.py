@@ -74,6 +74,15 @@ def definitions_for_signal(
     ]
 
 
+
+def _unit_of(sig: Any, field_name: str | None) -> str | None:
+    """触发字段声明的单位。无量纲的（布尔、枚举）返回 ``None``。"""
+    if sig is None or not field_name:
+        return None
+    fd = sig.field_map().get(field_name)
+    return fd.unit if fd is not None else None
+
+
 def evaluate_and_enqueue(
     item: NormalizedObservation,
     *,
@@ -82,6 +91,7 @@ def evaluate_and_enqueue(
     definitions: Sequence[EventDefinition],
     extra_evaluators: Mapping[str, Callable[..., RuleResult]] | None = None,
     extra_context: Mapping[str, Any] | None = None,
+    signal_definition: Any = None,
 ) -> RuleOutcome:
     """⑧⑨：对一条已经落地的观测求值，命中就写发件箱。
 
@@ -166,7 +176,13 @@ def evaluate_and_enqueue(
             # 受控的附加事实。**不透传整个存储 doc** —— 那既撑爆上下文也漏隐私。
             # reason 来自 evaluator，而宿主可以注册自己的 evaluator，所以这里
             # 不能直接信它 —— 一律过 safe_context。
-            context=safe_context({"scope": scope, "reason": result.reason}),
+            context=safe_context({
+                "scope": scope,
+                "reason": result.reason,
+                # 带上单位。数字离开 manifest 之后就没别的地方能说清
+                # 它是步数、毫升还是分钟了。
+                "unit": _unit_of(signal_definition, definition.field_name),
+            }),
         )
 
         # 🔴 事件【一律落地】。wake_enabled 只决定进不进可投递状态,
