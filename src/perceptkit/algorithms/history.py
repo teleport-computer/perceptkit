@@ -21,7 +21,7 @@ import math
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from . import catalog
+from .. import catalog
 
 # --- shapes -----------------------------------------------------------------
 NUMERIC_DIST = "numeric_dist"        # per numeric field: min/max/sum/count -> avg

@@ -26,8 +26,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, Mapping, Sequence
 
-from .. import history as _history
-from .. import trend_models as _trend
+from ..algorithms import history as _history
+from ..algorithms import trend_models as _trend
 from ..manifest.types import SignalDefinition
 from ..ports.storage import StoragePort
 from ..processing import recurrence as _recurrence

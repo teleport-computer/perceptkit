@@ -18,7 +18,7 @@ from __future__ import annotations
 import pytest
 
 
-import perceptkit.wake as wake
+import perceptkit.algorithms.wake as wake
 
 
 def test_disabled_source_never_wakes():

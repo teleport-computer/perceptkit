@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from .. import history
+from ..algorithms import history
 from ..manifest.types import SignalDefinition
 
 #: manifest 的策略名 -> history 的 shape 名。

@@ -139,7 +139,7 @@ def test_a_midday_counter_reset_never_produces_a_negative_day():
     当天总数取"见过的最大值"，所以重置之后再往上走不会把当天算成负的、
     也不会把已经走过的路清零。
     """
-    from perceptkit import history
+    from perceptkit.algorithms import history
     doc = {}
     for reading in (3000, 8000, 0, 500):
         doc = history._merge_cumulative(doc, {"step_count": reading})
@@ -147,7 +147,7 @@ def test_a_midday_counter_reset_never_produces_a_negative_day():
 
 
 def test_a_cumulative_field_keeps_climbing_normally():
-    from perceptkit import history
+    from perceptkit.algorithms import history
     doc = {}
     for reading in (1000, 4000, 9000):
         doc = history._merge_cumulative(doc, {"step_count": reading})

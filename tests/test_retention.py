@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 
-import perceptkit.history as history
+import perceptkit.algorithms.history as history
 import perceptkit.retention as retention
 
 

@@ -76,3 +76,47 @@ def test_no_io_in_the_judgment_modules():
         if hit:
             offenders.append(f"{rel}: {sorted(hit)}")
     assert not offenders, "内核里出现了 I/O：\n" + "\n".join(offenders)
+
+
+# ---------------------------------------------------------------------------
+# algorithms/ 这一层要名副其实
+# ---------------------------------------------------------------------------
+
+ALGORITHMS = SRC / "algorithms"   # SRC 已经指到 src/perceptkit
+
+#: algorithms/ 允许依赖的包内模块。**存储、端口、管线、装配一个都不许** ——
+#: 一旦依赖了它们，这一层就不再是"给定输入算出结果"，
+#: 而分出这一层的全部意义就是它可以被放心大改：没有副作用、没有顺序依赖，
+#: 改错了测试当场红，而不是在某个宿主的生产环境里变成一条静默错掉的记录。
+ALGORITHM_MAY_IMPORT = {"catalog", "observation", "manifest", "contracts"}
+
+
+def test_the_algorithms_layer_does_not_reach_into_the_rest_of_the_package():
+    """产品规范 §18：不能再把 contract、算法、存储、宿主 runtime 接线混成一层。"""
+    import re
+    offenders = []
+    for f in ALGORITHMS.glob("*.py"):
+        text = f.read_text(encoding="utf-8")
+        for m in re.findall(r"^from \.\.?([a-z_]+)", text, flags=re.M):
+            if m and m not in ALGORITHM_MAY_IMPORT:
+                offenders.append(f"{f.name}: 依赖了 {m}")
+    assert not offenders, (
+        "algorithms/ 依赖了这一层不该知道的东西：\n" + "\n".join(offenders))
+
+
+def test_nothing_that_stayed_at_the_top_level_is_actually_an_algorithm():
+    """留在顶层的四个是声明表和待定项，不是算法。
+
+    写成测试是为了防"顺手也搬进去" —— 把声明表塞进 algorithms/，
+    这个词就不再有意义，下一个人也就不知道该往哪放东西了。
+    """
+    top = {p.stem for p in SRC.glob("*.py")}
+    assert top == {"__init__", "kit", "catalog", "fields", "retention", "prompts"}
+
+
+def test_every_algorithm_module_is_reachable_from_the_package():
+    """搬完之后漏导出一个，宿主就 import 不到它，而 import 错误比静默漂移好，
+    但最好一个都不漏。"""
+    import perceptkit.algorithms as alg
+    on_disk = {p.stem for p in ALGORITHMS.glob("*.py")} - {"__init__"}
+    assert set(alg.__all__) == on_disk

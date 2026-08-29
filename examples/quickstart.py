@@ -10,8 +10,8 @@
 """
 from __future__ import annotations
 
-from perceptkit import attribution, history, observation, streaks, trend_models, wake
-from perceptkit.glance import build_perception_glance
+from perceptkit.algorithms import attribution, history, observation, streaks, trend_models, wake
+from perceptkit.algorithms.glance import build_perception_glance
 from perceptkit.prompts import V1_BOARD_HOWTO, V1_GLANCE_HOWTO
 
 

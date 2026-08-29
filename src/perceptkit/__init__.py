@@ -29,15 +29,15 @@
 from __future__ import annotations
 
 from . import contracts, manifest, ports, processing, rules
-from .attribution import attribute_episode, attribute_instant, split_across_midnight
+from .algorithms.attribution import attribute_episode, attribute_instant, split_across_midnight
 from .catalog import CAPABILITIES, SIGNALS
 from .contracts import IngestContext, Observation, PerceptionEvent, ReportEnvelope, WakeReceipt
 from .kit import PerceptionKit
 from .fields import AGENT_PERCEPTION_SIGNALS, project_signal
-from .glance import build_perception_glance
-from .history import is_historized
-from .identity import MissingIdentity, measurement_key
-from .observation import (
+from .algorithms.glance import build_perception_glance
+from .algorithms.history import is_historized
+from .algorithms.identity import MissingIdentity, measurement_key
+from .algorithms.observation import (
     NO_OBSERVATION,
     OBSERVED,
     OBSERVED_ZERO,
@@ -46,9 +46,9 @@ from .observation import (
     is_trend_eligible,
 )
 from .retention import retention_days, stores_history
-from .streaks import current_streak, should_trigger
-from .trend_models import model_for, wake_eligible
-from .wake import is_wake_worthy_signal, is_significant_change, should_wake
+from .algorithms.streaks import current_streak, should_trigger
+from .algorithms.trend_models import model_for, wake_eligible
+from .algorithms.wake import is_wake_worthy_signal, is_significant_change, should_wake
 
 __all__ = [
     # 接入口

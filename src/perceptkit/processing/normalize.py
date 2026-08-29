@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Mapping
 
-from .. import attribution
+from ..algorithms import attribution
 from ..contracts._time import to_iso
 from ..contracts.context import IngestContext
 from ..contracts.observation import Observation
