@@ -23,7 +23,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Mapping, Sequence
 
 from .. import history as _history
@@ -281,9 +281,76 @@ def list_events(
     ]
 
 
+def export_subject(
+    storage: StoragePort, *, subject_id: str,
+    manifest: Mapping[str, SignalDefinition],
+    start: datetime | None = None, end: datetime | None = None,
+    per_signal_limit: int = MAX_LIMIT,
+) -> dict[str, Any]:
+    """把一个人的全部感知数据导出来。
+
+    产品规范 §8 要的是「按 subject 定位、**导出**和删除」。删除有
+    ``purge_subject``，定位有各个 list —— 导出这一半以前没有。
+    没有它，"把我的数据给我"只能靠调用方自己把八个查询拼一遍，
+    而**拼漏一个就是少给了用户一部分数据，还没人会发现**。
+
+    刻意用现有端口方法拼，不新增端口：导出不是热路径，为它增加所有宿主
+    都必须实现的一个方法不划算。
+
+    ⚠️ 导出的是 kit 管的东西。宿主自己存的（原始载荷、加密信封、
+    它自己的业务表）要由宿主追加进来 —— 返回值里的 ``kit_managed_only``
+    就是提醒这件事的。
+    """
+    signals = sorted(manifest)
+    observations: dict[str, list[dict[str, Any]]] = {}
+    for signal in signals:
+        rows, _ = list_timeline(
+            storage, subject_id=subject_id, signal=signal, manifest=manifest,
+            start=start, end=end, limit=per_signal_limit,
+            # 导出给用户本人，所以按需字段也要给；
+            # `query_visibility="never"` 的仍然不给 —— 那些**根本没存**。
+            on_demand=True,
+        )
+        if rows:
+            observations[signal] = rows
+
+    current = {
+        signal: {"state": view.state, "value": view.value,
+                 "last_known": view.last_known, "as_of": view.as_of}
+        for signal, view in get_current(
+            storage, subject_id=subject_id, signals=signals,
+            manifest=manifest, now=end or _far_future(),
+        ).items()
+        if view.state != "no_data"
+    }
+
+    return {
+        "subject_id": subject_id,
+        "kit_managed_only": True,
+        "current": current,
+        "observations": observations,
+        "calendar_events": list_calendar_events(
+            storage, subject_id=subject_id, start=start, end=end,
+            limit=per_signal_limit),
+        "reminders": list_reminders(storage, subject_id=subject_id,
+                                    include_completed=True, limit=per_signal_limit),
+        "pending_events": list_events(storage, subject_id=subject_id,
+                                      limit=per_signal_limit),
+    }
+
+
+def _far_future() -> datetime:
+    """导出不判新鲜度 —— 用户要的是"我有什么数据"，不是"哪些还算当前"。
+
+    这个包不读时钟，所以用一个固定的远期时间，而不是 ``now()``。
+    """
+    return datetime(9999, 12, 31, tzinfo=timezone.utc)
+
+
 __all__ = [
     "DEFAULT_LIMIT", "MAX_LIMIT", "CurrentView", "DailyView",
     "visible_fields", "project",
     "get_current", "get_last_known", "list_timeline", "get_daily_aggregates",
+    "export_subject",
     "get_trend", "list_calendar_events", "list_reminders", "list_events",
 ]

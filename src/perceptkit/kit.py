@@ -181,5 +181,15 @@ class PerceptionKit:
     def list_events(self, *, subject_id: str, **kw):
         return _queries.list_events(self.storage, subject_id=subject_id, **kw)
 
+    def export_subject(self, *, subject_id: str, **kw) -> dict[str, Any]:
+        """把一个人的全部数据导出来（「把我的数据给我」那条法定请求）。
+
+        **只含 kit 管的部分。** 宿主自己存的东西要自己追加进去 ——
+        返回值里的 `kit_managed_only` 就是提醒这件事的。
+        """
+        return _queries.export_subject(
+            self.storage, subject_id=subject_id, manifest=self.signals, **kw,
+        )
+
 
 __all__ = ["PerceptionKit"]
