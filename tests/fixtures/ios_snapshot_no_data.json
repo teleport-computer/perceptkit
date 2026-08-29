@@ -1,0 +1,29 @@
+{
+  "client_ts": "1787900400",
+  "context_snapshot": [
+    {
+      "key": "time",
+      "data": {
+        "local_time": "2026-08-28T09:00:00+08:00",
+        "timezone": "Asia/Shanghai",
+        "locale": "zh_CN"
+      },
+      "message": "本地时间"
+    },
+    {
+      "key": "motion_state",
+      "data": "",
+      "message": "有权限但当前没有运动数据"
+    },
+    {
+      "key": "health_vitals",
+      "data": "",
+      "message": "有权限但今天还没有读数"
+    },
+    {
+      "key": "weather",
+      "data": "",
+      "message": "天气服务暂时取不到"
+    }
+  ]
+}
