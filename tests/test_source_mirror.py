@@ -40,7 +40,8 @@ def full_sync(s: InMemoryStorage, sync_id: str, start: str, end: str) -> int:
 
 
 def titles(s: InMemoryStorage, **kw) -> list[str]:
-    return [e["title"] for e in api.list_calendar_events(s, subject_id="u1", **kw)]
+    rows, _ = api.list_calendar_events(s, subject_id="u1", **kw)
+    return [e["title"] for e in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +137,7 @@ def test_one_subjects_sync_never_touches_another_subjects_data():
 
     full_sync(s, "s2", "2026-08-01", "2026-08-31")
     assert titles(s) == []
-    assert [e["title"] for e in api.list_calendar_events(s, subject_id="u2")] == ["u2 的会"]
+    assert [e["title"] for e in api.list_calendar_events(s, subject_id="u2")[0]] == ["u2 的会"]
 
 
 # ---------------------------------------------------------------------------
@@ -185,5 +186,5 @@ def test_completed_reminders_stay_out_of_the_way_unless_asked_for():
             reminder_fields={"title": "交房租", "is_completed": False,
                              "due_at": t("2026-08-11")}),
     ])
-    assert [r["title"] for r in api.list_reminders(s, subject_id="u1")] == ["交房租"]
-    assert len(api.list_reminders(s, subject_id="u1", include_completed=True)) == 2
+    assert [r["title"] for r in api.list_reminders(s, subject_id="u1")[0]] == ["交房租"]
+    assert len(api.list_reminders(s, subject_id="u1", include_completed=True)[0]) == 2

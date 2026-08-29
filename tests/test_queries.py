@@ -469,3 +469,59 @@ def test_a_stale_current_still_reports_when_it_was_true():
     assert view.state == "stale"
     assert view.value is None                  # 不冒充现在
     assert view.as_of.startswith("2026-08-01")  # 但说得出是什么时候的
+
+
+# ---------------------------------------------------------------------------
+# 补充文档 §11：所有 list/history 查询必须分页、有时间范围和上限
+# ---------------------------------------------------------------------------
+
+def test_the_calendar_pages_like_everything_else():
+    from perceptkit.contracts.records import CalendarEventMirror
+    s = InMemoryStorage()
+    s.upsert_calendar_events(subject_id="u1", events=[
+        CalendarEventMirror(
+            subject_id="u1", source_account_id="a", source_calendar_id="c",
+            source_event_id=f"e{i}",
+            event_fields={"title": f"会 {i}", "start_at": t(f"2026-08-{i+1:02d}")})
+        for i in range(5)])
+
+    first, nxt = api.list_calendar_events(s, subject_id="u1", limit=2)
+    assert len(first) == 2 and nxt is not None
+    second, _ = api.list_calendar_events(s, subject_id="u1", limit=2, cursor=nxt)
+    assert {e["source_event_id"] for e in first}.isdisjoint(
+        e["source_event_id"] for e in second)
+
+
+def test_the_reminder_list_pages_too():
+    from perceptkit.contracts.records import ReminderItemMirror
+    s = InMemoryStorage()
+    s.upsert_reminders(subject_id="u1", items=[
+        ReminderItemMirror(
+            subject_id="u1", source_account_id="a", source_list_id="l",
+            source_reminder_id=f"r{i}",
+            reminder_fields={"title": f"事 {i}", "is_completed": False})
+        for i in range(5)])
+
+    first, nxt = api.list_reminders(s, subject_id="u1", limit=2)
+    assert len(first) == 2 and nxt is not None
+
+
+def test_events_can_be_narrowed_by_type_and_by_time():
+    """§11 的签名是 list_events(subject, type, from, to, cursor, limit)。
+
+    排查一次具体的「为什么没提醒我」，问的总是「那天、那类提醒」——
+    只能按状态筛的话，还得在几百条里自己找。
+    """
+    s = InMemoryStorage()
+    s.enqueue_event(entry("e1", "pending"))
+    other = entry("e2", "pending")
+    from dataclasses import replace
+    s.enqueue_event(replace(other, event_type="health.short_sleep_streak",
+                            occurred_at=t("2026-09-01")))
+
+    by_type, _ = api.list_events(s, subject_id="u1",
+                                 event_type="health.short_sleep_streak")
+    assert [e["event_id"] for e in by_type] == ["e2"]
+
+    by_time, _ = api.list_events(s, subject_id="u1", start=t("2026-08-15"))
+    assert [e["event_id"] for e in by_time] == ["e2"]

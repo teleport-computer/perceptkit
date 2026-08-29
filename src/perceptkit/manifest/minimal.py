@@ -948,7 +948,12 @@ PROXIMITY_ANCHOR = SignalDefinition(
     label="连接性锚点",
     schema_version=1,
     capability="location",
-    storage_mode="current_timeline_aggregate",
+    # 产品规范 §3.3 和 §7.13 两处都把 Wi-Fi / 蓝牙连接归为「当前 + 短期
+    # 时间线」，没有长期聚合。先前这里写成 current_timeline_aggregate
+    # 并配了永久聚合，理由是"同 focus/motion" —— **那是我们自己的外推，
+    # 产品方没这么说，也没人拍过板**。改回他的分类，把"要不要给锚点留
+    # 永久 dwell 聚合"作为建议提出去，而不是先斩后奏。
+    storage_mode="current_short_timeline",
     # 和 location_city 一样取 900s：它同样跟着整份快照走，
     # 前台 30s / 后台保活 5min / 被挂起后不可控。
     current_ttl_sec=900.0,
@@ -956,11 +961,8 @@ PROXIMITY_ANCHOR = SignalDefinition(
     # 用 (signal, occurred_at, 值摘要) 造确定性键，重传能对上。
     identity_strategy="deterministic_digest",
     attribution_strategy="split_at_midnight",
-    # 产品规范 §1-15：Wi-Fi / 蓝牙连接历史保留 7 天。聚合（每天在各锚点待了多久）
-    # 按 focus/motion 同一条理由留永久 —— 体量小，而且"今年在家的时间比去年多吗"
-    # 正是时间越久越值钱的那类问题。
+    # 产品规范 §1-15：Wi-Fi / 蓝牙连接历史保留 7 天。
     history_retention_days=7,
-    aggregate_retention_days=PERMANENT,
     source_profile="location",
     note=(
         "和 location_city 是【两个信号，不是一个字段的粗细两档】。城市回答"
@@ -969,6 +971,10 @@ PROXIMITY_ANCHOR = SignalDefinition(
         "两处和规范不一致，都是 iOS 平台限制：\n"
         "① anchor_type 的 bluetooth 这一档基本拿不到 —— iOS 不给第三方看"
         "系统级蓝牙连接，只有音频输出设备这一个子集，那部分走 audio_route。\n"
+        "③ 我们建议给它加一层永久的 dwell 聚合（每天在各锚点待了多久）：体量很小，"
+        "而「今年在家的时间比去年多吗」正是时间越久越值钱的那类问题。"
+        "**但规范把这个信号归为「当前 + 短期时间线」，没有长期聚合，所以现在照规范做，"
+        "这条只是建议。**\n"
         "② connect/disconnect 边缘取决于「app 被后台唤起时还读不读得到 Wi-Fi」，"
         "这一条正在真机实测。读不到的话 dwell 只能从相邻快照推，"
         "精度 = 上报间隔，且用户全程在后台的那段会整块漏掉。"

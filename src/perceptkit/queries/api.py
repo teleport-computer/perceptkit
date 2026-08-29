@@ -42,6 +42,20 @@ def _clamp(limit: int) -> int:
     return max(1, min(int(limit or DEFAULT_LIMIT), MAX_LIMIT))
 
 
+def _page(rows: list, cursor: str | None, limit: int) -> tuple[list, str | None]:
+    """按偏移量分页。
+
+    **只用在有界集合上**（一个人的日历镜像、待投递的事件）—— 观测时间线
+    那种可能上百万行的，用的是 ``(occurred_at, observation_id)`` 键游标，
+    因为偏移量分页在中间插入一条迟到数据时会漏掉或重复一条，而且不报错。
+    这里的集合不会被中途插入到打乱顺序的程度，用偏移量换取不改端口。
+    """
+    start = int(cursor) if cursor else 0
+    size = _clamp(limit)
+    page = rows[start:start + size]
+    return page, (str(start + size) if start + size < len(rows) else None)
+
+
 def visible_fields(sig: SignalDefinition, *, on_demand: bool = True) -> tuple[str, ...]:
     """这个信号有哪些字段能给 agent 看。
 
@@ -242,15 +256,17 @@ def get_trend(
 def list_calendar_events(
     storage: StoragePort, *, subject_id: str,
     start: datetime | None = None, end: datetime | None = None,
-    limit: int = DEFAULT_LIMIT,
-) -> list[dict[str, Any]]:
+    cursor: str | None = None, limit: int = DEFAULT_LIMIT,
+) -> tuple[list[dict[str, Any]], str | None]:
     """当前来源镜像里的日程。
 
     ⚠️ 同步长期失败时应该显示 stale，而不是继续声称这是最新完整的数据 ——
     调用方要自己去看 ``SourceSyncState.last_successful_sync_at``。
     """
+    # 先按窗口取一批（上限而不是页大小 —— 重复日程展开之后条数会变多，
+    # 按页大小取会让展开后不足一页）。
     rows = storage.list_calendar_events(
-        subject_id=subject_id, start=start, end=end, limit=_clamp(limit),
+        subject_id=subject_id, start=start, end=end, limit=MAX_LIMIT,
     )
     out: list[dict[str, Any]] = []
     for e in rows:
@@ -277,23 +293,25 @@ def list_calendar_events(
             out.append({**base, "start_at": at, "recurrence_expanded": True,
                         "recurrence_identity": e.recurrence_identity
                         or e.source_event_id})
-    return out[:_clamp(limit)]
+    return _page(out, cursor, limit)
 
 
 def list_reminders(
     storage: StoragePort, *, subject_id: str, include_completed: bool = False,
-    limit: int = DEFAULT_LIMIT,
-) -> list[dict[str, Any]]:
+    cursor: str | None = None, limit: int = DEFAULT_LIMIT,
+) -> tuple[list[dict[str, Any]], str | None]:
     rows = storage.list_reminders(
         subject_id=subject_id, include_completed=include_completed,
-        limit=_clamp(limit),
+        limit=MAX_LIMIT,
     )
-    return [{"source_reminder_id": r.source_reminder_id, **r.reminder_fields}
-            for r in rows]
+    return _page([{"source_reminder_id": r.source_reminder_id, **r.reminder_fields}
+                  for r in rows], cursor, limit)
 
 
 def list_events(
     storage: StoragePort, *, subject_id: str, status: str | None = None,
+    event_type: str | None = None,
+    start: datetime | None = None, end: datetime | None = None,
     cursor: str | None = None, limit: int = DEFAULT_LIMIT,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """这个用户的事件。用于排查「为什么没提醒我」。
@@ -309,10 +327,13 @@ def list_events(
                                             limit=MAX_LIMIT))
     if status is not None:
         rows = [e for e in rows if e.delivery_state == status]
-    start = int(cursor) if cursor else 0
-    size = _clamp(limit)
-    page = rows[start:start + size]
-    nxt = str(start + size) if start + size < len(rows) else None
+    if event_type is not None:
+        rows = [e for e in rows if e.event_type == event_type]
+    if start is not None:
+        rows = [e for e in rows if e.occurred_at >= start]
+    if end is not None:
+        rows = [e for e in rows if e.occurred_at <= end]
+    page, nxt = _page(rows, cursor, limit)
     return [
         {
             "event_id": e.event_id, "type": e.event_type,
@@ -405,11 +426,13 @@ def export_subject(
         "kit_managed_only": True,
         "current": current,
         "observations": observations,
+        # 导出取第一页 —— 一个人的日历镜像是有界的，per_signal_limit 已经够大。
         "calendar_events": list_calendar_events(
             storage, subject_id=subject_id, start=start, end=end,
-            limit=per_signal_limit),
+            limit=per_signal_limit)[0],
         "reminders": list_reminders(storage, subject_id=subject_id,
-                                    include_completed=True, limit=per_signal_limit),
+                                    include_completed=True,
+                                    limit=per_signal_limit)[0],
         # 导出取第一页就够 —— 待投递的事件不是"用户的数据"，
         # 是我们还没送到的东西，列在这里只为完整。
         "pending_events": list_events(storage, subject_id=subject_id,

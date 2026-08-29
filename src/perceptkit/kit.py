@@ -192,6 +192,7 @@ class PerceptionKit:
         )
 
     def list_calendar_events(self, *, subject_id: str, **kw):
+        """返回 ``(日程, 下一页游标)``。重复日程按窗口展开，见 processing/recurrence。"""
         return _queries.list_calendar_events(self.storage, subject_id=subject_id, **kw)
 
     def list_reminders(self, *, subject_id: str, **kw):

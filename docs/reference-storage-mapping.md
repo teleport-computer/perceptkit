@@ -26,7 +26,7 @@
 | `music_playback` | CurrentProjection + StoredObservation + DailyAggregate | 600s | 365 天 | 永久 | deterministic_digest | split_at_midnight |
 | `photo_library_added` | CurrentProjection + StoredObservation + DailyAggregate | — | 7 天 | 同明细 | source_event_id | instant |
 | `presence_recovery` | CurrentProjection | — | 不存 | 不适用 | source_event_id | instant |
-| `proximity_anchor` | CurrentProjection + StoredObservation + DailyAggregate | 900s | 7 天 | 永久 | deterministic_digest | split_at_midnight |
+| `proximity_anchor` | CurrentProjection + StoredObservation | 900s | 7 天 | 同明细 | deterministic_digest | split_at_midnight |
 | `screen_change` | CurrentProjection | 60s | 不存 | 不适用 | singleton | instant |
 | `steps` | CurrentProjection + StoredObservation + DailyAggregate | 3600s | 永久 | 同明细 | source_event_id | source_local_date |
 | `time_context` | CurrentProjection + StoredObservation + DailyAggregate | — | 永久 | 同明细 | deterministic_digest | instant |
@@ -111,6 +111,7 @@ iOS 拿不到前台 app（`frontmost_app` 恒为 null），数据全靠用户在
 和 location_city 是【两个信号，不是一个字段的粗细两档】。城市回答「在哪座城」，锚点回答「在哪个地方」—— 混进同一个字段，搬家之后新旧两个「home」就看不出区别了（产品规范 §5.2-6 点名的场景）。
 两处和规范不一致，都是 iOS 平台限制：
 ① anchor_type 的 bluetooth 这一档基本拿不到 —— iOS 不给第三方看系统级蓝牙连接，只有音频输出设备这一个子集，那部分走 audio_route。
+③ 我们建议给它加一层永久的 dwell 聚合（每天在各锚点待了多久）：体量很小，而「今年在家的时间比去年多吗」正是时间越久越值钱的那类问题。**但规范把这个信号归为「当前 + 短期时间线」，没有长期聚合，所以现在照规范做，这条只是建议。**
 ② connect/disconnect 边缘取决于「app 被后台唤起时还读不读得到 Wi-Fi」，这一条正在真机实测。读不到的话 dwell 只能从相邻快照推，精度 = 上报间隔，且用户全程在后台的那段会整块漏掉。
 
 ### `screen_change`

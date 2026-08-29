@@ -156,11 +156,12 @@ def series(rule: dict | None = None) -> CalendarEventMirror:
 
 
 def query(s: InMemoryStorage, a: str, b: str) -> list[dict]:
-    return api.list_calendar_events(
+    rows, _ = api.list_calendar_events(
         s, subject_id="u1",
         start=datetime.fromisoformat(f"{a}T00:00:00+08:00"),
         end=datetime.fromisoformat(f"{b}T23:59:00+08:00"),
     )
+    return rows
 
 
 def test_the_window_decides_how_many_occurrences_come_back():
@@ -208,5 +209,5 @@ def test_asking_without_a_window_does_not_expand_anything():
     s = InMemoryStorage()
     s.upsert_calendar_events(subject_id="u1",
                              events=[series({"freq": "weekly", "byweekday": [0]})])
-    rows = api.list_calendar_events(s, subject_id="u1")
+    rows, _ = api.list_calendar_events(s, subject_id="u1")
     assert len(rows) == 1 and "recurrence_expanded" not in rows[0]
