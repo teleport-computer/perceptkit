@@ -247,6 +247,58 @@ def effective_date(
 # 去重身份
 # ---------------------------------------------------------------------------
 
+
+# ---------------------------------------------------------------------------
+# 设备时钟
+# ---------------------------------------------------------------------------
+#
+# 产品规范说「Producer 时钟明显错误 → 标记质量问题/拒绝」，但没说什么算"明显"。
+# 这是我们定的判据，写在这里是为了让它可被质疑，而不是散落在某个 if 里。
+#
+# **关键的不对称：未来的时间一定是错的，过去的时间可能是正常补传。**
+#
+#     用户手机时间设成了 2027 年
+#       → 今天的步数被写进 2027-08-28
+#       → 明年那天翻历史，凭空多出一天；今天的记录永远找不到
+#       → 没有任何地方报错
+#
+#     用户三个月没开 app，一次性补传
+#       → occurred_at 是三个月前，完全正常，必须收
+
+#: 这个范围内的偏差照常处理 —— 正常的时钟漂移和网络延迟都在这里面。
+CLOCK_TOLERANCE_SEC = 600.0            # 10 分钟
+
+#: 超过这个的【未来】时间拒收。离线补传只会产生过去的时间，
+#: 所以对过去一侧不设上限。
+CLOCK_FUTURE_LIMIT_SEC = 86400.0       # 24 小时
+
+
+def check_clock(occurred_at: datetime, received_at: datetime,
+                signal: str) -> tuple[str | None, str | None]:
+    """比对设备时间和宿主的钟。返回 ``(拒收理由, 质量警告)``，都可能为 None。
+
+    基准用 ``received_at``（宿主自己的钟，可信），不用本机 ``now()`` ——
+    这个包不读时钟，否则重放和测试都做不了。
+    """
+    skew = (occurred_at - received_at).total_seconds()
+    if skew > CLOCK_FUTURE_LIMIT_SEC:
+        return (
+            f"{signal}: occurred_at 比收到的时刻晚了 {skew / 3600:.1f} 小时。"
+            "未来的时间一定是错的（设备时钟被改过），收下它会把数据写进未来的某一天，"
+            "而且不会有任何地方报错",
+            None,
+        )
+    if abs(skew) > CLOCK_TOLERANCE_SEC:
+        direction = "晚" if skew > 0 else "早"
+        return None, (
+            f"{signal}: occurred_at 比收到的时刻{direction}了 {abs(skew) / 60:.0f} 分钟，"
+            "时间可疑。仍然收下 —— 离线补传本来就会产生偏差，但这条数据的"
+            "归属日期不一定可信"
+        )
+    return None, None
+
+
+
 def identity_for(
     obs: Observation, sig: SignalDefinition, ctx: IngestContext, *,
     source: str, content_digest: str,
@@ -344,6 +396,15 @@ def normalize_observations(
         if dropped:
             warnings.append(f"{obs.signal}: 丢弃了 {', '.join(dropped)}")
 
+        # 设备时钟。放在归属之前 —— 时间不可信的话，算出来的"哪一天"也不可信。
+        reject_reason, clock_warning = check_clock(
+            obs.occurred_at, context.received_at, obs.signal)
+        if reject_reason is not None:
+            rejected.append((index, (reject_reason,)))
+            continue
+        if clock_warning:
+            warnings.append(clock_warning)
+
         tz_name, _ = resolve_timezone(obs, fallback=timezone_fallback)
         if tz_name is None:
             warnings.append(
@@ -390,6 +451,7 @@ def normalize_observations(
 
 
 __all__ = [
+    "CLOCK_TOLERANCE_SEC", "CLOCK_FUTURE_LIMIT_SEC", "check_clock",
     "NormalizedObservation", "NormalizeResult", "normalize_observations",
     "validate_value", "sanitize_value", "resolve_timezone", "effective_date",
     "identity_for", "AttributionError",

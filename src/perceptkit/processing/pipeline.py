@@ -221,12 +221,17 @@ def _apply_one(
         outcome.duplicates.append(item)
         return
 
-    # ⑥ 当前值。只有 observed 会更新数值；no_data / unavailable 不覆盖
-    #    最后一次可靠值。
-    decision = IGNORE
-    if stored.availability == "observed":
-        decision = _update_current(item, sig, context=context, storage=storage,
-                                   outcome=outcome)
+    # ⑥ 当前值。
+    #
+    #    `observed`               更新数值
+    #    `no_data` / `unavailable` **不覆盖最后一次可靠值**，但要把状态记下来
+    #
+    #    后半句以前没做，后果很具体：用户 09:10 撤销了步数权限，09:20 去查
+    #    还在说「fresh，8000 步」—— 把一个已经读不到的值当成当前事实报出去。
+    #    规范 §12-12 要的是两件事：不覆盖最后可靠数值，**并且**查询时能表达
+    #    当前不可用。
+    decision = _update_current(item, sig, context=context, storage=storage,
+                               outcome=outcome)
 
     # 🔴 冲突时暂停一切派生。"到底哪份数据生效了"都说不清的时候，
     #    再去更新聚合、推进规则状态、产生事件，只会把错误扩散。
@@ -245,7 +250,7 @@ def _apply_one(
     #    拿 no_data 去喂 `changed`，会把"100 → 没数据"当成一次变化，
     #    还会把 previous 推成 None，之后的 threshold_crossing 全废。
     #    迟到数据(IGNORE)同理 —— 它的 previous/current 讲的不是当前故事。
-    if definitions and decision == REPLACE:
+    if definitions and decision == REPLACE and stored.availability == "observed":
         rules = evaluate_and_enqueue(
             item, context=context, storage=storage,
             definitions=definitions, extra_evaluators=extra_evaluators,
@@ -316,7 +321,12 @@ def _update_current(
                 subject_id=context.subject_id,
                 signal=stored.signal,
                 dimension_key=dimension,
-                typed_value=stored.typed_value,
+                # 非 observed 时保留上一次的可靠值 —— 它变成 last_known。
+                # 写 None 进去等于把"我们曾经知道什么"一起抹掉，
+                # agent 就只能说"你没有步数数据"，而不是
+                # "你上次是 8000 步，现在读不到了"。
+                typed_value=(stored.typed_value if stored.availability == "observed"
+                             else (existing.typed_value if existing else None)),
                 availability=stored.availability,
                 observed_at=stored.occurred_at,
                 received_at=stored.received_at,
