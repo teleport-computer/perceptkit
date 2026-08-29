@@ -21,6 +21,7 @@ import pytest
 from perceptkit.conformance import InMemoryStorage
 from perceptkit.contracts.records import DailyAggregate, StoredObservation
 from perceptkit.manifest.minimal import MINIMAL_SIGNALS
+from perceptkit.kit import PerceptionKit
 from perceptkit.queries import api
 
 SH = timezone(timedelta(hours=8))
@@ -331,3 +332,81 @@ def test_the_raw_wifi_identifier_never_reaches_the_agent():
                                 manifest=MINIMAL_SIGNALS)
     assert "raw_identifier" not in rows[0]["value"]
     assert rows[0]["value"]["anchor_id"] == "a1b2c3"
+
+
+# ---------------------------------------------------------------------------
+# §15 查询接口：他列了七个函数，我们缺了两块
+# ---------------------------------------------------------------------------
+
+from perceptkit.contracts.records import EventOutboxEntry  # noqa: E402
+
+
+def entry(eid: str, state: str) -> EventOutboxEntry:
+    return EventOutboxEntry(
+        event_id=eid, subject_id="u1", definition_id="d1", definition_version=1,
+        event_type="activity.step_goal_reached", occurred_at=t("2026-08-01"),
+        detected_at=t("2026-08-01"), delivery_state=state, fact_snapshot={},
+    )
+
+
+def test_events_can_be_filtered_by_delivery_state():
+    """「为什么没提醒我」的答案往往不是 pending，而是 suppressed 或 rejected。
+
+    只能看待投递的话，那些事件在排查时根本不出现 ——
+    看上去就像压根没产生过。
+    """
+    s = InMemoryStorage()
+    s.enqueue_event(entry("e1", "pending"))
+    s.enqueue_event(entry("e2", "claimed"))
+
+    everything, _ = api.list_events(s, subject_id="u1")
+    claimed, _ = api.list_events(s, subject_id="u1", status="claimed")
+    assert len(everything) == 2
+    assert [e["event_id"] for e in claimed] == ["e2"]
+
+
+def test_the_event_list_pages_like_every_other_list_query():
+    """产品规范 §15：所有 list 查询必须分页或有明确上限。"""
+    s = InMemoryStorage()
+    for i in range(5):
+        s.enqueue_event(entry(f"e{i}", "pending"))
+
+    first, nxt = api.list_events(s, subject_id="u1", limit=2)
+    assert len(first) == 2 and nxt is not None
+    second, _ = api.list_events(s, subject_id="u1", limit=2, cursor=nxt)
+    assert {e["event_id"] for e in first}.isdisjoint(e["event_id"] for e in second)
+
+
+def test_the_configured_rules_can_be_listed():
+    """用户能自己配规则，就一定会问「我配的那条还在吗」。
+
+    没有这个查询，唯一的排查手段是去读宿主的配置表 ——
+    而那正是这个包想让宿主不必自己造的东西。
+    """
+    from perceptkit.rules import EventDefinition
+    rule = EventDefinition.parse({
+        "id": "steps_3000", "version": 2,
+        "source": {"signal": "steps", "field": "step_count"},
+        "condition": {"type": "threshold_crossing", "operator": "gte",
+                      "value": 3000},
+        "event": {"type": "activity.step_goal_reached"},
+    })
+    kit = PerceptionKit(storage=InMemoryStorage(), definitions=[rule])
+    rows = kit.list_definitions(subject_id="u1")
+    assert rows[0]["definition_id"] == "steps_3000"
+    assert rows[0]["version"] == 2 and rows[0]["signal"] == "steps"
+    assert rows[0]["enabled"] is True
+
+
+def test_a_disabled_rule_is_listed_and_marked_rather_than_hidden():
+    """「它没触发」和「它被关了」是两个完全不同的排查方向。"""
+    from perceptkit.rules import EventDefinition
+    off = EventDefinition.parse({
+        "id": "muted", "version": 1, "enabled": False,
+        "source": {"signal": "steps", "field": "step_count"},
+        "condition": {"type": "changed"},
+        "event": {"type": "activity.steps_changed"},
+    })
+    kit = PerceptionKit(storage=InMemoryStorage(), definitions=[off])
+    assert kit.list_definitions()[0]["enabled"] is False
+    assert kit.list_definitions(include_disabled=False) == []

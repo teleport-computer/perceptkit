@@ -177,8 +177,8 @@ def test_pending_events_are_listed_per_person():
     send(kit, "u1", report(3200, rid="a"))
     send(kit, "u2", report(3500, rid="b"))
 
-    assert len(api.list_events(s, subject_id="u1")) == 1
-    assert len(api.list_events(s, subject_id="u2")) == 1
+    assert len(api.list_events(s, subject_id="u1")[0]) == 1
+    assert len(api.list_events(s, subject_id="u2")[0]) == 1
 
 
 # ---------------------------------------------------------------------------

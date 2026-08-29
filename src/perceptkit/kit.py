@@ -198,7 +198,15 @@ class PerceptionKit:
         return _queries.list_reminders(self.storage, subject_id=subject_id, **kw)
 
     def list_events(self, *, subject_id: str, **kw):
+        """事件列表，可按投递状态筛、分页。
+
+        「为什么没提醒我」的答案常常是 suppressed 或 rejected，不是 pending。
+        """
         return _queries.list_events(self.storage, subject_id=subject_id, **kw)
+
+    def list_definitions(self, *, subject_id: str | None = None, **kw):
+        """当前装配了哪些规则。用户能自己配规则，就会问「我那条还在吗」。"""
+        return _queries.list_definitions(self.definitions, subject_id=subject_id, **kw)
 
     def export_subject(self, *, subject_id: str, **kw) -> dict[str, Any]:
         """把一个人的全部数据导出来（「把我的数据给我」那条法定请求）。

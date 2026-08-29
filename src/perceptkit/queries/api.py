@@ -293,18 +293,68 @@ def list_reminders(
 
 
 def list_events(
-    storage: StoragePort, *, subject_id: str, limit: int = DEFAULT_LIMIT,
-) -> list[dict[str, Any]]:
-    """这个用户还没送达的事件。用于排查"为什么没提醒我"。"""
+    storage: StoragePort, *, subject_id: str, status: str | None = None,
+    cursor: str | None = None, limit: int = DEFAULT_LIMIT,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """这个用户的事件。用于排查「为什么没提醒我」。
+
+    ``status`` 按投递状态筛。**「为什么没提醒我」的答案往往不是 pending，
+    而是 suppressed 或 rejected** —— 只能看待投递的话，那些事件在排查时
+    根本不出现，看上去就像"压根没产生过"。
+
+    返回 ``(事件, 下一页游标)``。所有 list 查询都必须分页或有明确上限
+    （产品规范 §15）。
+    """
+    rows = list(storage.list_pending_events(subject_id=subject_id,
+                                            limit=MAX_LIMIT))
+    if status is not None:
+        rows = [e for e in rows if e.delivery_state == status]
+    start = int(cursor) if cursor else 0
+    size = _clamp(limit)
+    page = rows[start:start + size]
+    nxt = str(start + size) if start + size < len(rows) else None
     return [
         {
             "event_id": e.event_id, "type": e.event_type,
             "occurred_at": e.occurred_at.isoformat(),
             "delivery_state": e.delivery_state, "attempts": e.attempt_count,
         }
-        for e in storage.list_pending_events(subject_id=subject_id,
-                                             limit=_clamp(limit))
-    ]
+        for e in page
+    ], nxt
+
+
+def list_definitions(
+    definitions: Sequence[Any], *, subject_id: str | None = None,
+    include_disabled: bool = True,
+) -> list[dict[str, Any]]:
+    """这个用户当前配着哪些规则（产品规范 §15）。
+
+    **不查存储** —— 规则定义是宿主装配 kit 时传进来的配置，不是 kit 存的数据。
+    宿主按用户存规则的话，自己筛完再传进来；``subject_id`` 只是原样带回，
+    方便调用方对上是谁的。
+
+    为什么需要这个查询：用户能自己配规则，就一定会问「我配的那条还在吗、
+    是不是被关掉了」。没有它，唯一的排查手段是去读宿主的配置表 ——
+    而那正是这个包想让宿主不必自己造的东西。
+    """
+    out: list[dict[str, Any]] = []
+    for d in definitions:
+        enabled = getattr(d, "enabled", True)
+        if not include_disabled and not enabled:
+            continue
+        out.append({
+            "definition_id": getattr(d, "definition_id", None),
+            "version": getattr(d, "version", None),
+            "signal": getattr(d, "signal", None),
+            "field": getattr(d, "field_name", None),
+            "condition": getattr(d, "condition_type", None),
+            "event_type": getattr(d, "event_type", None),
+            # 关掉的规则**也列出来并标明** —— 「它没触发」和「它被关了」
+            # 是两个完全不同的排查方向。
+            "enabled": enabled,
+            "subject_id": subject_id,
+        })
+    return out
 
 
 def export_subject(
@@ -360,8 +410,10 @@ def export_subject(
             limit=per_signal_limit),
         "reminders": list_reminders(storage, subject_id=subject_id,
                                     include_completed=True, limit=per_signal_limit),
+        # 导出取第一页就够 —— 待投递的事件不是"用户的数据"，
+        # 是我们还没送到的东西，列在这里只为完整。
         "pending_events": list_events(storage, subject_id=subject_id,
-                                      limit=per_signal_limit),
+                                      limit=per_signal_limit)[0],
     }
 
 
@@ -377,6 +429,6 @@ __all__ = [
     "DEFAULT_LIMIT", "MAX_LIMIT", "CurrentView", "DailyView",
     "visible_fields", "project",
     "get_current", "get_last_known", "list_timeline", "get_daily_aggregates",
-    "export_subject",
+    "export_subject", "list_definitions",
     "get_trend", "list_calendar_events", "list_reminders", "list_events",
 ]
