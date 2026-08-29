@@ -228,6 +228,20 @@ def _backoff(attempt: int) -> timedelta:
     return timedelta(seconds=BACKOFF_BASE * (2 ** max(0, attempt - 1)))
 
 
+#: 快照里没有 condition 时用的占位。**不是空字符串** —— 空的 type 会一路传到
+#: 宿主那里，看起来像「这条规则没有条件」，而实情是「我们弄丢了它」。
+UNKNOWN_CONDITION_TYPE = "unknown"
+
+
+def _condition_from(raw: Any) -> EventCondition:
+    """从发件箱快照重建判据。**残缺就用占位，不抛异常。**"""
+    fields = {k: v for k, v in (raw or {}).items()
+              if k in ("type", "operator", "value")}
+    if not fields.get("type"):
+        fields["type"] = UNKNOWN_CONDITION_TYPE
+    return EventCondition(**fields)
+
+
 def dispatch_once(
     *,
     storage: StoragePort,
@@ -259,10 +273,11 @@ def dispatch_once(
         signal=entry.fact_snapshot.get("signal", ""),
         occurred_at=entry.occurred_at,
         received_at=entry.detected_at,
-        condition=EventCondition(
-            **{k: v for k, v in (entry.fact_snapshot.get("condition") or {}).items()
-               if k in ("type", "operator", "value")}
-        ),
+        # 快照里没有 condition 的话，用一个明确的占位而不是让构造炸掉。
+        # 发件箱里一条残缺记录（老版本写的、写了一半的）**不能停掉所有人的
+        # 投递** —— 而它会：drain 是一个循环，一条抛异常整轮就结束，
+        # 后面排队的事件谁也送不出去，还没有任何地方说为什么。
+        condition=_condition_from(entry.fact_snapshot.get("condition")),
         field_name=entry.fact_snapshot.get("field"),
         previous=entry.fact_snapshot.get("previous"),
         current=entry.fact_snapshot.get("current"),
@@ -335,7 +350,7 @@ def drain(
 
 
 __all__ = [
-    "MAX_ATTEMPTS", "BACKOFF_BASE", "event_id_for", "definitions_for_signal",
+    "MAX_ATTEMPTS", "BACKOFF_BASE", "UNKNOWN_CONDITION_TYPE", "event_id_for", "definitions_for_signal",
     "evaluate_and_enqueue", "RuleOutcome", "DispatchOutcome",
     "dispatch_once", "drain",
 ]

@@ -272,3 +272,39 @@ def test_a_revision_beats_no_revision_at_the_same_instant():
         new_occurred_at=T0, new_revision=1, new_digest="d2",
         existing=_current(source_revision=None),
     ) == REPLACE
+
+
+def test_a_malformed_outbox_row_does_not_stop_delivery_for_everyone():
+    """发件箱里一条残缺记录（老版本写的、写了一半的）不能停掉整轮投递。
+
+    `drain` 是一个循环 —— 一条抛异常整轮就结束，后面排队的事件谁也送不出去，
+    而且没有任何地方说为什么。
+    """
+    from perceptkit.conformance import InMemoryStorage
+    from perceptkit.contracts.receipt import WakeReceipt
+    from perceptkit.processing.dispatch import UNKNOWN_CONDITION_TYPE, drain
+
+    class Runtime:
+        def __init__(self):
+            self.got = []
+
+        def wake(self, event, attempt):
+            self.got.append(event)
+            return WakeReceipt(event_id=event.event_id, attempt_id=attempt.attempt_id,
+                               status="accepted", received_at=T0)
+
+    s = InMemoryStorage()
+    for eid, snap in (("broken", {}), ("fine", {"condition": {"type": "changed"}})):
+        s.enqueue_event(EventOutboxEntry(
+            event_id=eid, subject_id="u1", definition_id="d1",
+            definition_version=1, event_type="x.y", occurred_at=T0, detected_at=T0,
+            delivery_state="pending", fact_snapshot=snap))
+
+    rt = Runtime()
+    out = drain(storage=s, wake=rt, worker_id="w1", now=T0)
+    assert len(out.delivered) == 2                      # 两条都送出去了
+    kinds = {e.event_id: e.condition.type for e in rt.got}
+    # 残缺的那条**明确标成 unknown**，不是空字符串 —— 空的看起来像
+    # 「这条规则没有条件」，而实情是「我们弄丢了它」。
+    assert kinds["broken"] == UNKNOWN_CONDITION_TYPE
+    assert kinds["fine"] == "changed"
