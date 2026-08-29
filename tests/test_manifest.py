@@ -298,3 +298,42 @@ def test_catches_permanent_details_with_expiring_aggregates():
                   history_retention_days=PERMANENT, aggregate_retention_days=90)
     problems = validate_manifest({"steps": bad})
     assert any("反了" in p for p in problems)
+
+
+# ---------------------------------------------------------------------------
+# Reference storage mapping（产品规范 §15 点名要的那份表）
+# ---------------------------------------------------------------------------
+
+def test_the_mapping_covers_every_signal_in_the_manifest():
+    """漏一个信号，照着这份表建库的人就少建一份存储 —— 而且没人会发现。"""
+    from perceptkit.manifest import reference_mapping
+    rows = reference_mapping(MINIMAL_SIGNALS)
+    assert {r["signal"] for r in rows} == set(MINIMAL_SIGNALS)
+
+
+def test_every_storage_mode_knows_which_objects_it_writes_to():
+    """新增一种 storage_mode 却忘了说它落到哪些对象，这份表会出现空行。"""
+    from perceptkit.manifest import MODE_OBJECTS
+    from perceptkit.manifest.types import STORAGE_MODES
+    for mode in STORAGE_MODES:
+        assert MODE_OBJECTS.get(mode), f"{mode} 没说它写到哪些逻辑对象"
+
+
+def test_a_signal_that_diverges_from_the_spec_shows_up_in_the_rendered_table():
+    """偏差写在 note 里就是为了跟着表一起被读到，不能只躺在源码里。"""
+    from perceptkit.manifest import render_reference_mapping
+    text = render_reference_mapping(MINIMAL_SIGNALS)
+    assert "和产品规范有出入的地方" in text
+    assert "proximity_anchor" in text and "focus_state" in text
+
+
+def test_the_checked_in_table_is_still_what_the_manifest_produces():
+    """表是生成的 —— 改了 manifest 忘了重新生成，这条会红。
+
+    手写的表和代码之间没有任何东西拦着它们漂开，而这份表恰恰是给别人
+    照着建库用的。
+    """
+    import pathlib
+    from perceptkit.manifest import render_reference_mapping
+    checked_in = pathlib.Path(__file__).resolve().parents[1] / "docs" / "reference-storage-mapping.md"
+    assert checked_in.read_text(encoding="utf-8") == render_reference_mapping(MINIMAL_SIGNALS)

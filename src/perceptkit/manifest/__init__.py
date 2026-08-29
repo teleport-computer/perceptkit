@@ -39,8 +39,11 @@ from .minimal import (
 )
 from .types import PERMANENT, FieldDefinition, SignalDefinition
 
+from .mapping import MODE_OBJECTS, reference_mapping, render_reference_mapping
+
 __all__ = [
     "SignalDefinition", "FieldDefinition", "PERMANENT",
+    "MODE_OBJECTS", "reference_mapping", "render_reference_mapping",
     "MINIMAL_SIGNALS", "DECLINED_SIGNALS",
     "BATTERY", "PRESENCE_RECOVERY", "STEPS", "LOCATION_CITY", "FOCUS_STATE",
     "TIME_CONTEXT", "BROADCAST", "SCREEN_CHANGE", "AUDIO_ROUTE", "WEATHER",
