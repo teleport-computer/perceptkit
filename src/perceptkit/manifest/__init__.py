@@ -19,6 +19,7 @@ from .checks import (
     check_named_implementations_exist,
     check_types_and_units,
     check_wake_eligible_fields_have_comparators,
+    check_projections_do_not_drift,
     validate_manifest,
 )
 from .minimal import (
@@ -52,4 +53,5 @@ __all__ = [
     "check_types_and_units", "check_history_has_retention",
     "check_named_implementations_exist",
     "check_wake_eligible_fields_have_comparators",
+    "check_projections_do_not_drift",
 ]

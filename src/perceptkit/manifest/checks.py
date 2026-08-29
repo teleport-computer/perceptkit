@@ -237,12 +237,61 @@ def check_wake_eligible_fields_have_comparators(
     return problems
 
 
+
+def check_projections_do_not_drift(
+    signals: Mapping[str, SignalDefinition],
+) -> list[str]:
+    """第五条检查：current / history / query 三种投影必须对得上。
+
+    产品规范 §8 列了五条自动检查，这是最后一条 —— 也是最容易被漏掉的，
+    因为「漂移」不长得像 bug，它长得像一个字段配置得有点奇怪。
+
+    三种漂移，两种是白干、一种是泄漏：
+
+        算了没人能读   字段进日聚合，却声明了永不对 agent 开放 ——
+                       每天算一遍、存一份，谁也读不到
+        永不落库却参与判断  声明了 never 的字段在写入边界就被丢掉，
+                       拿它做比较或唤醒，判断依据根本不存在
+        🔴 值随事件出去   声明了 never，却参与唤醒 —— 它的前后值会被写进
+                       事件信封的 previous/current，而信封会存下来、投出去、
+                       进模型上下文。写入边界拦住的东西，从这条路漏出去了
+    """
+    problems: list[str] = []
+    for key in sorted(signals):
+        sig = signals[key]
+        for f in sig.fields:
+            never = f.query_visibility == "never"
+            if never and f.aggregation_strategy != "none":
+                problems.append(
+                    f"{key}.{f.key}: 声明了永不对 agent 开放，却要进日聚合"
+                    f"（{f.aggregation_strategy}）—— 每天算一遍存一份，谁也读不到"
+                )
+            if never and f.wake_eligible:
+                problems.append(
+                    f"{key}.{f.key}: 声明了永不对 agent 开放，却是 wake_eligible。"
+                    "它的前后值会被写进事件信封的 previous/current，"
+                    "而信封会存下来、投出去、进模型上下文 —— "
+                    "写入边界拦住的东西，从这条路漏出去了"
+                )
+            if never and f.comparison_strategy != "none":
+                problems.append(
+                    f"{key}.{f.key}: 声明了永不对 agent 开放，却参与比较"
+                    f"（{f.comparison_strategy}）—— 这个字段在写入边界就被丢掉了，"
+                    "判断依据根本不存在"
+                )
+            if f.aggregation_strategy != "none" and not sig.stores_history:
+                problems.append(
+                    f"{key}.{f.key}: 声明了聚合策略，但 {key} 不存历史 —— "
+                    "聚合结果没有地方落"
+                )
+    return problems
+
 def validate_manifest(
     signals: Mapping[str, SignalDefinition],
     *,
     available_normalizers: Iterable[str] = (),
 ) -> list[str]:
-    """跑全部四条检查，返回问题清单（空 = 通过）。
+    """跑全部五条检查（产品规范 §8 列的那五条），返回问题清单（空 = 通过）。
 
     返回列表而不是抛异常：一次看到全部缺口，比逐个修再重跑快得多。
     """
@@ -261,6 +310,7 @@ def validate_manifest(
         signals, available_normalizers=available_normalizers
     )
     problems += check_wake_eligible_fields_have_comparators(signals)
+    problems += check_projections_do_not_drift(signals)
     return problems
 
 

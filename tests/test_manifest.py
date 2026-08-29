@@ -368,3 +368,68 @@ def test_the_reason_for_the_narrower_scope_is_in_the_data_not_a_commit_message()
     否则下一个人只会觉得「这里少了个字段」，顺手补上。"""
     note = MINIMAL_SIGNALS["app_usage"].note or ""
     assert "快捷指令" in note and "时长" in note
+
+
+# ---------------------------------------------------------------------------
+# 第五条检查：投影不漂移（产品规范 §8 列了五条，我们先前只有四条）
+# ---------------------------------------------------------------------------
+
+def test_the_minimal_manifest_has_no_projection_drift():
+    from perceptkit.manifest import check_projections_do_not_drift
+    assert check_projections_do_not_drift(MINIMAL_SIGNALS) == []
+
+
+def test_catches_a_field_that_is_aggregated_but_never_readable():
+    """每天算一遍、存一份，谁也读不到 —— 白干，而且不会有人发现。"""
+    from dataclasses import replace
+    from perceptkit.manifest import check_projections_do_not_drift
+    sig = MINIMAL_SIGNALS["location_city"]
+    coord = next(f for f in sig.fields if f.key == "coordinate")
+    bad = replace(sig, fields=tuple(
+        replace(f, aggregation_strategy="daily_total") if f is coord else f
+        for f in sig.fields))
+    problems = check_projections_do_not_drift({"location_city": bad})
+    assert any("谁也读不到" in p for p in problems)
+
+
+def test_catches_a_never_visible_field_that_can_wake():
+    """🔴 这条抓的是泄漏：wake_eligible 的字段，前后值会被写进事件信封的
+    previous/current，而信封会存下来、投出去、进模型上下文。
+
+    写入边界把这个字段拦住了，它却能从事件这条路漏出去。
+    """
+    from dataclasses import replace
+    from perceptkit.manifest import check_projections_do_not_drift
+    sig = MINIMAL_SIGNALS["proximity_anchor"]
+    raw = next(f for f in sig.fields if f.key == "raw_identifier")
+    bad = replace(sig, fields=tuple(
+        replace(f, wake_eligible=True) if f is raw else f for f in sig.fields))
+    problems = check_projections_do_not_drift({"proximity_anchor": bad})
+    assert any("漏出去" in p for p in problems)
+
+
+def test_catches_a_never_visible_field_used_for_comparison():
+    """声明了 never 的字段在写入边界就被丢掉了 —— 拿它做比较，
+    判断依据根本不存在。"""
+    from dataclasses import replace
+    from perceptkit.manifest import check_projections_do_not_drift
+    sig = MINIMAL_SIGNALS["location_city"]
+    coord = next(f for f in sig.fields if f.key == "coordinate")
+    bad = replace(sig, fields=tuple(
+        replace(f, comparison_strategy="exact") if f is coord else f
+        for f in sig.fields))
+    assert any("判断依据根本不存在" in p
+               for p in check_projections_do_not_drift({"location_city": bad}))
+
+
+def test_catches_an_aggregation_on_a_signal_that_keeps_no_history():
+    """聚合结果没有地方落。"""
+    from dataclasses import replace
+    from perceptkit.manifest import check_projections_do_not_drift
+    sig = MINIMAL_SIGNALS["battery"]          # current_only
+    lvl = next(f for f in sig.fields if f.key == "level_ratio")
+    bad = replace(sig, fields=tuple(
+        replace(f, aggregation_strategy="numeric_dist") if f is lvl else f
+        for f in sig.fields))
+    assert any("没有地方落" in p
+               for p in check_projections_do_not_drift({"battery": bad}))
