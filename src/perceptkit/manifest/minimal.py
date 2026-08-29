@@ -198,6 +198,42 @@ LOCATION_CITY = SignalDefinition(
             query_visibility="always",
         ),
         FieldDefinition(
+            key="region",
+            value_type="string",
+            privacy_class="personal",
+            comparison_strategy="exact",
+            # 省 / 州。**不参与唤醒** —— 换省一定伴随换城市，
+            # 两个都能唤醒就是同一件事报两次。
+            wake_eligible=False,
+            query_visibility="always",
+            note="城市和国家之间那一层。同名城市（好几个 Springfield）靠它区分。",
+        ),
+        FieldDefinition(
+            key="accuracy_m",
+            value_type="number",
+            unit="m",
+            privacy_class="personal",
+            valid_range=(0, None),
+            comparison_strategy="none",
+            query_visibility="on_demand",
+            note=(
+                "这次定位有多准。**它不是位置本身，是位置的可信度** —— "
+                "误差半径 5 公里时说「你在上海」和误差 20 米时说，是两句"
+                "可信度完全不同的话，而不带这个字段就分不出来。"
+            ),
+        ),
+        FieldDefinition(
+            key="placemark_source",
+            value_type="string",
+            privacy_class="personal",
+            comparison_strategy="none",
+            query_visibility="on_demand",
+            note=(
+                "城市名是怎么来的：系统反地理编码 / 缓存 / 用户手填。"
+                "来源不同可信度不同，排查「为什么说我在另一个城市」时是第一条线索。"
+            ),
+        ),
+        FieldDefinition(
             # 声明出来，是为了让"它永远不该被持久化、永远不该给 agent"
             # 成为一条可被测试检查的规则，而不是一句口头约定。
             key="coordinate",

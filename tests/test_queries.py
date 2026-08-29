@@ -257,9 +257,13 @@ def test_the_city_signal_only_ever_holds_city_level_information():
     manifest 里 location_city 那条 note 写死的理由。
     """
     sig = MINIMAL_SIGNALS["location_city"]
-    visible = api.visible_fields(sig)
-    assert set(visible) == {"locality", "country_code"}
-    assert "place_label" not in visible and "anchor_id" not in visible
+    visible = set(api.visible_fields(sig))
+    # 城市级 + 关于这个城市判断本身的元信息（准不准、哪来的）
+    assert visible == {"locality", "country_code", "region",
+                       "accuracy_m", "placemark_source"}
+    # 精细位置一个都不许在这里：它们属于 proximity_anchor
+    for finer in ("place_label", "anchor_id", "wifi_label", "coordinate"):
+        assert finer not in visible, finer
 
 
 # ---------------------------------------------------------------------------
