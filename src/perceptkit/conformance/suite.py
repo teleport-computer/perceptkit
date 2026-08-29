@@ -242,7 +242,14 @@ def _g8_partial_sync_does_not_delete_outside_its_window(new: StorageFactory) -> 
         coverage_start=T0 - timedelta(days=1), coverage_end=T0 + timedelta(days=1),
         snapshot_kind="full",
     )
-    remaining = {k[-1] for k in getattr(s, "calendar", {})}
+    # 🔴 用端口方法验，**不摸具体实现的内部属性**。
+    #    先前这里读的是 InMemoryStorage 的 `.calendar` 字典 —— 换成任何
+    #    真实现都读不到，于是 remaining 恒为空集，这一条对每个真 adapter
+    #    都报一个假失败。一套"检查别人有没有做对"的工具，自己先得走公开接口。
+    remaining = {
+        e.source_event_id
+        for e in s.list_calendar_events(subject_id="u1", limit=100)
+    }
     if "e_out" not in remaining:
         problems.append(
             "⑧: 全量同步删掉了覆盖范围【外】的条目 —— 用户会发现自己去年的"
