@@ -39,6 +39,21 @@ class RuleEvaluator(Protocol):
     ) -> RuleResult:
         ...
 
+    # ⚠️ 和产品规范 §12.4 的签名草案有两处不同，都是有意的：
+    #
+    #   previous  在 ``state`` 里（``state.previous_value``），不单独传 ——
+    #             规则状态本来就是"上一次看到什么"的载体，拆成两个参数
+    #             会让实现者不知道该信哪一个。
+    #
+    #   history   **不传**。九种内置规则里只有 streak 需要历史，而它跑在
+    #             时钟驱动那条路上（一天判一次），历史由那边读好再通过
+    #             ``context`` 传进来。给每次求值都挂上历史，意味着前台
+    #             每 30 秒一条观测就要读一次历史表。
+    #
+    #             代价说清楚：**自定义 evaluator 拿不到历史**。需要历史的
+    #             自定义规则，宿主目前只能自己在时钟循环里算好，
+    #             通过 ``extra_context`` 递进来。
+
 
 def _numeric(value: Any) -> float | None:
     if isinstance(value, bool) or value is None:
