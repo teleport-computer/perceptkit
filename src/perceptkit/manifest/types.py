@@ -159,8 +159,21 @@ class SignalDefinition:
     identity_strategy: str
     attribution_strategy: str
     fields: tuple[FieldDefinition, ...]
-    #: 明细/聚合保留多少天。``PERMANENT`` = 永久;``0`` = 不存历史。
+    #: **明细**（逐条观测）保留多少天。``PERMANENT`` = 永久;``0`` = 不存历史。
     history_retention_days: int = 0
+    #: **聚合**（日统计）保留多少天。默认跟着明细走 —— 但两者常常不该一样。
+    #:
+    #: 明细是聚合的几十倍体量,而能回答的问题正好反过来:
+    #: 「上周三下午你专注了多久」时间越久越没人问,
+    #: 「你今年专注时间比去年长了吗」时间越久越值钱。
+    #: 所以典型形态是**明细短、聚合永久** —— 省的全在明细上,
+    #: 多花的不到 2%,长期趋势保住了。
+    #:
+    #: ``None`` = 跟明细一样。
+    #:
+    #: ⚠️ 明细过期而聚合永久时,**去重记录必须比明细活得久**,
+    #: 否则旧数据重放会把永久聚合的数字加两遍且无法回滚。
+    aggregate_retention_days: int | None = None
     source_profile: str | None = None
     #: 这条声明为什么长这样 —— 特别是和产品规范有出入的地方。
     #: 写进数据结构而不是注释,是为了让它跟着 manifest 一起被读到。
@@ -177,6 +190,16 @@ class SignalDefinition:
     @property
     def keeps_history_forever(self) -> bool:
         return self.history_retention_days == PERMANENT
+
+    @property
+    def effective_aggregate_retention_days(self) -> int:
+        """聚合实际留多久。没单独声明就跟明细一样。"""
+        return (self.history_retention_days if self.aggregate_retention_days is None
+                else self.aggregate_retention_days)
+
+    @property
+    def keeps_aggregates_forever(self) -> bool:
+        return self.effective_aggregate_retention_days == PERMANENT
 
 
 __all__ = [

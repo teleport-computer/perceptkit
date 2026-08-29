@@ -229,7 +229,11 @@ FOCUS_STATE = SignalDefinition(
     current_ttl_sec=900.0,
     identity_strategy="deterministic_digest",
     attribution_strategy="split_at_midnight",
-    history_retention_days=PERMANENT,
+    # 明细 1 年、聚合永久（hx 2026-08-28）。产品规范给的是两者都永久，
+    # 但明细是聚合的几十倍体量，而"上周三下午你专注了多久"时间越久越没人问。
+    # 和 motion_state 同一条决定 —— 这两个信号必须一致。
+    history_retention_days=365,
+    aggregate_retention_days=PERMANENT,
     note=(
         "替掉产品规范阶段二里的 proximity_anchor：那个信号的 bluetooth 类型 iOS "
         "给不了（只有音频路由这个子集），enter/leave 边缘也没有。focus_state "
@@ -504,6 +508,8 @@ MOTION_STATE = SignalDefinition(
     # 但能答的问题正好反过来:明细答「上周三下午」时间越久越没人问,
     # 聚合答「今年比去年」时间越久越值钱。（hx 2026-08-28）
     history_retention_days=365,
+    # 同 focus_state：明细 1 年、聚合永久。
+    aggregate_retention_days=PERMANENT,
     note=(
         "保留期偏离规范：明细 1 年（规范给「永久」），聚合仍然永久。"
         "TTL 也偏离（规范 300s → 900s）：后台保活上报间隔正好是 300s，"
@@ -914,7 +920,11 @@ PROXIMITY_ANCHOR = SignalDefinition(
     # 用 (signal, occurred_at, 值摘要) 造确定性键，重传能对上。
     identity_strategy="deterministic_digest",
     attribution_strategy="split_at_midnight",
-    history_retention_days=PERMANENT,
+    # 产品规范 §1-15：Wi-Fi / 蓝牙连接历史保留 7 天。聚合（每天在各锚点待了多久）
+    # 按 focus/motion 同一条理由留永久 —— 体量小，而且"今年在家的时间比去年多吗"
+    # 正是时间越久越值钱的那类问题。
+    history_retention_days=7,
+    aggregate_retention_days=PERMANENT,
     source_profile="location",
     note=(
         "和 location_city 是【两个信号，不是一个字段的粗细两档】。城市回答"

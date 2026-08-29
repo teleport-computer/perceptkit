@@ -23,6 +23,7 @@ from .types import (
     ATTRIBUTION_STRATEGIES,
     COMPARISON_STRATEGIES,
     IDENTITY_STRATEGIES,
+    PERMANENT,
     PRIVACY_CLASSES,
     QUERY_VISIBILITY,
     SOURCE_PROFILES,
@@ -136,6 +137,29 @@ def check_named_implementations_exist(
                 f"{key}: attribution_strategy={sig.attribution_strategy!r} "
                 f"不在 {sorted(ATTRIBUTION_STRATEGIES)}"
             )
+        agg_days = sig.aggregate_retention_days
+        if agg_days is not None:
+            if agg_days == 0 and sig.stores_history:
+                problems.append(
+                    f"{key}: 存明细却声明聚合保留 0 天。"
+                    "明细进了聚合表却当天就被删，那张表永远是空的"
+                )
+            elif (agg_days != PERMANENT
+                  and sig.history_retention_days == PERMANENT):
+                problems.append(
+                    f"{key}: 明细永久保存但聚合只留 {agg_days} 天。"
+                    "反了 —— 聚合是压缩过的、体量小的那一半，"
+                    "留明细不留聚合等于既花了存储又丢了长期趋势"
+                )
+            elif (agg_days != PERMANENT and sig.history_retention_days != PERMANENT
+                  and agg_days < sig.history_retention_days):
+                problems.append(
+                    f"{key}: 聚合留 {agg_days} 天比明细的 "
+                    f"{sig.history_retention_days} 天还短。"
+                    "日统计会先于它依据的明细消失，历史上会出现一段"
+                    "有明细却查不到统计的窗口"
+                )
+
         if sig.source_profile is not None and sig.source_profile not in SOURCE_PROFILES:
             problems.append(
                 f"{key}: source_profile={sig.source_profile!r} "

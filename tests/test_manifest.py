@@ -245,3 +245,56 @@ def test_permanent_is_distinguishable_from_forgot_to_declare():
     assert PERMANENT == -1
     assert MINIMAL_SIGNALS["steps"].keeps_history_forever
     assert not MINIMAL_SIGNALS["battery"].stores_history
+
+
+# ---------------------------------------------------------------------------
+# 明细保留期 vs 聚合保留期
+# ---------------------------------------------------------------------------
+
+def test_detail_and_aggregate_retention_are_two_separate_knobs():
+    """典型形态是**明细短、聚合永久** —— 一个字段表达不了这件事。
+
+    明细是聚合的几十倍体量，但能回答的问题正好反过来：
+    「上周三下午你专注了多久」时间越久越没人问，
+    「你今年专注时间比去年长了吗」时间越久越值钱。
+    """
+    focus = MINIMAL_SIGNALS["focus_state"]
+    assert focus.history_retention_days == 365
+    assert focus.keeps_aggregates_forever
+
+
+def test_focus_and_motion_were_decided_together_so_they_must_match():
+    """这两个信号的保留期是同一次决定定下来的。
+
+    分开写就会漂 —— 先前 motion 是 365、focus 却是永久，
+    两者本该一样，没有任何测试拦住这个不一致。
+    """
+    focus = MINIMAL_SIGNALS["focus_state"]
+    motion = MINIMAL_SIGNALS["motion_state"]
+    assert focus.history_retention_days == motion.history_retention_days
+    assert focus.keeps_aggregates_forever == motion.keeps_aggregates_forever
+
+
+def test_a_signal_that_does_not_say_falls_back_to_one_number():
+    """没单独声明聚合保留期的，就跟明细一样 —— 不会凭空变成永久。"""
+    weather = MINIMAL_SIGNALS["weather"]
+    assert weather.aggregate_retention_days is None
+    assert weather.effective_aggregate_retention_days == weather.history_retention_days
+
+
+def test_catches_an_aggregate_that_dies_before_its_details():
+    """日统计先于它依据的明细消失，历史上会出现一段有明细却查不到统计的窗口。"""
+    from dataclasses import replace
+    bad = replace(MINIMAL_SIGNALS["motion_state"],
+                  history_retention_days=365, aggregate_retention_days=30)
+    problems = validate_manifest({"motion_state": bad})
+    assert any("比明细的" in p for p in problems)
+
+
+def test_catches_permanent_details_with_expiring_aggregates():
+    """留明细不留聚合是反的：既花了存储，又丢了长期趋势。"""
+    from dataclasses import replace
+    bad = replace(MINIMAL_SIGNALS["steps"],
+                  history_retention_days=PERMANENT, aggregate_retention_days=90)
+    problems = validate_manifest({"steps": bad})
+    assert any("反了" in p for p in problems)
