@@ -1139,6 +1139,94 @@ MUSIC_PLAYBACK = SignalDefinition(
 )
 
 
+# ---------------------------------------------------------------------------
+# app_usage —— 打开过哪些 app
+# ---------------------------------------------------------------------------
+
+APP_USAGE = SignalDefinition(
+    key="app_usage",
+    label="应用使用",
+    schema_version=1,
+    capability="app",
+    storage_mode="current_timeline_aggregate",
+    current_ttl_sec=900.0,
+    identity_strategy="source_event_id",
+    attribution_strategy="instant",
+    history_retention_days=PERMANENT,
+    aggregate_retention_days=PERMANENT,
+    source_profile="device_occurrence",
+    note=(
+        "⚠️ **这个信号的覆盖面天然残缺，不是实现没做好。**\n"
+        "iOS 拿不到前台 app（`frontmost_app` 恒为 null），数据全靠用户在"
+        "「快捷指令」里逐个 app 手动配自动化。没配的 app 在我们眼里完全不存在 ——"
+        "用户刷了三小时小红书，只要没登记它，看上去就像一整天没用手机。\n\n"
+        "**所以刻意不建「每天用了多久」这类时长统计。** 产品规范 §1-7 要求"
+        "永久保存可重建的 session 和长期时长统计，但那份统计会是一份"
+        "大概率残缺的轨迹，而 agent 基于它判断「他今天用手机多不多」"
+        "从根上不成立 —— 错得不明显，比没有更糟。\n\n"
+        "**做的是只靠 open 就能答、且答得准的那部分**：最近打开了什么、"
+        "今天打开了几次。这两个问题不需要 close，所以配了 open 没配 close 的"
+        "用户也拿得到正确答案。\n\n"
+        "已把三个选项交给产品方（照做但标不可信 / 只做 open 侧 / 等原生能力），"
+        "**当前实现是「只做 open 侧」**。要改回完整时长统计是加东西，不是改东西 ——"
+        "反过来（先建了永久时长表再撤）那张表已经在收数据了。"
+    ),
+    fields=(
+        FieldDefinition(
+            key="app_id",
+            value_type="string",
+            privacy_class="sensitive",
+            nullable=False,
+            comparison_strategy="exact",
+            wake_eligible=True,
+            query_visibility="on_demand",
+        ),
+        FieldDefinition(
+            key="app_name",
+            value_type="string",
+            privacy_class="sensitive",
+            comparison_strategy="none",
+            query_visibility="on_demand",
+        ),
+        FieldDefinition(
+            key="category",
+            value_type="string",
+            privacy_class="sensitive",
+            comparison_strategy="none",
+            query_visibility="on_demand",
+        ),
+        FieldDefinition(
+            key="action",
+            value_type="enum",
+            privacy_class="sensitive",
+            nullable=False,
+            enum=("open", "close"),
+            comparison_strategy="exact",
+            query_visibility="on_demand",
+            note=(
+                "`close` **收下但不据此算时长**。用户可能只配了 open 那条自动化，"
+                "于是绝大多数 session 根本没有结束事件 —— 拿有 close 的那部分"
+                "算平均时长，会得到一个只反映「谁配得全」的数字。"
+            ),
+        ),
+        FieldDefinition(
+            key="open_count",
+            value_type="integer",
+            unit="count",
+            privacy_class="sensitive",
+            valid_range=(0, None),
+            # 每条 open 贡献 1，当天累加。**只靠 open，所以可信** ——
+            # 这正是砍掉时长统计之后仍然答得准的那部分。
+            aggregation_strategy="daily_total",
+            comparison_strategy="none",
+            query_visibility="on_demand",
+            trend_model="fluctuating",
+            note="「今天打开了几次」。不需要 close 就能答，所以配置不全也不影响。",
+        ),
+    ),
+)
+
+
 MINIMAL_SIGNALS: dict[str, SignalDefinition] = {
     s.key: s for s in (
         # 阶段二的五个代表信号
@@ -1148,7 +1236,7 @@ MINIMAL_SIGNALS: dict[str, SignalDefinition] = {
         # §5.2 位置与连接性锚点
         PROXIMITY_ANCHOR,
         # §5.3 行为、应用与媒体
-        MOTION_STATE, PHOTO_LIBRARY_ADDED, MUSIC_PLAYBACK,
+        MOTION_STATE, PHOTO_LIBRARY_ADDED, MUSIC_PLAYBACK, APP_USAGE,
         # §5.5 健康与长期趋势
         HEALTH_SLEEP, HEALTH_WORKOUT, HEALTH_VITALS, HEALTH_ACTIVITY,
         HEALTH_BODY, HEALTH_METABOLIC, HEALTH_CYCLE, HEALTH_MOOD,
@@ -1169,7 +1257,7 @@ __all__ = [
     "BATTERY", "PRESENCE_RECOVERY", "STEPS", "LOCATION_CITY", "FOCUS_STATE",
     "TIME_CONTEXT", "BROADCAST", "SCREEN_CHANGE", "AUDIO_ROUTE", "WEATHER",
     "PROXIMITY_ANCHOR",
-    "MOTION_STATE", "PHOTO_LIBRARY_ADDED", "MUSIC_PLAYBACK",
+    "MOTION_STATE", "PHOTO_LIBRARY_ADDED", "MUSIC_PLAYBACK", "APP_USAGE",
     "HEALTH_SLEEP", "HEALTH_WORKOUT", "HEALTH_VITALS", "HEALTH_ACTIVITY",
     "HEALTH_BODY", "HEALTH_METABOLIC", "HEALTH_CYCLE", "HEALTH_MOOD",
     "MINIMAL_SIGNALS", "DECLINED_SIGNALS",

@@ -337,3 +337,34 @@ def test_the_checked_in_table_is_still_what_the_manifest_produces():
     from perceptkit.manifest import render_reference_mapping
     checked_in = pathlib.Path(__file__).resolve().parents[1] / "docs" / "reference-storage-mapping.md"
     assert checked_in.read_text(encoding="utf-8") == render_reference_mapping(MINIMAL_SIGNALS)
+
+
+# ---------------------------------------------------------------------------
+# app_usage：刻意只做能答准的那一半
+# ---------------------------------------------------------------------------
+
+def test_app_usage_counts_opens_but_never_totals_duration():
+    """iOS 拿不到前台 app，数据全靠用户逐个 app 配快捷指令自动化。
+
+    「今天用了多久」需要 close，而多数 session 根本没有结束事件 ——
+    算出来的时长只反映「谁配得全」，错得还不明显。
+    「今天打开了几次」只靠 open 就能答，所以配置不全也不影响。
+    """
+    fields = MINIMAL_SIGNALS["app_usage"].field_map()
+    assert fields["open_count"].aggregation_strategy == "daily_total"
+    # 没有任何字段在按时长聚合
+    assert all(f.aggregation_strategy != "duration_by_state"
+               for f in MINIMAL_SIGNALS["app_usage"].fields)
+
+
+def test_app_usage_still_accepts_close_events():
+    """收下 close，只是不据此算时长 —— 拒收会让已经配好的用户白配。"""
+    action = MINIMAL_SIGNALS["app_usage"].field_map()["action"]
+    assert set(action.enum or ()) == {"open", "close"}
+
+
+def test_the_reason_for_the_narrower_scope_is_in_the_data_not_a_commit_message():
+    """为什么砍掉时长统计，得让读 manifest 的人看得到 ——
+    否则下一个人只会觉得「这里少了个字段」，顺手补上。"""
+    note = MINIMAL_SIGNALS["app_usage"].note or ""
+    assert "快捷指令" in note and "时长" in note

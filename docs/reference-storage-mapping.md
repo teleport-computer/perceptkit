@@ -8,6 +8,7 @@
 
 | 信号 | 落到哪些对象 | Current TTL | 明细 | 聚合 | 身份 | 日期归属 |
 |---|---|---:|---:|---:|---|---|
+| `app_usage` | CurrentProjection + StoredObservation + DailyAggregate | 900s | 永久 | 永久 | source_event_id | instant |
 | `audio_route` | CurrentProjection + StoredObservation | 600s | 7 天 | 同明细 | deterministic_digest | split_at_midnight |
 | `battery` | CurrentProjection | 600s | 不存 | 不适用 | singleton | instant |
 | `broadcast` | CurrentProjection + StoredObservation | 300s | 7 天 | 同明细 | deterministic_digest | split_at_midnight |
@@ -32,6 +33,17 @@
 | `weather` | CurrentProjection + StoredObservation | 1800s | 7 天 | 同明细 | deterministic_digest | instant |
 
 ## 和产品规范有出入的地方
+
+### `app_usage`
+
+⚠️ **这个信号的覆盖面天然残缺，不是实现没做好。**
+iOS 拿不到前台 app（`frontmost_app` 恒为 null），数据全靠用户在「快捷指令」里逐个 app 手动配自动化。没配的 app 在我们眼里完全不存在 ——用户刷了三小时小红书，只要没登记它，看上去就像一整天没用手机。
+
+**所以刻意不建「每天用了多久」这类时长统计。** 产品规范 §1-7 要求永久保存可重建的 session 和长期时长统计，但那份统计会是一份大概率残缺的轨迹，而 agent 基于它判断「他今天用手机多不多」从根上不成立 —— 错得不明显，比没有更糟。
+
+**做的是只靠 open 就能答、且答得准的那部分**：最近打开了什么、今天打开了几次。这两个问题不需要 close，所以配了 open 没配 close 的用户也拿得到正确答案。
+
+已把三个选项交给产品方（照做但标不可信 / 只做 open 侧 / 等原生能力），**当前实现是「只做 open 侧」**。要改回完整时长统计是加东西，不是改东西 ——反过来（先建了永久时长表再撤）那张表已经在收数据了。
 
 ### `audio_route`
 
