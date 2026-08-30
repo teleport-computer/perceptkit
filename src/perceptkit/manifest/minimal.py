@@ -264,7 +264,8 @@ FOCUS_STATE = SignalDefinition(
     # 这个值几乎永远是 stale。取 3 倍。见 OPEN-QUESTIONS B12。
     current_ttl_sec=900.0,
     identity_strategy="deterministic_digest",
-    attribution_strategy="split_at_midnight",
+    # 同上：时间点快照，时长由聚合层从相邻观测算。
+    attribution_strategy="instant",
     # 明细 1 年、聚合永久（hx 2026-08-28）。产品规范给的是两者都永久，
     # 但明细是聚合的几十倍体量，而"上周三下午你专注了多久"时间越久越没人问。
     # 和 motion_state 同一条决定 —— 这两个信号必须一致。
@@ -351,7 +352,8 @@ BROADCAST = SignalDefinition(
     storage_mode="current_short_timeline",
     current_ttl_sec=300.0,
     identity_strategy="deterministic_digest",
-    attribution_strategy="split_at_midnight",
+    # 同上：时间点快照，时长由聚合层从相邻观测算。
+    attribution_strategy="instant",
     history_retention_days=7,
     note=(
         "和 screen_change 是两件事：这个表示【采集会话开着没有】（一天开关几次），"
@@ -410,7 +412,14 @@ AUDIO_ROUTE = SignalDefinition(
     storage_mode="current_short_timeline",
     current_ttl_sec=600.0,
     identity_strategy="deterministic_digest",
-    attribution_strategy="split_at_midnight",
+    # 这几个信号发的是**时间点快照**，没有 start_at / end_at ——
+    # 时长是聚合层从相邻两条观测的时间差里算出来的，不是观测自带的。
+    # 先前这里声明的是 split_at_midnight，于是管线每条都去找一个不存在的
+    # 区间、警告、再退回按 occurred_at 归属，**结果和 instant 一模一样**。
+    # 声明成实际发生的样子，行为逐字节不变，只是不再骗读它的人。
+    # 跨午夜的时长该怎么摊，是**聚合层**的问题（见 FEATURE_LOG 的待办），
+    # 不该伪装成一个归属策略。
+    attribution_strategy="instant",
     history_retention_days=7,
     note=(
         "当场景线索用：连车机大概率在开车、戴 AirPods 可能在通勤或想专注。"
@@ -539,7 +548,8 @@ MOTION_STATE = SignalDefinition(
     storage_mode="current_timeline_aggregate",
     current_ttl_sec=900.0,
     identity_strategy="deterministic_digest",
-    attribution_strategy="split_at_midnight",
+    # 同上：时间点快照，时长由聚合层从相邻观测算。
+    attribution_strategy="instant",
     # 产品规范给的是"永久"。改成明细 1 年 + 聚合永久 —— 明细是聚合的 60 倍体量,
     # 但能答的问题正好反过来:明细答「上周三下午」时间越久越没人问,
     # 聚合答「今年比去年」时间越久越值钱。（hx 2026-08-28）
@@ -960,7 +970,8 @@ PROXIMITY_ANCHOR = SignalDefinition(
     # anchor_id 本身就是稳定身份，但一次「连着」不是一个事件 ——
     # 用 (signal, occurred_at, 值摘要) 造确定性键，重传能对上。
     identity_strategy="deterministic_digest",
-    attribution_strategy="split_at_midnight",
+    # 同上：时间点快照，时长由聚合层从相邻观测算。
+    attribution_strategy="instant",
     # 产品规范 §1-15：Wi-Fi / 蓝牙连接历史保留 7 天。
     history_retention_days=7,
     source_profile="location",
@@ -1052,7 +1063,8 @@ MUSIC_PLAYBACK = SignalDefinition(
     # 系统播放器是事件驱动的，切歌 2 秒后就有新值，不靠保活轮询兜底。
     current_ttl_sec=600.0,
     identity_strategy="deterministic_digest",
-    attribution_strategy="split_at_midnight",
+    # 同上：时间点快照，时长由聚合层从相邻观测算。
+    attribution_strategy="instant",
     # 明细 1 年、聚合永久（hx 2026-08-28，同 focus/motion 那条决定）。
     history_retention_days=365,
     aggregate_retention_days=PERMANENT,

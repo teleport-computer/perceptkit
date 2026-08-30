@@ -9,10 +9,10 @@
 | 信号 | 落到哪些对象 | Current TTL | 明细 | 聚合 | 身份 | 日期归属 |
 |---|---|---:|---:|---:|---|---|
 | `app_usage` | CurrentProjection + StoredObservation + DailyAggregate | 900s | 永久 | 永久 | source_event_id | instant |
-| `audio_route` | CurrentProjection + StoredObservation | 600s | 7 天 | 同明细 | deterministic_digest | split_at_midnight |
+| `audio_route` | CurrentProjection + StoredObservation | 600s | 7 天 | 同明细 | deterministic_digest | instant |
 | `battery` | CurrentProjection | 600s | 不存 | 不适用 | singleton | instant |
-| `broadcast` | CurrentProjection + StoredObservation | 300s | 7 天 | 同明细 | deterministic_digest | split_at_midnight |
-| `focus_state` | CurrentProjection + StoredObservation + DailyAggregate | 900s | 365 天 | 永久 | deterministic_digest | split_at_midnight |
+| `broadcast` | CurrentProjection + StoredObservation | 300s | 7 天 | 同明细 | deterministic_digest | instant |
+| `focus_state` | CurrentProjection + StoredObservation + DailyAggregate | 900s | 365 天 | 永久 | deterministic_digest | instant |
 | `health_activity` | CurrentProjection + StoredObservation + DailyAggregate | 3600s | 永久 | 同明细 | source_event_id | source_local_date |
 | `health_body` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | instant |
 | `health_cycle` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | instant |
@@ -22,11 +22,11 @@
 | `health_vitals` | CurrentProjection + StoredObservation + DailyAggregate | 3600s | 永久 | 同明细 | source_event_id | instant |
 | `health_workout` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | episode_end |
 | `location_city` | CurrentProjection + StoredObservation + DailyAggregate | 900s | 永久 | 同明细 | deterministic_digest | instant |
-| `motion_state` | CurrentProjection + StoredObservation + DailyAggregate | 900s | 365 天 | 永久 | deterministic_digest | split_at_midnight |
-| `music_playback` | CurrentProjection + StoredObservation + DailyAggregate | 600s | 365 天 | 永久 | deterministic_digest | split_at_midnight |
+| `motion_state` | CurrentProjection + StoredObservation + DailyAggregate | 900s | 365 天 | 永久 | deterministic_digest | instant |
+| `music_playback` | CurrentProjection + StoredObservation + DailyAggregate | 600s | 365 天 | 永久 | deterministic_digest | instant |
 | `photo_library_added` | CurrentProjection + StoredObservation + DailyAggregate | — | 7 天 | 同明细 | source_event_id | instant |
 | `presence_recovery` | CurrentProjection | — | 不存 | 不适用 | source_event_id | instant |
-| `proximity_anchor` | CurrentProjection + StoredObservation | 900s | 7 天 | 同明细 | deterministic_digest | split_at_midnight |
+| `proximity_anchor` | CurrentProjection + StoredObservation | 900s | 7 天 | 同明细 | deterministic_digest | instant |
 | `screen_change` | CurrentProjection | 60s | 不存 | 不适用 | singleton | instant |
 | `steps` | CurrentProjection + StoredObservation + DailyAggregate | 3600s | 永久 | 同明细 | source_event_id | source_local_date |
 | `time_context` | CurrentProjection + StoredObservation + DailyAggregate | — | 永久 | 同明细 | deterministic_digest | instant |

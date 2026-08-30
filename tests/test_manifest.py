@@ -82,7 +82,16 @@ def test_the_five_signals_cover_the_shapes_the_pipeline_has_to_handle():
     assert {"current_only", "current_timeline_aggregate",
             "current_short_timeline"} <= modes
     assert identities == {"singleton", "source_event_id", "deterministic_digest"}
-    assert "split_at_midnight" in attributions      # 跨午夜的路要有信号走过
+    # 跨午夜那条路**目前没有信号真的走**。先前有六个信号声明了
+    # split_at_midnight，但它们发的是时间点快照、没有 start_at/end_at，
+    # 每一条都警告一次再退回按 occurred_at 归属 —— 等于这条路从没被走过，
+    # 只是看起来被走过。已改成 instant（行为逐字节不变）。
+    #
+    # 睡眠和运动确实带区间，但产品上刻意整段归到【结束】那天
+    # （"昨晚睡了几个小时"问的是醒来那天），所以走 episode_end。
+    # 真要按午夜把时长劈成两天，是**聚合层**的事，那个窟窿还开着。
+    assert "split_at_midnight" not in attributions
+    assert "episode_end" in attributions            # 带区间的路有信号走过
     assert "source_local_date" in attributions      # 上游直接给日期的路也要有
 
 
@@ -433,3 +442,20 @@ def test_catches_an_aggregation_on_a_signal_that_keeps_no_history():
         for f in sig.fields))
     assert any("没有地方落" in p
                for p in check_projections_do_not_drift({"battery": bad}))
+
+
+def test_an_interval_strategy_requires_the_signal_to_actually_send_intervals():
+    """声明 split_at_midnight / episode_end 却没有 start_at / end_at 字段，
+    管线每条观测都会去找一个不存在的区间、警告、再退回 —— 结果和 instant
+    一模一样，但读 manifest 的人会以为跨午夜被处理了。
+
+    六个信号先前正是这样错标的，真跑一份上报才暴露出来。
+    """
+    from perceptkit.manifest import check_projections_do_not_drift  # noqa: F401
+    offenders = []
+    for key, sig in MINIMAL_SIGNALS.items():
+        if sig.attribution_strategy not in ("split_at_midnight", "episode_end"):
+            continue
+        if not {"start_at", "end_at"} & set(sig.field_map()):
+            offenders.append(key)
+    assert not offenders, f"这些信号声明了区间策略却不发区间：{offenders}"
