@@ -36,8 +36,8 @@ def test_a_correct_adapter_passes_everything():
     assert run_storage_conformance(InMemoryStorage) == []
 
 
-def test_the_suite_covers_all_ten_guarantees():
-    assert len(GUARANTEES) == 10
+def test_the_suite_covers_every_guarantee():
+    assert len(GUARANTEES) == 11
 
 
 # ---------------------------------------------------------------------------
@@ -190,3 +190,22 @@ def test_a_check_that_blows_up_is_reported_not_silently_skipped():
         raise RuntimeError("数据库连不上")
     problems = run_storage_conformance(broken(append_observation=append_observation))
     assert any("检查本身抛异常" in p for p in problems)
+
+
+def test_catches_an_adapter_whose_reminder_mirror_does_not_round_trip():
+    """提醒镜像写得进、读不回来 —— 这条是从一个真实现上倒推出来的。
+
+    ⑧ 一直在用日历，所以日历那半有人走；提醒那半一次都没被碰过，
+    于是一个整条提醒镜像都不通的 adapter 照样全绿。
+    """
+    def upsert_reminders(self, *, subject_id, items):
+        return None                     # 悄悄什么都不做
+    problems = run_storage_conformance(broken(upsert_reminders=upsert_reminders))
+    assert hits(problems, "⑪")
+
+
+def test_catches_an_adapter_that_lists_completed_reminders_by_default():
+    def list_reminders(self, *, subject_id, include_completed=False, limit=50):
+        return [v for k, v in self.reminders.items() if k[0] == subject_id][:limit]
+    problems = run_storage_conformance(broken(list_reminders=list_reminders))
+    assert hits(problems, "⑪")

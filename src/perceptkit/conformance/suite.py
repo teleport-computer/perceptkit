@@ -43,6 +43,7 @@ from ..contracts.records import (
     DailyAggregate,
     DurableDedupeIdentity,
     EventOutboxEntry,
+    ReminderItemMirror,
     StoredObservation,
 )
 from ..contracts.receipt import WakeReceipt
@@ -331,6 +332,57 @@ def _g10_subject_isolation_and_purge(new: StorageFactory) -> list[str]:
     return problems
 
 
+def _g11_both_source_mirrors_round_trip(new: StorageFactory) -> list[str]:
+    """⑪ 两个来源镜像都能写进去、读回来。
+
+    看起来不值一条。它值 —— **这一条是从一个真实现上倒推出来的**：
+
+        io 的 Postgres adapter 写提醒时读了 `r.source_created_at`，
+        读回来时又把它当构造参数传回去。`ReminderItemMirror` 上根本没有
+        这个字段（日历那个有，提醒那个没有）。写会抛、读也会抛，
+        **整条提醒镜像从来没通过过一次**，而这套套件全绿。
+
+    ⑧ 已经在用日历了，所以日历那半一直被覆盖着；提醒那半一次都没被碰过。
+    一个只测一半的套件，给出的是「都测过了」的印象。
+    """
+    problems: list[str] = []
+    s = new()
+    s.upsert_calendar_events(subject_id="u1", events=[CalendarEventMirror(
+        subject_id="u1", source_account_id="a", source_calendar_id="c",
+        source_event_id="e1", event_fields={"title": "站会", "start_at": T0},
+    )])
+    got = list(s.list_calendar_events(subject_id="u1", limit=10))
+    if not any(e.source_event_id == "e1" for e in got):
+        problems.append("⑪: 日历条目写进去之后读不回来")
+
+    s2 = new()
+    s2.upsert_reminders(subject_id="u1", items=[ReminderItemMirror(
+        subject_id="u1", source_account_id="a", source_list_id="l",
+        source_reminder_id="r1", reminder_fields={"title": "买牛奶",
+                                                  "is_completed": False},
+    )])
+    back = list(s2.list_reminders(subject_id="u1", limit=10))
+    if not any(r.source_reminder_id == "r1" for r in back):
+        problems.append(
+            "⑪: 提醒条目写进去之后读不回来 —— 提醒镜像整条不通"
+        )
+    # 已完成的默认不出现，除非明说要。
+    s2.upsert_reminders(subject_id="u1", items=[ReminderItemMirror(
+        subject_id="u1", source_account_id="a", source_list_id="l",
+        source_reminder_id="r2", reminder_fields={"title": "交房租",
+                                                  "is_completed": True},
+    )])
+    default = {r.source_reminder_id
+               for r in s2.list_reminders(subject_id="u1", limit=10)}
+    if "r2" in default:
+        problems.append("⑪: 已完成的提醒默认不该出现在待办列表里")
+    with_done = {r.source_reminder_id for r in s2.list_reminders(
+        subject_id="u1", include_completed=True, limit=10)}
+    if "r2" not in with_done:
+        problems.append("⑪: include_completed=True 时应该能读到已完成的提醒")
+    return problems
+
+
 GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
     "①上报与观测幂等": _g1_report_and_observation_idempotency,
     "②旧数据不覆盖新当前值": _g2_old_does_not_overwrite_new,
@@ -342,6 +394,7 @@ GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
     "⑧局部同步不误删": _g8_partial_sync_does_not_delete_outside_its_window,
     "⑨清理不破坏永久聚合": _g9_retention_cleanup_spares_what_permanent_aggregates_need,
     "⑩用户隔离与删除": _g10_subject_isolation_and_purge,
+    "⑪两个来源镜像都能往返": _g11_both_source_mirrors_round_trip,
 }
 
 #: 这几条在内存实现上**永远是绿的**，因为内存天然原子、天然无并发。
