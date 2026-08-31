@@ -6,7 +6,7 @@ re-export 壳和内核对象是同一批对象——那是宿主集成测试,不
 """
 from __future__ import annotations
 
-import perceptkit.glance as glance
+import perceptkit.algorithms.glance as glance
 
 
 def test_glance_emits_only_booleans():

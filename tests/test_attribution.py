@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 
-import perceptkit.attribution as attr
+import perceptkit.algorithms.attribution as attr
 
 
 def test_sleep_is_attributed_to_the_wake_up_day():
@@ -133,7 +133,7 @@ def test_attribution_keys_cover_every_historized_signal():
     # 里 weather 那条的注释：早先按未来态提前声明"故意缺席"，导致声明表
     # 互相矛盾，Codex code_review 2026-08-23 抓到）。
     # 用集合差而非硬编码具体信号名 —— 这样以后新加的信号漏配也会被抓到。
-    from perceptkit import history
+    from perceptkit.algorithms import history
 
     missing = set(history.SHAPE) - set(attr.ATTRIBUTION)
     assert not missing, f"这些信号进历史表却没定归属规则：{missing}"

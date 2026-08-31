@@ -1,0 +1,32 @@
+{
+  "client_ts": "1787900400",
+  "context_snapshot": [
+    {
+      "key": "time",
+      "data": {
+        "local_time": "2026-08-28T09:00:00+08:00",
+        "timezone": "Asia/Shanghai",
+        "locale": "zh_CN"
+      },
+      "message": "本地时间"
+    },
+    {
+      "key": "motion_state",
+      "data": null,
+      "message": "未授权运动与健身"
+    },
+    {
+      "key": "health_vitals",
+      "data": null,
+      "message": "未授权健康数据"
+    },
+    {
+      "key": "focus",
+      "data": {
+        "authorization_status": "denied",
+        "focused": null
+      },
+      "message": "未授权专注状态"
+    }
+  ]
+}

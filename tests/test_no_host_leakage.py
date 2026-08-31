@@ -45,6 +45,16 @@ BANNED: dict[str, str] = {
     r"\btools/chat_resident_consumer\.py\b": "宿主内部文件路径",
     # 宿主数据库里的实际表名——这个包不碰存储，不该知道表叫什么。
     r"\bperception_daily\b": "宿主数据库表名",
+    # 产品规范 §16「Runtime 中立性要求」点名的那几个。**它们现在一个都不在
+    # 包里** —— 加进来是为了让"将来某次编辑把它带回去"当场变红，而不是
+    # 等某个宿主接进来才发现这个包假设了另一个宿主的内部结构。
+    r"\bFeedling\b": "宿主产品名（规范 §16 点名不许出现）",
+    r"\bfeedling\b": "宿主产品名（规范 §16 点名不许出现）",
+    r"\bagent_jobs\b": "宿主内部表名（规范 §16 点名）",
+    r"\bproactive_jobs\b": "宿主内部表名（规范 §16 点名）",
+    # "Resident / Pooled runtime" 是宿主的运行时 lane 名。只禁这个**词组**，
+    # 不禁裸的 resident / pooled —— 后者是常见英文词，禁了假阳性远大于真阳性。
+    r"(?i)\b(resident|pooled)[ _-]runtime\b": "宿主运行时 lane 名（规范 §16 点名）",
     # 真实用户 id 的形状 + 凭据名，和 memgarden 那条一致。
     r"\busr_[0-9a-f]{8,}\b": "真实用户 id",
     r"\bADMIN_KEY\b": "凭据名",
@@ -72,3 +82,27 @@ def test_no_host_private_content_in_the_package():
                 line = text[: m.start()].count("\n") + 1
                 hits.append(f"{path.relative_to(ROOT)}:{line} {what} -> {m.group(0)}")
     assert not hits, "宿主私有内容漏进包里了：\n" + "\n".join(hits)
+
+
+#: 产品规范 §16 明说**可以保留**的东西。写成测试是为了防反方向的错：
+#: 有人"顺手把守卫收紧一点"，把这些也禁掉，那会让这个包连自己的版本号
+#: 都不能声明。
+ALLOWED = (
+    "schema_version",
+    "definition_version",
+    "runtime_ref",
+    "origin_refs",
+)
+
+
+def test_the_neutrality_guard_does_not_ban_what_the_spec_allows():
+    for word in ALLOWED:
+        for pattern in BANNED:
+            assert not re.search(pattern, word), f"{pattern} 误伤了 {word}"
+
+
+def test_the_guard_actually_catches_the_names_the_spec_forbids():
+    """守卫本身要有牙 —— 一条从不命中的禁用规则和没有规则是一样的。"""
+    for sample in ("Feedling", "agent_jobs", "proactive_jobs",
+                   "resident runtime", "Pooled Runtime"):
+        assert any(re.search(pattern, sample) for pattern in BANNED), sample

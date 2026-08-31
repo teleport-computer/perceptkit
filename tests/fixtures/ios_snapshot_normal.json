@@ -1,0 +1,78 @@
+{
+  "client_ts": "1787900400",
+  "context_snapshot": [
+    {
+      "key": "time",
+      "data": {
+        "local_time": "2026-08-28T09:00:00+08:00",
+        "timezone": "Asia/Shanghai",
+        "locale": "zh_CN"
+      },
+      "message": "本地时间"
+    },
+    {
+      "key": "battery",
+      "data": {
+        "level": 0.62,
+        "charging": false,
+        "low_power_mode": true
+      },
+      "message": "电量"
+    },
+    {
+      "key": "motion_state",
+      "data": {
+        "state": "walking",
+        "confidence": 0.8
+      },
+      "message": "运动状态"
+    },
+    {
+      "key": "focus",
+      "data": {
+        "authorization_status": "authorized",
+        "focused": true
+      },
+      "message": "专注"
+    },
+    {
+      "key": "audio_route",
+      "data": {
+        "output_type": "bluetooth_a2dp",
+        "is_bluetooth": true,
+        "device_label": "AirPods"
+      },
+      "message": "音频输出"
+    },
+    {
+      "key": "weather",
+      "data": {
+        "condition": "cloudy",
+        "temperature": 27.4,
+        "apparent_temperature": 29.1,
+        "humidity": 0.71,
+        "precipitation_chance": 0.2,
+        "uv_index": 4,
+        "is_daylight": true
+      },
+      "message": "天气"
+    },
+    {
+      "key": "health_vitals",
+      "data": {
+        "resting_heart_rate": 58,
+        "hrv_sdnn_ms": 42.5
+      },
+      "message": "生命体征"
+    },
+    {
+      "key": "unsupported",
+      "data": {
+        "frontmost_app": null,
+        "silent_mode": null,
+        "precise_unlock": null
+      },
+      "message": "第三方拿不到的"
+    }
+  ]
+}

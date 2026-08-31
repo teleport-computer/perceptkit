@@ -8,8 +8,8 @@
 from __future__ import annotations
 
 
-import perceptkit.observation as obs
-import perceptkit.streaks as streaks
+import perceptkit.algorithms.observation as obs
+import perceptkit.algorithms.streaks as streaks
 
 
 def _day(date, abnormal, state=obs.OBSERVED):

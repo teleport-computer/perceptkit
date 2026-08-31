@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 
-import perceptkit.observation as obs
+import perceptkit.algorithms.observation as obs
 
 
 def test_a_real_value_is_observed():

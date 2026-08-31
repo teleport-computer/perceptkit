@@ -35,7 +35,7 @@ AGENT_PERCEPTION_SIGNALS = (
 
 AGENT_SIGNAL_FIELDS: dict[str, tuple[str, ...]] = {
     "now": (
-        "local_time", "timezone", "locale", "battery_level", "charging",
+        "local_time", "timezone", "locale", "battery_level", "charging", "low_power_mode",
         "place_label", "motion_state", "now_playing", "broadcast_state", "broadcast_active",
     ),
     "location": ("place_label", "wifi_label", "country", "locality", "wifi_anchor_id"),

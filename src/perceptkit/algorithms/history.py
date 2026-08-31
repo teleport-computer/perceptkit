@@ -21,7 +21,7 @@ import math
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from . import catalog
+from .. import catalog
 
 # --- shapes -----------------------------------------------------------------
 NUMERIC_DIST = "numeric_dist"        # per numeric field: min/max/sum/count -> avg
@@ -142,10 +142,15 @@ def _merge_main_of_day(doc: dict, values: Mapping, *, ts: float | None = None, *
     return out
 
 
-def _merge_duration_by_state(doc: dict, values: Mapping, *, signal: str, ts: float | None = None, **_) -> dict:
+def _merge_duration_by_state(doc: dict, values: Mapping, *, signal: str = "",
+                             ts: float | None = None, state_field: str | None = None,
+                             **_) -> dict:
     out = dict(doc)
     buckets = dict(out.get("minutes") or {})
-    state = _flatten_state(values.get(_STATE_FIELD.get(signal, "")))
+    # manifest 按【字段】声明聚合方式，所以状态字段可以显式传进来；
+    # 不传时回退到按信号查表，旧调用方行为逐字节不变。
+    key = state_field or _STATE_FIELD.get(signal, "")
+    state = _flatten_state(values.get(key))
     last_state = out.get("_last_state")
     last_ts = out.get("_last_ts")
     if last_state is not None and last_ts is not None and ts is not None and ts >= last_ts:
@@ -283,6 +288,31 @@ def record_daily(prev_doc: Mapping | None, signal: str, values: Mapping, *, ts: 
         return dict(prev_doc or {})
     merge = _MERGERS[shape]
     return merge(dict(prev_doc or {}), values, signal=signal, ts=ts)
+
+
+def apply_shape(
+    shape: str,
+    prev_doc: Mapping | None,
+    values: Mapping,
+    *,
+    signal: str = "",
+    state_field: str | None = None,
+    ts: float | None = None,
+) -> dict:
+    """按 shape 名字直接折叠一条观测，不经过 signal -> shape 的查表。
+
+    ``record_daily`` 是按信号查表的（旧路径，保留不动）；manifest 驱动的管线
+    是按**字段**声明聚合方式的，需要一个能直接指定算法和状态字段的入口。
+
+    两条路共用同一批 merger —— 算法只有一份，不会漂移。
+    """
+    merge = _MERGERS.get(shape)
+    if merge is None:
+        raise ValueError(f"unknown aggregation shape {shape!r}; known: {sorted(_MERGERS)}")
+    if not isinstance(values, Mapping):
+        return dict(prev_doc or {})
+    return merge(dict(prev_doc or {}), values,
+                 signal=signal, state_field=state_field, ts=ts)
 
 
 # --- read side: trend / baseline -------------------------------------------

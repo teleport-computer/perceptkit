@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 
-import perceptkit.identity as identity
+import perceptkit.algorithms.identity as identity
 
 
 def test_same_three_parts_give_the_same_key():
