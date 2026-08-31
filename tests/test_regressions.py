@@ -18,6 +18,7 @@ import pytest
 
 from perceptkit import IngestContext, PerceptionKit
 from perceptkit.conformance import InMemoryStorage
+from perceptkit.manifest import MINIMAL_SIGNALS
 from perceptkit.contracts import delivery
 from perceptkit.rules import EventDefinition
 
@@ -487,3 +488,71 @@ def test_a_custom_evaluator_can_keep_its_own_derived_state():
         assert result.state.previous_value == expected
         state = result.state
     assert result.fired
+
+
+# ---------------------------------------------------------------------------
+# I5 —— 聚合把整条 payload 递给了每个 merger
+#
+# 这一条是**接真数据当天就炸了**的：影子第一次拿到真实 iOS 上报，
+# 同一天的第二条上报直接抛 AttributeError。单测没抓到，因为所有单测
+# 用的信号都只声明了一种聚合算法。
+# ---------------------------------------------------------------------------
+
+def _vitals(kit, storage, at):
+    kit.ingest({
+        "schema_version": 1, "report_id": f"r{at.minute}", "producer": "ios",
+        "observations": [{
+            "signal": "health_vitals", "signal_schema_version": 1,
+            "occurred_at": at.isoformat(), "availability": "observed",
+            "timezone": "Asia/Shanghai",
+            # 静息心率是 numeric_dist，vo2_max 是 main_of_day —— manifest 里
+            # 唯一一个混了两种算法的信号，所以也是唯一炸的那个。
+            "value": {"resting_heart_rate": 58, "vo2_max": 41.3},
+        }],
+    }, context=IngestContext("u", at))
+
+
+def test_two_reports_in_one_day_do_not_crash_a_mixed_strategy_signal():
+    """同一个信号里两种聚合算法互相覆盖，第二条上报就崩。
+
+    main_of_day 把字段写成裸数字，numeric_dist 下一条进来读 cell["min"]，
+    读到的是个 float。**每个用户每天第二次上报都会踩**。
+    """
+    storage = InMemoryStorage()
+    kit = PerceptionKit(storage=storage, signals=MINIMAL_SIGNALS)
+    base = datetime(2026, 8, 31, 9, 0, tzinfo=timezone.utc)
+    _vitals(kit, storage, base)
+    _vitals(kit, storage, base + timedelta(minutes=5))      # 崩在这一行
+
+    doc = storage.get_aggregate(subject_id="u", signal="health_vitals",
+                                start_date=base.date(), end_date=base.date()
+                                )[0].typed_aggregate
+    assert doc["resting_heart_rate"]["count"] == 2          # 分布还在累计
+    assert doc["vo2_max"] == 41.3                           # 快照还是裸值
+
+
+def test_a_field_that_declares_no_aggregation_is_not_aggregated():
+    """声明 none 的字段不该凭空长出聚合。
+
+    weather 只有 temperature_c 声明了 numeric_dist，但 merger 拿到的是整条
+    payload，于是湿度、紫外线、体感温度全被写了 min/max/sum/count ——
+    没人声明过的数字，看起来却和声明过的一模一样可信。
+    """
+    storage = InMemoryStorage()
+    kit = PerceptionKit(storage=storage, signals=MINIMAL_SIGNALS)
+    at = datetime(2026, 8, 31, 9, 0, tzinfo=timezone.utc)
+    kit.ingest({
+        "schema_version": 1, "report_id": "w1", "producer": "ios",
+        "observations": [{
+            "signal": "weather", "signal_schema_version": 1,
+            "occurred_at": at.isoformat(), "availability": "observed",
+            "timezone": "Asia/Shanghai",
+            "value": {"condition": "cloudy", "temperature_c": 27.4,
+                      "humidity_ratio": 0.71, "uv_index": 3.0,
+                      "apparent_temperature_c": 29.1},
+        }],
+    }, context=IngestContext("u", at))
+    doc = storage.get_aggregate(subject_id="u", signal="weather",
+                                start_date=at.date(), end_date=at.date()
+                                )[0].typed_aggregate
+    assert list(doc) == ["temperature_c"]

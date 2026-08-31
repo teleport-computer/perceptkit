@@ -55,7 +55,19 @@ def fold_into_day(
         if field_key not in values:
             continue
         doc = history.apply_shape(
-            shape, doc, values,
+            # **只喂这一个字段。** merger 会把收到的 mapping 里的每个字段都
+            # 按自己那套算法写一遍 —— 整条 payload 递进去,一个字段声明的
+            # 算法就会写到所有字段头上。两个后果都真发生过:
+            #
+            #   声明 none 的字段被凭空聚合  weather 只有 temperature_c 声明了
+            #                              numeric_dist,结果 uv_index、湿度、
+            #                              体感温度全被写了 min/max/sum/count。
+            #   同信号两种算法互相覆盖      health_vitals 同时有 numeric_dist
+            #                              (静息心率) 和 main_of_day (vo2_max):
+            #                              后者把字段写成裸数字,当天第二条上报
+            #                              进来时前者读 cell.get("min") 直接崩,
+            #                              **每个用户每天第二次上报都会炸**。
+            shape, doc, {field_key: values[field_key]},
             signal=sig.key,
             # duration_by_state 需要知道哪个字段是状态标签。manifest 按字段
             # 声明,所以这里能直接给出来,不用像旧路径那样按信号查表。
