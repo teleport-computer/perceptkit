@@ -1,0 +1,136 @@
+name: release
+
+# 打 tag 时由 CI 构建并发布 wheel，同时生成构建出处凭证（provenance attestation）。
+#
+# 为什么不在本机编好再传：哈希锁只能证明「装进宿主镜像的字节 = 发布出去那份
+# 字节」，证明不了「这份字节是由公开 tag 的源码编出来的」。本机编 + 手工上传
+# 时，有仓库权限的人可以传一个跟源码对不上的 wheel，看源码的人看不出问题。
+#
+# 由 tag 触发的 CI 编译 + GitHub 签发的 attestation 把这一环补上：凭证里绑定了
+# 仓库、workflow、commit 和产物摘要，任何人都能独立验证：
+#
+#     gh attestation verify <wheel> --repo teleport-computer/perceptkit
+#
+# v0.2.0 / v0.2.1 是本机编好手工传的（当时还没有这个 workflow），所以那两个
+# 版本没有凭证 —— 从 v0.2.2 起有。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要重新发布的 tag（不填则用当前 ref）"
+        required: false
+
+permissions:
+  contents: write        # 建 Release、传产物
+  id-token: write        # 换取 OIDC token 用于签发凭证
+  attestations: write    # 写 attestation
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pipx install uv
+
+      - name: Tag 与 pyproject 版本必须一致
+        # 不一致就停：否则会出现「tag 是 v0.2.2、wheel 却是 0.2.1」这种凭证与
+        # 产物名对不上的情况，验证方无从判断该信哪个。
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+          echo "tag=$TAG  perceptkit=$PKG"
+          test "$TAG" = "$PKG" || { echo "::error::tag $TAG 与版本 $PKG 不一致"; exit 1; }
+
+      - name: 跑测试
+        # 发一个测试不过的包出去比不发更糟 —— 装它的人会以为它是可用的。
+        run: uv run --extra dev pytest tests/ -q
+
+      - name: 示例必须能脱离宿主跑通
+        # 这是包对外的核心承诺（不采集数据、不碰存储、不调模型，
+        # 因此也就不需要 io、不需要 API key、不需要网络）。
+        # 发版时验一次，比等使用者发现便宜得多。
+        run: |
+          uv run python examples/quickstart.py
+          uv run python examples/end_to_end.py
+
+      - name: 构建
+        run: |
+          uv build
+          mkdir -p out
+          cp dist/* out/
+
+      - name: 传产物给发布 job
+        uses: actions/upload-artifact@v4
+        with:
+          name: dists
+          path: out/
+
+      - name: 生成构建出处凭证
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: "out/*"
+
+      - name: 记录产物摘要
+        # 打进 job 日志，方便对照 Release 页和宿主 lock 里的哈希。
+        run: |
+          echo "### 产物摘要" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          sha256sum out/* >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          sha256sum out/*
+
+      - name: 发布到 Release
+        # 继续发 GitHub Release，不只发 PyPI：宿主的哈希锁现在钉的是 Release
+        # 上的 wheel URL，换成 PyPI 是另一件事（要重算哈希、改 lock），
+        # 两件事分开做。两边发的是**同一批字节**。
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" out/* --clobber
+          else
+            gh release create "$TAG" out/* --title "perceptkit $TAG" --generate-notes
+          fi
+
+  # --------------------------------------------------------------------------
+  # PyPI 发布单独一个 job
+  #
+  # 仓库里不存 token，走 OIDC（Trusted Publishing）。`id-token: write` 是每个
+  # job 各自声明的 —— 顶层的 permissions 不会自动传进来。
+  #
+  # environment 名字要和 PyPI 上那条 Trusted Publisher 配置填的一致。
+  # 姊妹仓库 memgarden 因为一个仓库里发两个包、必须靠 environment 区分才不被
+  # PyPI 判为歧义；这里只有一个包，本可以不填，仍然填上是为了两个仓库的配置
+  # 长得一样，照着抄的人不会踩到那个坑。
+  publish-pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi-perceptkit
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dists
+          path: out
+      - name: 发布到 PyPI
+        # 🔴 不要加 continue-on-error。加了之后 job 会判成 success，
+        # 「发布失败」和「发布成功」在 Actions 页面上长得一模一样 ——
+        # 姊妹仓库踩过一次，结果 PyPI 上躺着一个依赖装不上的版本。
+        # 让它红是安全的：GitHub Release 在上一个 job 里已经发完了。
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: out/
+          skip-existing: true
