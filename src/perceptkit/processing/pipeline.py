@@ -258,7 +258,15 @@ def _apply_one(
         source=stored.source,
         source_event_identity_digest=item.identity_digest,
         first_applied_at=context.received_at,
-        aggregate_scope=sig.key if sig.keeps_history_forever else None,
+        # ★ 问的是**聚合**永不永久，不是明细。
+        #
+        #   这条记录存在的全部理由就是「明细会过期、聚合可能永久」——
+        #   所以拿明细的保留期来判断，恰好在它唯一有用的那些信号上判成 None：
+        #   照片（明细 7 天 / 每日数量永久）、focus / motion / music
+        #   （明细 1 年 / 聚合永久）。四个信号的去重身份可以先于聚合被清掉，
+        #   之后一次重传就把永久聚合多加一遍，**加完没法回滚**。
+        #   产品规范 §14-2 点名的正是这个场景。
+        aggregate_scope=sig.key if sig.keeps_aggregates_forever else None,
         # 永久聚合依赖的身份必须永久保留：明细删了之后，
         # 它是唯一还能挡住重放的东西。
         retain_until=None,

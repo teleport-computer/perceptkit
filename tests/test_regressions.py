@@ -774,3 +774,52 @@ def test_music_edges_are_marked_per_record_not_all_estimated():
     field = {f.key: f for f in MINIMAL_SIGNALS["music_playback"].fields}["edge_quality"]
     assert field.enum == ("measured", "estimated")
     assert not field.nullable, "每条都必须表态，不能留空让读的人自己猜"
+
+
+# ---------------------------------------------------------------------------
+# I10 —— 去重身份问错了保留期：拿明细的、不是聚合的
+#
+# 这条记录单独成表的**全部理由**就是「明细会过期、聚合可能永久，所以身份必须
+# 比它守着的明细活得久」。判断条件却问的是明细永不永久 —— 于是恰好在它唯一
+# 有用的那四个信号上判成不用守。规范 §14-2 点名了这个场景。
+# ---------------------------------------------------------------------------
+
+def test_the_dedupe_identity_is_marked_by_the_aggregate_it_guards():
+    """明细 7 天、每日数量永久的照片，就是这条存在的理由。
+
+    身份先于聚合被清掉之后，一次重传把永久聚合多加一遍，**加完没法回滚** ——
+    「8月1日新增 5 张」变成 10 张，而原始明细已经不在了，没有任何东西能算回去。
+
+    这里包一层记录用的 storage，直接看管线**递给** remember_identity 的那条
+    记录 —— 内存实现只留了身份的键、把 scope 丢了，拿它验等于没验。
+    """
+    seen = []
+
+    class Recording(InMemoryStorage):
+        def remember_identity(self, identity):
+            seen.append(identity)
+            return super().remember_identity(identity)
+
+    storage = Recording()
+    kit = PerceptionKit(storage=storage, signals=MINIMAL_SIGNALS)
+    at = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    kit.ingest({
+        "schema_version": 1, "report_id": "p1", "producer": "ios",
+        "observations": [{
+            "signal": "photo_library_added", "signal_schema_version": 1,
+            "occurred_at": at.isoformat(), "availability": "observed",
+            "timezone": "Asia/Shanghai", "source_event_id": "ph-1",
+            "value": {"count": 1, "added_at": at.isoformat()},
+        }],
+    }, context=IngestContext("u", at))
+    assert [i.aggregate_scope for i in seen] == ["photo_library_added"], (
+        "明细 7 天、聚合永久 —— 身份必须标明它守着一个永久聚合，"
+        "否则保留期清理会把它当成可以删的")
+
+
+def test_every_signal_with_a_permanent_aggregate_marks_its_identity():
+    """不只照片。focus / motion / music 都是明细 1 年、聚合永久。"""
+    at_risk = [k for k, s in MINIMAL_SIGNALS.items()
+               if s.keeps_aggregates_forever and not s.keeps_history_forever]
+    assert set(at_risk) == {"focus_state", "motion_state",
+                            "music_playback", "photo_library_added"}
