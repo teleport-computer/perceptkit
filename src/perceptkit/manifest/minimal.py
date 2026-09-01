@@ -1093,7 +1093,15 @@ MUSIC_PLAYBACK = SignalDefinition(
             key="track_key",
             value_type="string",
             privacy_class="sensitive",
-            nullable=False,
+            nullable=True,
+            # ★ 「什么都没在放」是一个**正常状态**，而它没有曲目。
+            #
+            #   非空的话，播放器停着的那条观测因为缺必填字段被整条拒掉 ——
+            #   于是 kit 永远不知道「音乐停了」，只知道「在放什么」。
+            #   真机上这条占了 83 次差异里的 83 次：老路记着 stopped，
+            #   kit 那边一片空白。
+            #
+            #   规范 §5.3 把 track_id 列为字段，没说它任何时候都必须有值。,
             comparison_strategy="exact",
             wake_eligible=True,
             query_visibility="on_demand",
