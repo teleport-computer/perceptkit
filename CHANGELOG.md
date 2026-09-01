@@ -1,6 +1,26 @@
 # 变更记录
 
-## 0.2.1 — 未发布
+## 0.2.2 — 未发布
+
+**代码没有变化。** 这一版只换了「怎么发出去」。
+
+### 变更
+
+- **发版改由 CI 在 tag 上构建，并带 GitHub 签发的出处凭证。**
+  0.2.0 / 0.2.1 是在本机编好、手工传上去的。宿主的哈希锁只能证明
+  「装进镜像的字节 = 发布页上那份字节」，**证不了这份字节是那个 tag 的源码
+  编出来的** —— 有仓库权限的人可以传一个跟源码对不上的 wheel，
+  而看源码的人看不出问题。现在任何人都能独立验：
+
+      gh attestation verify perceptkit-0.2.2-py3-none-any.whl \
+          --repo teleport-computer/perceptkit
+
+- **开始发 PyPI**（`pip install perceptkit`），走 Trusted Publishing，
+  仓库里不存 token。GitHub Release 照旧发**同一批字节** —— 宿主目前钉的是
+  Release 的 wheel URL，换成 PyPI 是另一件事。
+
+
+## 0.2.1 — 2026-08-31
 
 ### 新增
 
