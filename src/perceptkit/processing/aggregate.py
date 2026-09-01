@@ -17,6 +17,9 @@ from ..manifest.types import SignalDefinition
 _STRATEGY_TO_SHAPE: dict[str, str] = {
     "daily_total": history.CUMULATIVE,
     "cumulative": history.CUMULATIVE,
+    # 每次事件贡献一份、当天求和。**不是** daily_total：那个取 max，
+    # 用来数「打开了几次」会永远得到 1。
+    "occurrence_count": history.OCCURRENCE_COUNT,
     "numeric_dist": history.NUMERIC_DIST,
     "main_of_day": history.MAIN_OF_DAY,
     "duration_by_state": history.DURATION_BY_STATE,

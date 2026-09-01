@@ -721,3 +721,56 @@ def test_the_daily_photo_count_outlives_the_individual_photos():
     sig = MINIMAL_SIGNALS["photo_library_added"]
     assert sig.history_retention_days == 7
     assert sig.keeps_aggregates_forever
+
+
+# ---------------------------------------------------------------------------
+# 交付清单 §15 里唯一没有测试盯着的一项：
+#   「App 缺失 close、Music 采样间断」
+#
+# 两个都是**我们和规范不同的地方**，而且不同得有理由。没有测试的话，
+# 后来的人看到「规范要求算时长，代码没算」，最可能的动作是把它补上 ——
+# 补回来的是一份大概率残缺的数字，比没有更糟。
+# ---------------------------------------------------------------------------
+
+def _app(kit, at, app, action):
+    kit.ingest({
+        "schema_version": 1, "report_id": f"{app}{action}{at.isoformat()}",
+        "producer": "ios", "observations": [{
+            "signal": "app_usage", "signal_schema_version": 1,
+            "occurred_at": at.isoformat(), "availability": "observed",
+            "timezone": "Asia/Shanghai",
+            "value": {"app_id": app, "app_name": app, "action": action,
+                      **({"open_count": 1} if action == "open" else {})},
+        }],
+    }, context=IngestContext("u", at))
+
+
+def test_a_missing_close_never_becomes_an_invented_duration():
+    """只配了 open 自动化的用户，绝大多数 app 根本没有结束事件。
+
+    拿有 close 的那部分算平均时长，得到的是一个只反映「谁配得全」的数字。
+    所以这个信号**刻意不建时长统计** —— 聚合里只该有靠 open 就能答准的
+    「今天打开了几次」。
+    """
+    storage = InMemoryStorage()
+    kit = PerceptionKit(storage=storage, signals=MINIMAL_SIGNALS)
+    base = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    _app(kit, base, "Slack", "open")
+    _app(kit, base + timedelta(minutes=30), "Slack", "open")   # 没有 close
+    doc = storage.get_aggregate(subject_id="u", signal="app_usage",
+                                start_date=base.date(), end_date=base.date()
+                                )[0].typed_aggregate
+    assert doc["open_count"]["total"] == 2
+    assert not any("minute" in k or "duration" in k for k in doc), \
+        "app_usage 不该出现任何时长统计——覆盖面残缺，那个数字不可信"
+
+
+def test_music_edges_are_marked_per_record_not_all_estimated():
+    """规范说「只有轮询样本就标 estimated」，实际是同一个信号两种精度并存。
+
+    Apple Music 走系统播放器、切歌 2 秒后就上报，起止是准的；Spotify、
+    网易云只能靠快照采到的点。一律标 estimated 会把本来准确的那一半丢掉。
+    """
+    field = {f.key: f for f in MINIMAL_SIGNALS["music_playback"].fields}["edge_quality"]
+    assert field.enum == ("measured", "estimated")
+    assert not field.nullable, "每条都必须表态，不能留空让读的人自己猜"

@@ -1240,9 +1240,11 @@ APP_USAGE = SignalDefinition(
             unit="count",
             privacy_class="sensitive",
             valid_range=(0, None),
-            # 每条 open 贡献 1，当天累加。**只靠 open，所以可信** ——
+            # 每条 open 贡献 1，当天**求和**。**只靠 open，所以可信** ——
             # 这正是砍掉时长统计之后仍然答得准的那部分。
-            aggregation_strategy="daily_total",
+            # ⚠️ 曾经写的是 daily_total（取 max），于是「今天打开了几次」
+            # 永远等于 1 —— 这个信号唯一保证答得准的问题，答错了。
+            aggregation_strategy="occurrence_count",
             comparison_strategy="none",
             query_visibility="on_demand",
             trend_model="fluctuating",

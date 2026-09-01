@@ -360,7 +360,10 @@ def test_app_usage_counts_opens_but_never_totals_duration():
     「今天打开了几次」只靠 open 就能答，所以配置不全也不影响。
     """
     fields = MINIMAL_SIGNALS["app_usage"].field_map()
-    assert fields["open_count"].aggregation_strategy == "daily_total"
+    # `occurrence_count`（求和），**不是** `daily_total`（取 max）。
+    # 后者是给「来源自己在数」的量用的（今日步数 8000 → 8300）；每次打开各贡献
+    # 1 的话，max 永远是 1 —— 用户开了二十次，答案还是「1 次」。
+    assert fields["open_count"].aggregation_strategy == "occurrence_count"
     # 没有任何字段在按时长聚合
     assert all(f.aggregation_strategy != "duration_by_state"
                for f in MINIMAL_SIGNALS["app_usage"].fields)

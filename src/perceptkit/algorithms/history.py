@@ -32,6 +32,16 @@ EVENT_LIST = "event_list"            # discrete items, deduped by id/key
 SUBJECTIVE = "subjective"            # append each self-report entry
 PLACE_DWELL = "place_dwell"          # minutes spent at each place label
 TALLY = "tally"                      # daily digest: total minutes + top artists/tracks
+OCCURRENCE_COUNT = "occurrence_count"    # per numeric field: SUM of per-event contributions
+
+# ★ `occurrence_count` 和 `cumulative` 差一个字，语义正好相反，混用不会报错、
+#   只会给出一个安静的错数：
+#
+#       cumulative        来源自己在数（今日步数 8000 → 8300），当天代表值取 **max**
+#       occurrence_count  每次事件各贡献一份（每次打开 app 记 1），当天要 **sum**
+#
+#   拿 cumulative 去数「今天打开了几次」，每条都是 1，max 永远是 1 —— 用户开了
+#   二十次，答案还是「1 次」。
 
 _TALLY_CAP = 30                      # keep only the top-N artists/tracks per day
 
@@ -265,8 +275,26 @@ def _merge_subjective(doc: dict, values: Mapping, *, ts: float | None = None, **
     return out
 
 
+def _merge_occurrence_count(doc: dict, values: Mapping, **_) -> dict:
+    """每次事件各贡献一份，当天累加。
+
+    和 ``_merge_cumulative`` 的区别见 ``OCCURRENCE_COUNT`` 上面那段：那个取
+    max（来源自己在数），这个求和（我们在数）。
+    """
+    out = dict(doc)
+    for field, raw in values.items():
+        n = _numeric(raw)
+        if n is None:
+            continue
+        prev = out.get(field)
+        base = prev.get("total", 0.0) if isinstance(prev, Mapping) else 0.0
+        out[field] = {"total": base + n}
+    return out
+
+
 _MERGERS = {
     NUMERIC_DIST: _merge_numeric_dist,
+    OCCURRENCE_COUNT: _merge_occurrence_count,
     CUMULATIVE: _merge_cumulative,
     MAIN_OF_DAY: _merge_main_of_day,
     DURATION_BY_STATE: _merge_duration_by_state,
