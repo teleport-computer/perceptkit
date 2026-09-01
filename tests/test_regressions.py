@@ -823,3 +823,34 @@ def test_every_signal_with_a_permanent_aggregate_marks_its_identity():
                if s.keeps_aggregates_forever and not s.keeps_history_forever]
     assert set(at_risk) == {"focus_state", "motion_state",
                             "music_playback", "photo_library_added"}
+
+
+# ---------------------------------------------------------------------------
+# I11 —— 「音乐停了」这个状态进不了系统
+#
+# 真机上跑出来的：老路 83 次记着 stopped，kit 那边一片空白。
+# ---------------------------------------------------------------------------
+
+def test_a_stopped_player_is_a_state_the_system_can_hold():
+    """播放器停着的时候没有曲目 —— 那是正常的，不是数据缺失。
+
+    `track_key` 非空的话，这条观测因为缺必填字段被**整条拒掉**：于是
+    「在放什么」记得住，「停了」永远记不住。而「他刚把音乐关了」恰恰是
+    这个信号最有用的那一半。
+    """
+    storage = InMemoryStorage()
+    kit = PerceptionKit(storage=storage, signals=MINIMAL_SIGNALS)
+    at = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    outcome = kit.ingest({
+        "schema_version": 1, "report_id": "m1", "producer": "ios",
+        "observations": [{
+            "signal": "music_playback", "signal_schema_version": 1,
+            "occurred_at": at.isoformat(), "availability": "observed",
+            "timezone": "Asia/Shanghai",
+            "value": {"playback_state": "stopped", "edge_quality": "estimated"},
+        }],
+    }, context=IngestContext("u", at))
+    assert not outcome.rejected, list(outcome.rejected)
+    current = storage.get_current(subject_id="u", signals=["music_playback"]
+                                  )["music_playback"][0]
+    assert current.typed_value["playback_state"] == "stopped"
