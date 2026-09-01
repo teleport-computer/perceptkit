@@ -172,6 +172,41 @@ def ingest_report(
     return outcome
 
 
+def _repeats_declared_state(
+    item: NormalizedObservation,
+    sig: SignalDefinition,
+    *,
+    context: IngestContext,
+    storage: StoragePort,
+) -> bool:
+    """这条观测是不是「和当前值同一个状态」的重复上报。
+
+    只看声明了 ``comparison_strategy="state_change"`` 的字段。**这个声明以前
+    在 manifest 里写着、却没有任何代码读它** —— 于是 focus / motion /
+    time_context 上那句「只在变化时追加」在文档里成立、在数据里不成立。
+
+    保守判定：只有当前值确实存在、且**每一个**声明了 state_change 的字段都和
+    当前值一样时，才算重复。任何一个字段变了、或者当前值还不存在（第一条）、
+    或者这条不是 observed，都照常写明细 —— 宁可多写一条，不可漏掉一次真正的
+    状态变化。
+    """
+    if item.stored.availability != "observed":
+        return False
+    watched = [f.key for f in sig.fields if f.comparison_strategy == "state_change"]
+    if not watched:
+        return False
+    value = item.stored.typed_value or {}
+    for projection in storage.get_current(
+        subject_id=context.subject_id, signals=[sig.key],
+    ).get(sig.key, ()):
+        if (projection.dimension_key != sig.dimension_key_for(value)
+                or projection.availability != "observed"):
+            continue
+        current = projection.typed_value or {}
+        return all(current.get(k) == value.get(k) for k in watched)
+    return False
+
+
 def _apply_one(
     item: NormalizedObservation,
     sig: SignalDefinition,
@@ -200,7 +235,17 @@ def _apply_one(
         return
 
     # ④ 写观测。只留当前值的信号不写明细 —— 否则 current_only 名不副实。
-    if sig.stores_history:
+    #
+    #    声明了 `state_change` 的字段还有一条：状态没变就**不追加明细**，只刷新
+    #    当前值。iOS 每 5 分钟保活上报一次，「还在专注」「还在静止」会一天写出
+    #    几百条一模一样的记录 —— 时间线本该记的是「什么时候变了」，被同一个
+    #    状态刷满之后，「每日切换次数」「最长一段」这类聚合直接失去意义。
+    #
+    #    ⚠️ 只跳过明细，**当前值和聚合照常走**：`duration_by_state` 靠相邻两条
+    #    观测的时间差累计时长，跳过聚合会把时长永远停在第一次。
+    if sig.stores_history and not _repeats_declared_state(
+        item, sig, context=context, storage=storage,
+    ):
         if not storage.append_observation(stored):
             outcome.duplicates.append(item)
             return
@@ -213,7 +258,15 @@ def _apply_one(
         source=stored.source,
         source_event_identity_digest=item.identity_digest,
         first_applied_at=context.received_at,
-        aggregate_scope=sig.key if sig.keeps_history_forever else None,
+        # ★ 问的是**聚合**永不永久，不是明细。
+        #
+        #   这条记录存在的全部理由就是「明细会过期、聚合可能永久」——
+        #   所以拿明细的保留期来判断，恰好在它唯一有用的那些信号上判成 None：
+        #   照片（明细 7 天 / 每日数量永久）、focus / motion / music
+        #   （明细 1 年 / 聚合永久）。四个信号的去重身份可以先于聚合被清掉，
+        #   之后一次重传就把永久聚合多加一遍，**加完没法回滚**。
+        #   产品规范 §14-2 点名的正是这个场景。
+        aggregate_scope=sig.key if sig.keeps_aggregates_forever else None,
         # 永久聚合依赖的身份必须永久保留：明细删了之后，
         # 它是唯一还能挡住重放的东西。
         retain_until=None,
@@ -289,7 +342,7 @@ def _update_current(
     from ..contracts.records import decide_current_update
 
     stored = item.stored
-    dimension = sig.key
+    dimension = sig.dimension_key_for(stored.typed_value)
 
     for attempt in range(MAX_CAS_RETRIES):
         existing = None

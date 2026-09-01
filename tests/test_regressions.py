@@ -556,3 +556,270 @@ def test_a_field_that_declares_no_aggregation_is_not_aggregated():
                                 start_date=at.date(), end_date=at.date()
                                 )[0].typed_aggregate
     assert list(doc) == ["temperature_c"]
+
+
+# ---------------------------------------------------------------------------
+# I6 —— 归属日期用了时间戳的 offset，而不是观测声明的时区
+#
+# 我们**自己**在给产品方的信里写过这条（§19）：「`occurred_at` 的偏移不能
+# 替代时区」。代码里没做到。
+# ---------------------------------------------------------------------------
+
+def test_the_declared_timezone_decides_the_day_not_the_timestamp_offset():
+    """上海用户早上 7 点，那条数据属于今天，不是昨天。
+
+    producer 用 UTC 发 `occurred_at`、把 IANA 时区放在观测的 `timezone` 里 ——
+    这是完全正常的发法，io 的适配层就是这么发的。按 offset 算日期的话，
+    **本地 00:00–08:00 的数据每天都落到前一天**：一整个凌晨加早晨，
+    「昨天走了多少步」「昨晚睡了几小时」跟着一起偏。
+    """
+    storage = InMemoryStorage()
+    kit = PerceptionKit(storage=storage, signals=MINIMAL_SIGNALS)
+    at = datetime(2026, 9, 1, 16, 0, tzinfo=timezone.utc)      # 上海 = 9/2 00:00
+    kit.ingest({
+        "schema_version": 1, "report_id": "r1", "producer": "ios",
+        "observations": [{
+            "signal": "motion_state", "signal_schema_version": 1,
+            "occurred_at": at.isoformat(), "availability": "observed",
+            "timezone": "Asia/Shanghai", "value": {"state": "walking"},
+        }],
+    }, context=IngestContext("u", at))
+    rows, _ = storage.list_observations(subject_id="u", signal="motion_state")
+    assert str(rows[0].effective_local_date) == "2026-09-02"
+
+
+# ---------------------------------------------------------------------------
+# I7 —— `comparison_strategy` 声明了，但没有任何代码读它
+# ---------------------------------------------------------------------------
+
+def _focus(kit, at, active=True):
+    kit.ingest({
+        "schema_version": 1, "report_id": f"f{at.isoformat()}", "producer": "ios",
+        "observations": [{
+            "signal": "focus_state", "signal_schema_version": 1,
+            "occurred_at": at.isoformat(), "availability": "observed",
+            "timezone": "Asia/Shanghai", "value": {"is_active": active},
+        }],
+    }, context=IngestContext("u", at))
+
+
+def test_a_state_that_did_not_change_does_not_add_a_timeline_entry():
+    """iOS 每 5 分钟保活上报一次，「还在专注」一天能写出几百条一样的记录。
+
+    时间线记的是**什么时候变了**。被同一个状态刷满之后，「每日切换次数」
+    「最长一段」这类聚合就没有意义了。manifest 上一直写着
+    `comparison_strategy="state_change"`，只是没有代码读它。
+    """
+    storage = InMemoryStorage()
+    kit = PerceptionKit(storage=storage, signals=MINIMAL_SIGNALS)
+    base = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    for i in range(4):
+        _focus(kit, base + timedelta(minutes=5 * i))
+    rows, _ = storage.list_observations(subject_id="u", signal="focus_state")
+    assert len(rows) == 1
+
+    _focus(kit, base + timedelta(minutes=25), active=False)     # 真的变了
+    rows, _ = storage.list_observations(subject_id="u", signal="focus_state")
+    assert len(rows) == 2
+
+
+def test_suppressing_repeats_still_lets_the_duration_aggregate_advance():
+    """只跳过明细，**当前值和聚合照常走**。
+
+    `duration_by_state` 靠相邻两条观测的时间差累计时长 —— 跳过聚合会让时长
+    永远停在第一次，那就是用一个 bug 换另一个。
+    """
+    storage = InMemoryStorage()
+    kit = PerceptionKit(storage=storage, signals=MINIMAL_SIGNALS)
+    base = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    for i in range(4):
+        _focus(kit, base + timedelta(minutes=5 * i))
+    doc = storage.get_aggregate(subject_id="u", signal="focus_state",
+                                start_date=base.date(), end_date=base.date()
+                                )[0].typed_aggregate
+    assert doc["minutes"]["focused"] == 15.0        # 三段 5 分钟
+
+
+# ---------------------------------------------------------------------------
+# I8 —— 一个信号只能有一条当前值，锚点因此被合并
+# ---------------------------------------------------------------------------
+
+def _anchor(kit, at, anchor_id, label):
+    kit.ingest({
+        "schema_version": 1, "report_id": f"a{anchor_id}{at.isoformat()}",
+        "producer": "ios", "observations": [{
+            "signal": "proximity_anchor", "signal_schema_version": 1,
+            "occurred_at": at.isoformat(), "availability": "observed",
+            "timezone": "Asia/Shanghai",
+            "value": {"anchor_id": anchor_id, "anchor_type": "wifi",
+                      "label": label, "is_connected": True},
+        }],
+    }, context=IngestContext("u", at))
+
+
+def test_two_anchors_named_home_stay_two_anchors():
+    """用户搬家，新旧网络都叫 "home"。
+
+    按名字看是同一个，按 `anchor_id` 看是两个。合并之后历史再也分不开
+    哪一段是哪个家 —— 规范 §12 专门列了这一条。
+    """
+    storage = InMemoryStorage()
+    kit = PerceptionKit(storage=storage, signals=MINIMAL_SIGNALS)
+    base = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    _anchor(kit, base, "wifi-old-home", "home")
+    _anchor(kit, base + timedelta(minutes=1), "wifi-new-home", "home")
+    current = storage.get_current(subject_id="u", signals=["proximity_anchor"]
+                                  )["proximity_anchor"]
+    assert len(current) == 2
+    assert {p.typed_value["anchor_id"] for p in current} == {
+        "wifi-old-home", "wifi-new-home"}
+
+
+def test_renaming_an_anchor_does_not_create_a_second_one():
+    """身份是 anchor_id，不是 label。改名只是改名。"""
+    storage = InMemoryStorage()
+    kit = PerceptionKit(storage=storage, signals=MINIMAL_SIGNALS)
+    base = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    _anchor(kit, base, "wifi-1", "家")
+    _anchor(kit, base + timedelta(minutes=1), "wifi-1", "老家")
+    current = storage.get_current(subject_id="u", signals=["proximity_anchor"]
+                                  )["proximity_anchor"]
+    assert len(current) == 1
+    assert current[0].typed_value["label"] == "老家"
+
+
+def test_a_signal_without_declared_dimensions_still_keeps_one_current():
+    """默认行为不能变：绝大多数信号同一时刻只有一个答案。"""
+    storage = InMemoryStorage()
+    kit = PerceptionKit(storage=storage, signals=MINIMAL_SIGNALS)
+    base = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    for i, level in enumerate((0.9, 0.8)):
+        kit.ingest({
+            "schema_version": 1, "report_id": f"b{i}", "producer": "ios",
+            "observations": [{
+                "signal": "battery", "signal_schema_version": 1,
+                "occurred_at": (base + timedelta(minutes=i)).isoformat(),
+                "availability": "observed", "timezone": "Asia/Shanghai",
+                "value": {"level_ratio": level, "is_charging": False,
+                          "is_low_power_mode_enabled": False},
+            }],
+        }, context=IngestContext("u", base + timedelta(minutes=i)))
+    current = storage.get_current(subject_id="u", signals=["battery"])["battery"]
+    assert len(current) == 1 and current[0].typed_value["level_ratio"] == 0.8
+
+
+# ---------------------------------------------------------------------------
+# I9 —— 每日照片数量按明细的保留期被扫掉
+# ---------------------------------------------------------------------------
+
+def test_the_daily_photo_count_outlives_the_individual_photos():
+    """单条明细 7 天、**每日数量永久**，是两个数。
+
+    只写明细那个，聚合会继承它 —— 于是「8月1日新增了 5 张」一周后被清掉。
+    那是一件发生过的事实，不是「现在还剩几张」。
+    """
+    sig = MINIMAL_SIGNALS["photo_library_added"]
+    assert sig.history_retention_days == 7
+    assert sig.keeps_aggregates_forever
+
+
+# ---------------------------------------------------------------------------
+# 交付清单 §15 里唯一没有测试盯着的一项：
+#   「App 缺失 close、Music 采样间断」
+#
+# 两个都是**我们和规范不同的地方**，而且不同得有理由。没有测试的话，
+# 后来的人看到「规范要求算时长，代码没算」，最可能的动作是把它补上 ——
+# 补回来的是一份大概率残缺的数字，比没有更糟。
+# ---------------------------------------------------------------------------
+
+def _app(kit, at, app, action):
+    kit.ingest({
+        "schema_version": 1, "report_id": f"{app}{action}{at.isoformat()}",
+        "producer": "ios", "observations": [{
+            "signal": "app_usage", "signal_schema_version": 1,
+            "occurred_at": at.isoformat(), "availability": "observed",
+            "timezone": "Asia/Shanghai",
+            "value": {"app_id": app, "app_name": app, "action": action,
+                      **({"open_count": 1} if action == "open" else {})},
+        }],
+    }, context=IngestContext("u", at))
+
+
+def test_a_missing_close_never_becomes_an_invented_duration():
+    """只配了 open 自动化的用户，绝大多数 app 根本没有结束事件。
+
+    拿有 close 的那部分算平均时长，得到的是一个只反映「谁配得全」的数字。
+    所以这个信号**刻意不建时长统计** —— 聚合里只该有靠 open 就能答准的
+    「今天打开了几次」。
+    """
+    storage = InMemoryStorage()
+    kit = PerceptionKit(storage=storage, signals=MINIMAL_SIGNALS)
+    base = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    _app(kit, base, "Slack", "open")
+    _app(kit, base + timedelta(minutes=30), "Slack", "open")   # 没有 close
+    doc = storage.get_aggregate(subject_id="u", signal="app_usage",
+                                start_date=base.date(), end_date=base.date()
+                                )[0].typed_aggregate
+    assert doc["open_count"]["total"] == 2
+    assert not any("minute" in k or "duration" in k for k in doc), \
+        "app_usage 不该出现任何时长统计——覆盖面残缺，那个数字不可信"
+
+
+def test_music_edges_are_marked_per_record_not_all_estimated():
+    """规范说「只有轮询样本就标 estimated」，实际是同一个信号两种精度并存。
+
+    Apple Music 走系统播放器、切歌 2 秒后就上报，起止是准的；Spotify、
+    网易云只能靠快照采到的点。一律标 estimated 会把本来准确的那一半丢掉。
+    """
+    field = {f.key: f for f in MINIMAL_SIGNALS["music_playback"].fields}["edge_quality"]
+    assert field.enum == ("measured", "estimated")
+    assert not field.nullable, "每条都必须表态，不能留空让读的人自己猜"
+
+
+# ---------------------------------------------------------------------------
+# I10 —— 去重身份问错了保留期：拿明细的、不是聚合的
+#
+# 这条记录单独成表的**全部理由**就是「明细会过期、聚合可能永久，所以身份必须
+# 比它守着的明细活得久」。判断条件却问的是明细永不永久 —— 于是恰好在它唯一
+# 有用的那四个信号上判成不用守。规范 §14-2 点名了这个场景。
+# ---------------------------------------------------------------------------
+
+def test_the_dedupe_identity_is_marked_by_the_aggregate_it_guards():
+    """明细 7 天、每日数量永久的照片，就是这条存在的理由。
+
+    身份先于聚合被清掉之后，一次重传把永久聚合多加一遍，**加完没法回滚** ——
+    「8月1日新增 5 张」变成 10 张，而原始明细已经不在了，没有任何东西能算回去。
+
+    这里包一层记录用的 storage，直接看管线**递给** remember_identity 的那条
+    记录 —— 内存实现只留了身份的键、把 scope 丢了，拿它验等于没验。
+    """
+    seen = []
+
+    class Recording(InMemoryStorage):
+        def remember_identity(self, identity):
+            seen.append(identity)
+            return super().remember_identity(identity)
+
+    storage = Recording()
+    kit = PerceptionKit(storage=storage, signals=MINIMAL_SIGNALS)
+    at = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    kit.ingest({
+        "schema_version": 1, "report_id": "p1", "producer": "ios",
+        "observations": [{
+            "signal": "photo_library_added", "signal_schema_version": 1,
+            "occurred_at": at.isoformat(), "availability": "observed",
+            "timezone": "Asia/Shanghai", "source_event_id": "ph-1",
+            "value": {"count": 1, "added_at": at.isoformat()},
+        }],
+    }, context=IngestContext("u", at))
+    assert [i.aggregate_scope for i in seen] == ["photo_library_added"], (
+        "明细 7 天、聚合永久 —— 身份必须标明它守着一个永久聚合，"
+        "否则保留期清理会把它当成可以删的")
+
+
+def test_every_signal_with_a_permanent_aggregate_marks_its_identity():
+    """不只照片。focus / motion / music 都是明细 1 年、聚合永久。"""
+    at_risk = [k for k, s in MINIMAL_SIGNALS.items()
+               if s.keeps_aggregates_forever and not s.keeps_history_forever]
+    assert set(at_risk) == {"focus_state", "motion_state",
+                            "music_playback", "photo_library_added"}

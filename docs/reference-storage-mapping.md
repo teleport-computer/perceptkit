@@ -24,7 +24,7 @@
 | `location_city` | CurrentProjection + StoredObservation + DailyAggregate | 900s | 永久 | 同明细 | deterministic_digest | instant |
 | `motion_state` | CurrentProjection + StoredObservation + DailyAggregate | 900s | 365 天 | 永久 | deterministic_digest | instant |
 | `music_playback` | CurrentProjection + StoredObservation + DailyAggregate | 600s | 365 天 | 永久 | deterministic_digest | instant |
-| `photo_library_added` | CurrentProjection + StoredObservation + DailyAggregate | — | 7 天 | 同明细 | source_event_id | instant |
+| `photo_library_added` | CurrentProjection + StoredObservation + DailyAggregate | — | 7 天 | 永久 | source_event_id | instant |
 | `presence_recovery` | CurrentProjection | — | 不存 | 不适用 | source_event_id | instant |
 | `proximity_anchor` | CurrentProjection + StoredObservation | 900s | 7 天 | 同明细 | deterministic_digest | instant |
 | `screen_change` | CurrentProjection | 60s | 不存 | 不适用 | singleton | instant |

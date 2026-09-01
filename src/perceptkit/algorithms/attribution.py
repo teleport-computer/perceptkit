@@ -73,17 +73,45 @@ def _utc_naive(dtobj: _dt.datetime) -> _dt.datetime:
     return dtobj.replace(tzinfo=None) - dtobj.utcoffset()
 
 
-def attribute_instant(when: str) -> str:
-    """单点测量：按它自己那个 offset 下的本地日期。"""
-    return _aware(when).date().isoformat()
+def _local(dtobj: _dt.datetime, tz: str | None) -> _dt.datetime:
+    """换算到观测声明的那个时区。没声明就用时间戳自带的 offset。
+
+    ★ **这两件事不是一回事，混用会把数据归错天。**
+
+    时间戳自带的是一个**固定 offset**；``tz`` 是一整套带换日规则的时区。
+    producer 完全可以（而且常常）用 UTC 发 ``occurred_at``、把 IANA 时区另放
+    在观测的 ``timezone`` 字段里 —— 那时按 offset 算出来的是 UTC 日期，不是
+    用户的本地日期。
+
+    实例（这就是它被写出来的原因）：上海用户早上 7 点，``occurred_at`` 是
+    ``T-1 23:00+00:00``。按 offset 算 = 前一天。**每天本地 00:00–08:00 的数据
+    全部落到前一天**，"昨天走了多少步""昨晚睡了几小时"跟着一起偏。
+    """
+    if not tz:
+        return dtobj
+    try:
+        return dtobj.astimezone(_zoneinfo.ZoneInfo(tz))
+    except Exception:                              # noqa: BLE001
+        # 时区名不认识时按 offset 算 —— 这是降级，不是等价物，
+        # 但比整条观测拒收好：调用方已经在别处对时区名做了校验。
+        return dtobj
 
 
-def attribute_episode(start: str, end: str) -> str:
-    """区间事件（睡眠、一次运动）：整体归结束那天。"""
+def attribute_instant(when: str, *, tz: str | None = None) -> str:
+    """单点测量：归到它发生时、**当地**的那一天。
+
+    ``tz`` 是观测声明的 IANA 时区。不传时退回时间戳自带的 offset —— 见
+    ``_local`` 里说明这两者为什么不等价。
+    """
+    return _local(_aware(when), tz).date().isoformat()
+
+
+def attribute_episode(start: str, end: str, *, tz: str | None = None) -> str:
+    """区间事件（睡眠、一次运动）：整体归结束那天的**当地**日期。"""
     s, e = _aware(start), _aware(end)
     if e < s:
         raise ValueError(f"区间结束早于开始：{start!r} -> {end!r}")
-    return e.date().isoformat()
+    return _local(e, tz).date().isoformat()
 
 
 def split_across_midnight(start: str, end: str, *, tz: str | None = None) -> list[tuple[str, float]]:
