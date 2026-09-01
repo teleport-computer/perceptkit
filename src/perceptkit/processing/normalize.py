@@ -217,7 +217,7 @@ def effective_date(
         # 上游说好了给本地日期却没给 —— 退回按发生时刻算，并记一笔，
         # 不静默换算法。
         problems.append(f"{sig.key}: 声明了 source_local_date 但 payload 里没有 local_date")
-        return _parse(attribution.attribute_instant(iso)), (), problems
+        return _parse(attribution.attribute_instant(iso, tz=timezone_name)), (), problems
 
     if strategy in ("episode_end", "split_at_midnight"):
         start, end = value.get("start_at"), value.get("end_at")
@@ -226,21 +226,21 @@ def effective_date(
                 f"{sig.key}: {strategy} 需要 start_at / end_at，"
                 f"退回按 occurred_at 归属"
             )
-            return _parse(attribution.attribute_instant(iso)), (), problems
+            return _parse(attribution.attribute_instant(iso, tz=timezone_name)), (), problems
         # producer 可能发来不合法的区间（结束早于开始、时间戳格式不对）。
         # **只拒这一条，不能炸掉整批** —— 一批十条里一条有问题就全丢，
         # 是最容易让人骂街的设计，管线其他地方都守住了这条，这里以前漏了。
         try:
             if strategy == "episode_end":
-                return _parse(attribution.attribute_episode(start, end)), (), problems
+                return _parse(attribution.attribute_episode(start, end, tz=timezone_name)), (), problems
             slices = tuple(attribution.split_across_midnight(start, end, tz=timezone_name))
             return _parse(slices[-1][0]) if slices else _parse(
-                attribution.attribute_episode(start, end)
+                attribution.attribute_episode(start, end, tz=timezone_name)
             ), slices, problems
         except (ValueError, TypeError) as exc:
             raise AttributionError(f"{sig.key}: {exc}") from exc
 
-    return _parse(attribution.attribute_instant(iso)), (), problems
+    return _parse(attribution.attribute_instant(iso, tz=timezone_name)), (), problems
 
 
 # ---------------------------------------------------------------------------

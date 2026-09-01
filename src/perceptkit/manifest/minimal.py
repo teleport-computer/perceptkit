@@ -600,6 +600,10 @@ PHOTO_LIBRARY_ADDED = SignalDefinition(
     identity_strategy="source_event_id",
     attribution_strategy="instant",
     history_retention_days=7,
+    # 单条明细 7 天，**每日新增数量永久**。两个数必须分开写：不写聚合那个
+    # 就会继承明细的 7 天，于是「8月1日新增了 5 张」一周后被扫掉 ——
+    # 而那是一件发生过的事实，不是「现在还剩几张」。
+    aggregate_retention_days=PERMANENT,
     source_profile="device_occurrence",
     note=(
         "一张照片一条 count=1，不是「今天 5 张」报一次 —— 拆成一条条才能让照片"
@@ -973,6 +977,9 @@ PROXIMITY_ANCHOR = SignalDefinition(
     # 同上：时间点快照，时长由聚合层从相邻观测算。
     attribution_strategy="instant",
     # 产品规范 §1-15：Wi-Fi / 蓝牙连接历史保留 7 天。
+    # 每个 anchor 各一条当前值。同时连着家里和公司是两个答案；
+    # 用户搬家后新旧网络都叫 "home",按名字看是一个、按 anchor_id 看是两个。
+    dimension_fields=("anchor_id",),
     history_retention_days=7,
     source_profile="location",
     note=(

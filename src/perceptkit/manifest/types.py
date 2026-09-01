@@ -16,7 +16,7 @@ manifest 只声明**属性**,不实现算法。``normalizer`` / ``aggregation_st
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Mapping
 
 # ---------------------------------------------------------------------------
 # 值域
@@ -159,6 +159,16 @@ class SignalDefinition:
     identity_strategy: str
     attribution_strategy: str
     fields: tuple[FieldDefinition, ...]
+    #: 哪几个字段把这个信号的当前值**分成并列的多条**。
+    #:
+    #: 空（默认）= 一个信号一条当前值，新的覆盖旧的。绝大多数信号就该这样：
+    #: 电量、天气、运动状态，同一时刻只有一个答案。
+    #:
+    #: 非空 = 每个取值组合各留一条。锚点是这么来的：同时连着家里和公司两个
+    #: Wi-Fi，「当前连着哪些锚点」有两个答案，覆盖式写入只会剩最后一个。
+    #: 更糟的是用户搬家、新旧网络都叫 "home" —— 按名字看是同一个，按
+    #: ``anchor_id`` 看是两个，合并之后历史再也分不开哪段是哪个家。
+    dimension_fields: tuple[str, ...] = ()
     #: **明细**（逐条观测）保留多少天。``PERMANENT`` = 永久;``0`` = 不存历史。
     history_retention_days: int = 0
     #: **聚合**（日统计）保留多少天。默认跟着明细走 —— 但两者常常不该一样。
@@ -190,6 +200,18 @@ class SignalDefinition:
     @property
     def keeps_history_forever(self) -> bool:
         return self.history_retention_days == PERMANENT
+
+    def dimension_key_for(self, value: Mapping[str, Any] | None) -> str:
+        """这条观测落在哪一条当前值上。
+
+        没声明 ``dimension_fields`` 就用信号名 —— 一个信号一条，和以前一样。
+        声明了就按那几个字段的取值拼出来；取不到值的按空串参与，**不能退回
+        信号名**：那会让「拿不到 anchor_id 的那条」去覆盖掉一条真的锚点。
+        """
+        if not self.dimension_fields:
+            return self.key
+        parts = [str((value or {}).get(f) or "") for f in self.dimension_fields]
+        return self.key + "\x1f" + "\x1f".join(parts)
 
     @property
     def effective_aggregate_retention_days(self) -> int:
