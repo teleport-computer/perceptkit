@@ -614,9 +614,12 @@ PHOTO_LIBRARY_ADDED = SignalDefinition(
         "传输上仍然可以一个信封装多条，不多发请求。\n"
         "🔴 删照片【不回减】过去某日的数量：它记的是「那天发生过什么」，"
         "不是「现在还剩几张」。\n"
-        "🔴 前提未满足：iOS 现在上报的是随机 id，同一张照片两次上报算出两个不同"
-        "身份 —— 去重表再完美也挡不住。要 iOS 改成用 PHAsset.localIdentifier 的"
-        "端上哈希（和 wifi_anchor_id 同一套做法）。已列入 iOS 待办。\n"
+        "身份必须由设备给一个稳定值：内容信封 id 是每次上传新生成的，用它的话"
+        "同一张照片重传就是两张，去重表再完美也挡不住。iOS 送的是"
+        "SHA256(固定 namespace + PHAsset.localIdentifier)——固定 namespace 而不是"
+        "wifi_anchor_id 那种设备本地随机密钥：照片 id 是本机相册的高熵 UUID，"
+        "别的设备上不存在，固定 namespace 就够不可逆；而且重装后仍然稳定，"
+        "正好让重扫相册时认出「这些都数过了」。\n"
         "去重指纹的保留期：规范建议永久；我们查下来当前实现【找不到超过 7 天的"
         "重放路径】，所以按「覆盖明细保留期 + 富余」取 30 天更实在。"
         "规范自己也是条件句：「若 producer 可以在超过 7 天后重放，才必须永久保留」。"
@@ -629,7 +632,11 @@ PHOTO_LIBRARY_ADDED = SignalDefinition(
             privacy_class="personal",
             nullable=False,
             valid_range=(1, 1),        # 永远是 1 —— 一张照片一条
-            aggregation_strategy="daily_total",
+            # 🔴 求和，不是取 max。每张照片各贡献一份 1，取 max 的话
+            # 「今天新增了几张」永远答 1，而这条聚合是永久保存的。
+            # app_usage.open_count 先踩过同一个坑；现在
+            # check_counting_strategies_can_actually_count 会拦住第三次。
+            aggregation_strategy="occurrence_count",
             comparison_strategy="occurrence",
             trend_model="fluctuating",
             wake_eligible=True,

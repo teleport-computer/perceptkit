@@ -1023,3 +1023,51 @@ def test_producer_timestamps_parse_without_the_lenient_fromisoformat(raw, monkey
     assert _time.parse_timestamp(raw).year == 2026
     # 归属那一层以前自己调 fromisoformat，绕开了这个解析器。
     assert attribution.attribute_instant(raw) == "2026-08-19"
+
+
+# ---------------------------------------------------------------------------
+# I15 —— 「今天新增了几张照片」永远答 1
+#
+# valid_range=(1,1) 的字段配 daily_total（取 max），结果恒等于 1。
+# app_usage.open_count 先踩过一次，教训只写进了注释，隔壁的照片没人回头看。
+# 而照片那条聚合是**永久**保存的：错的是一个永远不会自己修好的历史数字。
+# ---------------------------------------------------------------------------
+
+def test_three_photos_in_a_day_count_as_three():
+    storage = InMemoryStorage()
+    kit = PerceptionKit(storage=storage, signals=MINIMAL_SIGNALS)
+    at = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+
+    for i in range(3):
+        outcome = kit.ingest({
+            "schema_version": 1, "report_id": f"ph{i}", "producer": "ios",
+            "observations": [{
+                "signal": "photo_library_added", "signal_schema_version": 1,
+                "occurred_at": at.isoformat(), "availability": "observed",
+                "timezone": "Asia/Shanghai", "source_event_id": f"asset-{i}",
+                "value": {"count": 1, "added_at": at.isoformat()},
+            }],
+        }, context=IngestContext("u", at))
+        assert not outcome.rejected, list(outcome.rejected)
+
+    rows = storage.get_aggregate(subject_id="u", signal="photo_library_added",
+                                 start_date=at.date(), end_date=at.date())
+    assert rows and rows[0].typed_aggregate["count"]["total"] == 3
+
+
+def test_no_signal_declares_a_counter_that_cannot_count():
+    """把这条纪律从注释升级成检查 —— 注释保护不了下一个信号。"""
+    from perceptkit.manifest.checks import (
+        check_counting_strategies_can_actually_count as check,
+    )
+    assert check(MINIMAL_SIGNALS) == []
+
+    # 反过来证明这条检查真的在拦：手工造一个和当初照片一模一样的声明。
+    from dataclasses import replace
+    broken = dict(MINIMAL_SIGNALS)
+    sig = broken["photo_library_added"]
+    broken["photo_library_added"] = replace(sig, fields=tuple(
+        replace(f, aggregation_strategy="daily_total") if f.key == "count" else f
+        for f in sig.fields
+    ))
+    assert any("恒等于 1" in p for p in check(broken))
