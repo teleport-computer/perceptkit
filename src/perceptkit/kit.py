@@ -190,7 +190,8 @@ class PerceptionKit:
             ],
             # 故意不删的也要列出来 —— 一份只说"删了 0 条"的报告，读不出
             # 「是没到期，还是规则写错了」。
-            "skipped": [{"signal": k, "why": why} for k, why in plan.skipped],
+            "skipped": [{"signal": s.signal, "code": s.code, "detail": s.detail}
+                        for s in plan.skipped],
             "removed": removed,
         }
 
