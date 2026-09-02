@@ -42,7 +42,8 @@ def test_details_and_aggregates_get_their_own_cutoffs():
     # 明细 7 天要清，聚合永久不许出现在动作里。
     assert [a.kind for a in photo] == ["observations"]
     assert photo[0].before == (NOW - timedelta(days=7)).date()
-    assert ("photo_library_added", "日聚合永久保存") in plan.skipped
+    assert any(sk.signal == "photo_library_added"
+               and sk.code == "aggregates_permanent" for sk in plan.skipped)
 
 
 def test_permanent_never_appears_as_something_to_delete():
@@ -62,14 +63,31 @@ def test_a_signal_with_no_declared_retention_is_skipped_not_defaulted():
                   history_retention_days=None, aggregate_retention_days=None)
     plan = plan_retention({"audio_route": sig}, now=NOW)
     assert plan.actions == []
-    assert all("不替它猜" in why for _, why in plan.skipped)
+    assert all(sk.code.endswith("undeclared") for sk in plan.skipped)
 
 
 def test_the_plan_says_why_it_skipped_things():
     """只说"删了 0 条"的报告，读不出「是没到期，还是规则写错了」。"""
     plan = _plan()
     assert plan.skipped
-    assert all(why.strip() for _, why in plan.skipped)
+    assert all(sk.detail.strip() for sk in plan.skipped)
+
+
+def test_skip_reasons_carry_a_stable_code_for_the_host_to_render():
+    """理由的**文字**是中文（这个包的注释都是中文）。宿主的运维界面不一定是。
+
+    直接把 detail 印进一个英文报告里就成了半中半英 —— 一个库不该替宿主
+    决定报告用什么语言。code 是稳定的，文案归宿主。
+    """
+    from perceptkit.retention import (
+        SKIP_AGGREGATES_PERMANENT, SKIP_DETAILS_PERMANENT, SKIP_NO_HISTORY,
+        SKIP_DETAILS_UNDECLARED, SKIP_AGGREGATES_UNDECLARED,
+    )
+    known = {SKIP_NO_HISTORY, SKIP_DETAILS_PERMANENT, SKIP_DETAILS_UNDECLARED,
+             SKIP_AGGREGATES_PERMANENT, SKIP_AGGREGATES_UNDECLARED}
+    plan = _plan()
+    assert {sk.code for sk in plan.skipped} <= known
+    assert all(sk.code for sk in plan.skipped)
 
 
 def test_a_dry_run_removes_nothing():

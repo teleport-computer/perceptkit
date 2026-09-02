@@ -93,6 +93,33 @@ class RetentionAction:
     before: _dt.date
 
 
+@dataclass(frozen=True)
+class SkippedSignal:
+    """故意不清的一个信号，以及为什么。
+
+    ``code`` 是稳定的机器可读标识，``detail`` 是给人看的一句话。
+    **宿主的运维界面该用 code 自己渲染** —— 一个库不该替宿主决定报告用什么
+    语言。这里的 detail 是中文（这个包的注释都是中文），直接印进一个英文
+    运维报告里就成了半中半英。
+    """
+
+    signal: str
+    code: str
+    detail: str
+
+    def __iter__(self):
+        """还能按 ``(signal, detail)` 解包 —— 老调用方不用一次全改。"""
+        return iter((self.signal, self.detail))
+
+
+#: 稳定的跳过原因。宿主按这个渲染自己的文案。
+SKIP_NO_HISTORY = "no_history"
+SKIP_DETAILS_PERMANENT = "details_permanent"
+SKIP_DETAILS_UNDECLARED = "details_undeclared"
+SKIP_AGGREGATES_PERMANENT = "aggregates_permanent"
+SKIP_AGGREGATES_UNDECLARED = "aggregates_undeclared"
+
+
 @dataclass
 class RetentionPlan:
     """要删什么，以及**故意不删什么、为什么**。
@@ -103,8 +130,7 @@ class RetentionPlan:
     """
 
     actions: list[RetentionAction] = _field(default_factory=list)
-    #: ``(信号, 为什么跳过)``
-    skipped: list[tuple[str, str]] = _field(default_factory=list)
+    skipped: list[SkippedSignal] = _field(default_factory=list)
 
 
 def plan_retention(
@@ -128,13 +154,13 @@ def plan_retention(
     for key in sorted(signals):
         sig = signals[key]
         if not sig.stores_history:
-            plan.skipped.append((key, "不进历史表，没东西可清"))
+            plan.skipped.append(SkippedSignal(key, SKIP_NO_HISTORY, "不进历史表，没东西可清"))
             continue
 
         if sig.history_retention_days == PERMANENT:
-            plan.skipped.append((key, "明细永久保存"))
+            plan.skipped.append(SkippedSignal(key, SKIP_DETAILS_PERMANENT, "明细永久保存"))
         elif sig.history_retention_days is None:
-            plan.skipped.append((key, "没声明明细保留期 —— 跳过，不替它猜一个"))
+            plan.skipped.append(SkippedSignal(key, SKIP_DETAILS_UNDECLARED, "没声明明细保留期 —— 跳过，不替它猜一个"))
         else:
             plan.actions.append(RetentionAction(
                 key, "observations",
@@ -142,9 +168,9 @@ def plan_retention(
 
         agg_days = sig.effective_aggregate_retention_days
         if agg_days == PERMANENT:
-            plan.skipped.append((key, "日聚合永久保存"))
+            plan.skipped.append(SkippedSignal(key, SKIP_AGGREGATES_PERMANENT, "日聚合永久保存"))
         elif agg_days is None:
-            plan.skipped.append((key, "没声明聚合保留期 —— 跳过，不替它猜一个"))
+            plan.skipped.append(SkippedSignal(key, SKIP_AGGREGATES_UNDECLARED, "没声明聚合保留期 —— 跳过，不替它猜一个"))
         else:
             plan.actions.append(RetentionAction(
                 key, "aggregates",
