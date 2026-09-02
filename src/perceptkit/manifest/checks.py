@@ -286,12 +286,49 @@ def check_projections_do_not_drift(
                 )
     return problems
 
+def check_counting_strategies_can_actually_count(
+    signals: Mapping[str, SignalDefinition],
+) -> list[str]:
+    """取 max 的策略配上「取值范围只有一个数」的字段 —— 结果恒等于那个数。
+
+    这不是风格问题，是一个可以机械证明的矛盾，而它的表现是**一个安静的错数**：
+
+        photo_library_added.count  valid_range=(1, 1)  一张照片一条 count=1
+                                   aggregation_strategy="daily_total"（取 max）
+                                   → max(1, 1, 1, ...) = 1
+                                   → "今天新增了几张照片" 永远答 1
+
+    照片那条聚合还是永久保存的，所以错的是一个永远不会自己修好的历史数字。
+    真实发生过：``app_usage.open_count`` 先踩了一次，教训写进了
+    ``aggregate._STRATEGY_TO_SHAPE`` 的注释里，但隔壁的 ``photo_library_added``
+    没人回头看 —— 一条只写在注释里的纪律，保护不了下一个信号。
+
+    「每次事件贡献一份」用 ``occurrence_count``（求和）。
+    ``daily_total`` / ``cumulative`` 是给**来源自己在数**的量用的
+    （今日步数 8000 → 8300，取 max 才对）。
+    """
+    problems: list[str] = []
+    for key, sig in signals.items():
+        for f in sig.fields:
+            if f.aggregation_strategy not in ("daily_total", "cumulative"):
+                continue
+            rng = f.valid_range
+            if rng is None or rng[0] != rng[1]:
+                continue
+            problems.append(
+                f"{key}.{f.key}: valid_range={rng} 只允许一个值，"
+                f"而 {f.aggregation_strategy!r} 取当天最大值 —— 结果恒等于 {rng[0]}。"
+                f"每次事件各贡献一份的量要用 'occurrence_count'（求和）"
+            )
+    return problems
+
+
 def validate_manifest(
     signals: Mapping[str, SignalDefinition],
     *,
     available_normalizers: Iterable[str] = (),
 ) -> list[str]:
-    """跑全部五条检查（产品规范 §8 列的那五条），返回问题清单（空 = 通过）。
+    """跑全部六条检查（产品规范 §8 列的五条 + 一条计数策略自洽），返回问题清单（空 = 通过）。
 
     返回列表而不是抛异常：一次看到全部缺口，比逐个修再重跑快得多。
     """
@@ -311,6 +348,7 @@ def validate_manifest(
     )
     problems += check_wake_eligible_fields_have_comparators(signals)
     problems += check_projections_do_not_drift(signals)
+    problems += check_counting_strategies_can_actually_count(signals)
     return problems
 
 
@@ -319,5 +357,6 @@ __all__ = [
     "check_history_has_retention",
     "check_named_implementations_exist",
     "check_wake_eligible_fields_have_comparators",
+    "check_counting_strategies_can_actually_count",
     "validate_manifest",
 ]

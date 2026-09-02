@@ -1,0 +1,56 @@
+# 每次推送都跑，跨所有**声明支持**的 Python 版本。
+#
+# 为什么要矩阵：这个包声明 requires-python >=3.10，而在此之前只有发版那条
+# workflow 会跑测试，且只跑 3.12。结果是 3.10 上「两位小数秒的时间戳整条被拒」
+# 这个 bug 活到了外部审查才被发现 —— 声明支持一个版本却从不在上面跑，
+# 等于把"支持"两个字写在一个没人验的地方。
+#
+# 矩阵的下边界必须和 pyproject 的 requires-python 一致。要提最低版本，
+# 就同时改这两处，不许只改一处。
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        run: pipx install uv
+
+      - name: requires-python 的下界必须就是矩阵的下界
+        # 光有矩阵不够 —— 有人把 requires-python 降到 3.9 而矩阵没跟，
+        # 就又回到"声明支持但从不验"那个状态，而且这次是无声的。
+        run: |
+          FLOOR=$(grep -m1 '^requires-python' pyproject.toml \
+                  | sed 's/.*>=\([0-9.]*\).*/\1/')
+          echo "requires-python 下界=$FLOOR  矩阵下界=3.10"
+          test "$FLOOR" = "3.10" || {
+            echo "::error::requires-python 是 >=$FLOOR，但 CI 矩阵从 3.10 起。"
+            echo "::error::改最低版本时 pyproject 和这个矩阵必须一起改。"
+            exit 1; }
+
+      - name: 跑测试
+        run: uv run --python ${{ matrix.python-version }} --extra dev pytest tests/ -q
+
+      - name: 示例必须能脱离宿主跑通
+        run: |
+          uv run --python ${{ matrix.python-version }} python3 examples/quickstart.py
+          uv run --python ${{ matrix.python-version }} python3 examples/end_to_end.py

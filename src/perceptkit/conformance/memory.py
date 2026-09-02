@@ -197,7 +197,8 @@ class InMemoryStorage:
             self.reminders[(subject_id, r.source_account_id, r.source_list_id,
                             r.source_reminder_id)] = r
 
-    def list_calendar_events(self, *, subject_id, start=None, end=None, limit=50):
+    def list_calendar_events(self, *, subject_id, start=None, end=None,
+                             limit=50, offset=0):
         rows = [v for k, v in self.calendar.items() if k[0] == subject_id]
         keep = []
         for item in rows:
@@ -212,9 +213,10 @@ class InMemoryStorage:
         keep.sort(key=lambda i: (i.event_fields.get("start_at") is None,
                                  i.event_fields.get("start_at") or _EPOCH,
                                  i.source_event_id))
-        return keep[:limit]
+        return keep[offset:offset + limit]
 
-    def list_reminders(self, *, subject_id, include_completed=False, limit=50):
+    def list_reminders(self, *, subject_id, include_completed=False,
+                       limit=50, offset=0):
         keep = [
             v for k, v in self.reminders.items()
             if k[0] == subject_id
@@ -223,7 +225,7 @@ class InMemoryStorage:
         keep.sort(key=lambda i: (i.reminder_fields.get("due_at") is None,
                                  i.reminder_fields.get("due_at") or _EPOCH,
                                  i.source_reminder_id))
-        return keep[:limit]
+        return keep[offset:offset + limit]
 
     def apply_source_snapshot(self, *, subject_id, source, collection_kind, sync_id,
                               coverage_start, coverage_end, snapshot_kind) -> int:
@@ -325,6 +327,22 @@ class InMemoryStorage:
             e for e in self.outbox.values()
             if not e.is_terminal and (subject_id is None or e.subject_id == subject_id)
         ][:limit]
+
+    def list_events(self, *, subject_id, delivery_states=None, event_type=None,
+                    start=None, end=None, limit=50, offset=0):
+        # 注意这里**没有** is_terminal 过滤 —— 排查要的正是终态。
+        rows = [e for e in self.outbox.values() if e.subject_id == subject_id]
+        if delivery_states is not None:
+            wanted = set(delivery_states)
+            rows = [e for e in rows if e.delivery_state in wanted]
+        if event_type is not None:
+            rows = [e for e in rows if e.event_type == event_type]
+        if start is not None:
+            rows = [e for e in rows if e.occurred_at >= start]
+        if end is not None:
+            rows = [e for e in rows if e.occurred_at <= end]
+        rows.sort(key=lambda e: (e.occurred_at, e.event_id), reverse=True)
+        return rows[offset:offset + limit]
 
     # -- 用户数据 --------------------------------------------------------
 

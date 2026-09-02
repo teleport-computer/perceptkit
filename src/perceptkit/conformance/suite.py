@@ -86,7 +86,7 @@ def _entry(**over: Any) -> EventOutboxEntry:
 
 
 # ---------------------------------------------------------------------------
-# 十条保证
+# 十二条保证
 # ---------------------------------------------------------------------------
 
 def _g1_report_and_observation_idempotency(new: StorageFactory) -> list[str]:
@@ -383,6 +383,97 @@ def _g11_both_source_mirrors_round_trip(new: StorageFactory) -> list[str]:
     return problems
 
 
+def _g12_terminal_events_and_offsets_are_queryable(new: StorageFactory) -> list[str]:
+    """⑫ 终态事件查得到，翻页翻得过读取批次。
+
+    两件事都是"静默给错答案"，不是"报错"：
+
+        终态查不到  「为什么没提醒我」的答案通常是 suppressed（撞了安静时段）
+                    或 rejected（宿主拒了），而这两个都是终态。宿主只实现了
+                    「待投递」那个查询的话，排查看到的是"压根没产生过这个
+                    事件"，方向直接错了。
+        翻页翻不动  offset 不真的下推到存储，游标就只在第一批里打转。
+                    用户看到的是"我八月没有日程"，不是"结果被截断了"。
+
+    宿主容易只把 ``offset`` 加进签名、body 里照旧忽略 —— 签名对了、行为没变，
+    而 Protocol 不会告诉你。所以这里验的是**行为**，不是方法在不在。
+    """
+    problems: list[str] = []
+    s = new()
+    base = T0
+    # 回执状态和投递状态是**两套词表**：runtime 回 conversation_suppressed，
+    # 落到发件箱上叫 suppressed。这里照真实那条路走，不直接改状态字段。
+    wanted = {
+        "ev0": (_receipt.WAKE_SUPPRESSED, _delivery.SUPPRESSED),  # 撞了安静时段
+        "ev1": (_receipt.WAKE_REJECTED, _delivery.REJECTED),      # 宿主拒了
+        "ev2": (_receipt.WAKE_ACCEPTED, _delivery.DELIVERED),
+        "ev3": (None, _delivery.PENDING),
+    }
+    for i, (eid, (status, state)) in enumerate(wanted.items()):
+        s.enqueue_event(_entry(event_id=eid, event_type="t",
+                               occurred_at=base + timedelta(minutes=i)))
+        if status is None:
+            continue
+        claimed = s.claim_pending_event(worker_id="w", now=base,
+                                        lease_seconds=60)
+        if claimed is None:
+            problems.append("⑫: 领不到刚入队的事件，后面测不了")
+            return problems
+        s.record_wake_receipt(
+            receipt=WakeReceipt(event_id=claimed.event_id,
+                                attempt_id=f"a{i}", status=status,
+                                received_at=base),
+            next_state=state, claim_token=claimed.claim_token,
+        )
+
+    seen = {e.event_id: e.delivery_state
+            for e in s.list_events(subject_id="u1", limit=50)}
+    for eid, (_status, state) in wanted.items():
+        if eid not in seen:
+            problems.append(
+                f"⑫: list_events 看不到 {state} 的事件 —— "
+                f"「为什么没提醒我」这个问题就答不出来"
+            )
+    only = [e.event_id for e in s.list_events(
+        subject_id="u1", delivery_states=[_delivery.SUPPRESSED], limit=50)]
+    if only != ["ev0"]:
+        problems.append("⑫: 按投递状态筛没生效")
+
+    # offset 必须真的下推：连着两页不能给出同一条。
+    first = [e.event_id for e in s.list_events(subject_id="u1", limit=2, offset=0)]
+    second = [e.event_id for e in s.list_events(subject_id="u1", limit=2, offset=2)]
+    if set(first) & set(second) or len(first) + len(second) != 4:
+        problems.append("⑫: list_events 的 offset 没有下推到存储，翻页会重复或漏")
+
+    s2 = new()
+    s2.upsert_calendar_events(subject_id="u1", events=[CalendarEventMirror(
+        subject_id="u1", source_account_id="a", source_calendar_id="c",
+        source_event_id=f"e{i}",
+        event_fields={"title": f"e{i}", "start_at": base + timedelta(minutes=i)},
+    ) for i in range(4)])
+    p1 = [e.source_event_id for e in s2.list_calendar_events(
+        subject_id="u1", limit=2, offset=0)]
+    p2 = [e.source_event_id for e in s2.list_calendar_events(
+        subject_id="u1", limit=2, offset=2)]
+    if set(p1) & set(p2) or len(set(p1) | set(p2)) != 4:
+        problems.append("⑫: list_calendar_events 的 offset 没有下推到存储")
+
+    s3 = new()
+    s3.upsert_reminders(subject_id="u1", items=[ReminderItemMirror(
+        subject_id="u1", source_account_id="a", source_list_id="l",
+        source_reminder_id=f"r{i}",
+        reminder_fields={"title": f"r{i}", "is_completed": False,
+                         "due_at": base + timedelta(minutes=i)},
+    ) for i in range(4)])
+    q1 = [r.source_reminder_id for r in s3.list_reminders(
+        subject_id="u1", limit=2, offset=0)]
+    q2 = [r.source_reminder_id for r in s3.list_reminders(
+        subject_id="u1", limit=2, offset=2)]
+    if set(q1) & set(q2) or len(set(q1) | set(q2)) != 4:
+        problems.append("⑫: list_reminders 的 offset 没有下推到存储")
+    return problems
+
+
 GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
     "①上报与观测幂等": _g1_report_and_observation_idempotency,
     "②旧数据不覆盖新当前值": _g2_old_does_not_overwrite_new,
@@ -395,6 +486,7 @@ GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
     "⑨清理不破坏永久聚合": _g9_retention_cleanup_spares_what_permanent_aggregates_need,
     "⑩用户隔离与删除": _g10_subject_isolation_and_purge,
     "⑪两个来源镜像都能往返": _g11_both_source_mirrors_round_trip,
+    "⑫终态可查与翻页下推": _g12_terminal_events_and_offsets_are_queryable,
 }
 
 #: 这几条在内存实现上**永远是绿的**，因为内存天然原子、天然无并发。
@@ -403,7 +495,7 @@ NOT_PROVABLE_IN_MEMORY: frozenset[str] = frozenset({"⑤提供原子边界"})
 
 
 def run_storage_conformance(factory: StorageFactory) -> list[str]:
-    """跑全部十条，返回问题清单（空 = 通过）。
+    """跑全部十二条，返回问题清单（空 = 通过）。
 
     返回列表而不是抛异常：一次看到全部缺口，比逐个修再重跑快得多。
     """

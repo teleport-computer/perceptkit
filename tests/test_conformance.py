@@ -37,7 +37,7 @@ def test_a_correct_adapter_passes_everything():
 
 
 def test_the_suite_covers_every_guarantee():
-    assert len(GUARANTEES) == 11
+    assert len(GUARANTEES) == 12
 
 
 # ---------------------------------------------------------------------------

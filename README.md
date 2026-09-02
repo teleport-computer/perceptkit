@@ -34,7 +34,7 @@ kit.dispatch_pending(worker_id="w1", now=now)
 ```bash
 git clone git@github.com:teleport-computer/perceptkit.git
 cd perceptkit
-uv run pytest                        # 283 条测试
+uv run pytest                        # 全部测试
 uv run python3 examples/quickstart.py   # 一分钟看它怎么判断
 ```
 
@@ -216,8 +216,9 @@ src/perceptkit/
 
 ## 六、现状
 
-107 条测试全绿（含 `test_purity.py` 的 AST 扫描：本包只依赖标准库，
-以及 `test_no_host_leakage.py`：不带宿主内部痕迹）。`examples/quickstart.py`
+测试全绿（含 `test_purity.py` 的 AST 扫描：本包只依赖标准库，
+以及 `test_no_host_leakage.py`：不带宿主内部痕迹）。条数不写在这里 ——
+每次提交都在变，写死了就是保证会漂，而"多少条"本身帮不了任何判断。`examples/quickstart.py`
 本身也有一条测试盯着（`tests/test_examples.py`）——它必须一直能跑，
 不能悄悄烂掉。
 

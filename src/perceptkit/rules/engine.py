@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Callable, Mapping
 
+from ..contracts import _time
 from .evaluators import BUILTIN
 from .types import EventDefinition, RuleResult, RuleState
 
@@ -29,8 +30,11 @@ def _cooled_down(state: RuleState, *, now: datetime, cooldown: float) -> bool:
     if cooldown <= 0 or not state.last_fired_at:
         return True
     try:
-        last = datetime.fromisoformat(state.last_fired_at)
-    except ValueError:
+        last = _time.parse_timestamp(state.last_fired_at, field="last_fired_at")
+    except _time.TimestampError:
+        # 解析不了就当没冷却过 —— 但走的是那一个宽解析器，不是 3.10 上
+        # 连两位小数秒都不认的 fromisoformat。用窄的那个 = 冷却在 3.10 上
+        # 静默失效，同一件事反复叫醒 agent，而且不报错。
         return True
     return (now - last).total_seconds() >= cooldown
 

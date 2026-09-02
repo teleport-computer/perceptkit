@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "perceptkit"
-version = "0.2.4"
-description = "从设备信号判断:有没有发生值得留意的事、值不值得叫醒一次 agent、以及该怎么把此刻的状况讲给它听。不采集数据、不碰存储、不调模型。"
+version = "0.2.5"
+description = "从设备信号判断:有没有发生值得留意的事、值不值得叫醒一次 agent、以及该怎么把此刻的状况讲给它听。不采集数据、不选数据库、不调模型 —— 存储由宿主实现 StoragePort，编排在包内。"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
