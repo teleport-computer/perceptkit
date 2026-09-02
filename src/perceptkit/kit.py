@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, time, timezone
 from typing import Any, Callable, Mapping, Sequence
 
 from .contracts.context import IngestContext
@@ -26,6 +26,7 @@ from .ports.wake import WakePort
 from .processing.dispatch import DispatchOutcome, drain
 from .processing.pipeline import AGGREGATION_VERSION, IngestOutcome, ingest_report
 from .processing.recompute import RecomputeOutcome, recompute_range
+from .retention import plan_retention
 from .processing.scheduled import ScheduledOutcome, evaluate_absence, evaluate_daily
 from .queries import api as _queries
 from .rules.types import EventDefinition
@@ -141,6 +142,57 @@ class PerceptionKit:
             version=AGGREGATION_VERSION if version is None else version,
             now=now, allow_incomplete=allow_incomplete,
         )
+
+    def run_retention(
+        self, *, subject_id: str, now: datetime, dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """按 manifest 清理过期数据。**默认只试跑。**
+
+        规则在 ``retention.plan_retention``（纯函数），删除走存储端口 ——
+        **什么时候跑仍然是宿主的事**，这里没有任何调度。给这个入口是因为
+        规则只该有一份：早先 kit 只声明保留期、不提供执行，于是每个宿主
+        自己照 manifest 推导一遍，而这条路上每个坑错了都不报错
+        （明细和聚合是两个保留期、PERMANENT 要跳过、没声明的不许猜、
+        去重身份不能跟着明细删）。
+
+        ``dry_run=True`` 是默认值，不是谨慎癖：这是这个包里**唯一**会永久
+        删用户数据的动作，而保留期的 bug 从外面完全看不见 —— 系统照常工作，
+        用户只是安静地少了历史，直到有人问一个数据已经答不出的问题。
+        先看一眼数字，再决定要不要真删。
+
+        按 subject 清，和这个端口所有其他方法一样。宿主要全量清就自己循环 ——
+        跨用户的一条 DELETE 少写一个 WHERE 就会删掉别人的数据，
+        而这个包里没有一个地方允许那种写法存在。
+        """
+        plan = plan_retention(self.signals, now=now)
+        removed: dict[str, int] = {}
+        if not dry_run:
+            for action in plan.actions:
+                if action.kind == "observations":
+                    n = self.storage.delete_observations(
+                        subject_id=subject_id, signal=action.signal,
+                        before=datetime.combine(action.before, time.min,
+                                                tzinfo=timezone.utc),
+                    )
+                else:
+                    n = self.storage.delete_aggregates(
+                        subject_id=subject_id, signal=action.signal,
+                        before=action.before,
+                    )
+                if n:
+                    removed[f"{action.signal}.{action.kind}"] = (
+                        removed.get(f"{action.signal}.{action.kind}", 0) + int(n))
+        return {
+            "applied": not dry_run,
+            "planned": [
+                {"signal": a.signal, "kind": a.kind, "before": a.before.isoformat()}
+                for a in plan.actions
+            ],
+            # 故意不删的也要列出来 —— 一份只说"删了 0 条"的报告，读不出
+            # 「是没到期，还是规则写错了」。
+            "skipped": [{"signal": k, "why": why} for k, why in plan.skipped],
+            "removed": removed,
+        }
 
     def evaluate_absence(
         self, *, subject_id: str, now: datetime,

@@ -125,6 +125,21 @@ class StoragePort(Protocol):
 
     # -- 聚合 ------------------------------------------------------------
 
+    def delete_aggregates(
+        self, *, subject_id: str, signal: str, before: date,
+    ) -> int:
+        """按**聚合的**保留期清理日聚合，返回删了多少条。
+
+        和 :meth:`delete_observations` 是两个动作，因为是两个保留期：典型形态
+        就是「明细 1 年、聚合永久」。没有这个方法的话，宿主要么自己写 SQL
+        （于是每个宿主各自重新推导一遍规则），要么干脆不清 —— 而
+        「有限保留期的聚合永远不删」不会报错，只会让库一直长。
+
+        🔴 **``aggregate_retention_days`` 是 PERMANENT 的信号绝不能进来。**
+        判定在 kit 里（``run_retention``），不指望每个宿主自己记得。
+        """
+        ...
+
     def get_aggregate(
         self, *, subject_id: str, signal: str,
         start_date: date, end_date: date,

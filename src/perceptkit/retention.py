@@ -1,6 +1,11 @@
-"""保留期（存多久才删）与保质期（多久之后不再采信）的声明表。
+"""保留期（存多久才删）与保质期（多久之后不再采信）。
 
-★ 本模块只声明，不含任何删除逻辑 —— 真正的清理任务要接定时器，属于消费方。
+★ **接定时器仍然是宿主的事**，这里没有任何调度。但「删什么、留什么、
+  为什么跳过」是**规则**，规则只该有一份 —— 早先这里连规则都不给，
+  于是每个宿主自己照 manifest 重新推导一遍，而这条路上的每个坑
+  （两个保留期要分开、永久的要跳过、去重身份不能跟着明细删）
+  错了都不报错，只是安静地少数据或多数据。
+  ``plan_retention`` 给规则，``PerceptionKit.run_retention`` 走端口执行。
 
 ★ 保留期的判据：这条数据在 N 个月后，还会改变 agent 对这个人的理解吗。
 
@@ -9,6 +14,15 @@
   杀死：体重 24 小时 = 除非今天刚称过否则永远 null。
 """
 from __future__ import annotations
+
+import datetime as _dt
+from dataclasses import dataclass, field as _field
+from typing import TYPE_CHECKING, Mapping as _Mapping
+
+from .manifest.types import PERMANENT
+
+if TYPE_CHECKING:                       # 仅为类型标注，运行时不引入依赖
+    from .manifest.types import SignalDefinition
 
 KEEP_FOREVER = None
 
@@ -66,6 +80,76 @@ MEASURED_AT_TTL_SEC: dict[str, float] = {
 #    本模块不实现这些 —— 它零 I/O。放在这里是为了让读到保留期的人
 #    不会把「永久」误解成「不可删」。
 LIFECYCLE_NOTE = "retention != undeletable; see design doc 修订 K"
+
+
+@dataclass(frozen=True)
+class RetentionAction:
+    """一个信号、一类数据、一条截止线。"""
+
+    signal: str
+    #: ``"observations"`` 或 ``"aggregates"``。
+    kind: str
+    #: 早于这个时间点的删掉。
+    before: _dt.date
+
+
+@dataclass
+class RetentionPlan:
+    """要删什么，以及**故意不删什么、为什么**。
+
+    跳过的理由必须列出来 —— 一份只说"删了 0 条"的报告，和一份说
+    "这些信号是永久保存的所以跳过"的报告，看起来一样，但前者读不出
+    「是没到期，还是规则写错了」。
+    """
+
+    actions: list[RetentionAction] = _field(default_factory=list)
+    #: ``(信号, 为什么跳过)``
+    skipped: list[tuple[str, str]] = _field(default_factory=list)
+
+
+def plan_retention(
+    signals: _Mapping[str, "SignalDefinition"], *, now: _dt.datetime,
+) -> RetentionPlan:
+    """按 manifest 算出这一轮该删什么。**纯函数，零 I/O，不读时钟。**
+
+    规则一共四条，每条都对应一个"错了不报错"的坑：
+
+        明细和聚合是**两个**保留期   典型形态是「明细 1 年、聚合永久」。
+                                     不分开写就会继承明细的天数，于是
+                                     「8月1日新增了 5 张照片」一年后被扫掉，
+                                     而那是一件发生过的事实。
+        PERMANENT 的一律跳过         判定放这里，不指望每个宿主记得。
+        没声明保留期的**跳过，不默认** 猜一个数字就是拿真实数据去赌。
+        去重身份**不在这里删**       明细没了之后，它是「重放的上报会不会
+                                     把永久聚合数两遍」之间唯一的东西，
+                                     而那个错是不可逆的。
+    """
+    plan = RetentionPlan()
+    for key in sorted(signals):
+        sig = signals[key]
+        if not sig.stores_history:
+            plan.skipped.append((key, "不进历史表，没东西可清"))
+            continue
+
+        if sig.history_retention_days == PERMANENT:
+            plan.skipped.append((key, "明细永久保存"))
+        elif sig.history_retention_days is None:
+            plan.skipped.append((key, "没声明明细保留期 —— 跳过，不替它猜一个"))
+        else:
+            plan.actions.append(RetentionAction(
+                key, "observations",
+                (now - _dt.timedelta(days=sig.history_retention_days)).date()))
+
+        agg_days = sig.effective_aggregate_retention_days
+        if agg_days == PERMANENT:
+            plan.skipped.append((key, "日聚合永久保存"))
+        elif agg_days is None:
+            plan.skipped.append((key, "没声明聚合保留期 —— 跳过，不替它猜一个"))
+        else:
+            plan.actions.append(RetentionAction(
+                key, "aggregates",
+                (now - _dt.timedelta(days=agg_days)).date()))
+    return plan
 
 
 def stores_history(signal: str) -> bool:
