@@ -33,6 +33,9 @@ from .algorithms.attribution import attribute_episode, attribute_instant, split_
 from .catalog import CAPABILITIES, SIGNALS
 from .contracts import IngestContext, Observation, PerceptionEvent, ReportEnvelope, WakeReceipt
 from .kit import PerceptionKit
+from .processing.source_sync import (
+    FULL, INCREMENTAL, SyncBatch, SyncContractError, SyncOutcome,
+)
 from .fields import AGENT_PERCEPTION_SIGNALS, project_signal
 from .algorithms.glance import build_perception_glance
 from .algorithms.history import is_historized
@@ -53,6 +56,8 @@ from .algorithms.wake import is_wake_worthy_signal, is_significant_change, shoul
 __all__ = [
     # 接入口
     "PerceptionKit",
+    "SyncBatch", "SyncOutcome", "SyncContractError",
+    "FULL", "INCREMENTAL",
     "ReportEnvelope", "Observation", "PerceptionEvent", "WakeReceipt", "IngestContext",
     "contracts", "manifest", "ports", "processing", "rules",
     # 算法

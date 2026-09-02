@@ -26,6 +26,7 @@ from .ports.wake import WakePort
 from .processing.dispatch import DispatchOutcome, drain
 from .processing.pipeline import AGGREGATION_VERSION, IngestOutcome, ingest_report
 from .processing.recompute import RecomputeOutcome, recompute_range
+from .processing.source_sync import sync_source_mirror
 from .retention import plan_retention
 from .processing.scheduled import ScheduledOutcome, evaluate_absence, evaluate_daily
 from .queries import api as _queries
@@ -142,6 +143,23 @@ class PerceptionKit:
             version=AGGREGATION_VERSION if version is None else version,
             now=now, allow_incomplete=allow_incomplete,
         )
+
+    def sync_source_mirror(self, batch, *, context: IngestContext):
+        """把一批日历/提醒的来源数据落进镜像，并推进同步状态。
+
+        和 :meth:`ingest` 对等的那个入口 —— 来源镜像走的是完全不同的一条路
+        （它存「来源现在有哪些条目」，不是「我们每次看到了什么」），
+        但同样有一串**错了不报错、而且大多不可逆**的规则：增量不许删、
+        全量只在自己声明的范围内删、失败的批次什么都不动也不推进游标、
+        三个动作必须在同一个事务里。
+
+        见 ``processing.source_sync`` 的模块文档 —— 每条规则都配了它对应的
+        那个故障长什么样。
+
+        **不解析来源格式。** 苹果日历、Google、Exchange 的条目长得完全不一样，
+        翻译成标准镜像记录是宿主的活。
+        """
+        return sync_source_mirror(self.storage, batch, context=context)
 
     def run_retention(
         self, *, subject_id: str, now: datetime, dry_run: bool = True,
