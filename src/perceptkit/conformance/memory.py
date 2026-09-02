@@ -164,6 +164,14 @@ class InMemoryStorage:
 
     # -- 聚合 ------------------------------------------------------------
 
+    def delete_aggregates(self, *, subject_id, signal, before) -> int:
+        doomed = [k for k, v in self.aggregates.items()
+                  if v.subject_id == subject_id and v.signal == signal
+                  and v.local_date < before]
+        for k in doomed:
+            del self.aggregates[k]
+        return len(doomed)
+
     def get_aggregate(self, *, subject_id, signal, start_date, end_date,
                       aggregation_kind=None):
         return [
