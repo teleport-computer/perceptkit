@@ -15,6 +15,8 @@ from __future__ import annotations
 import datetime as _dt
 import zoneinfo as _zoneinfo
 
+from ..contracts import _time
+
 INSTANT = "instant"                        # 单点：按其自带 offset 的本地日期
 EPISODE_END = "episode_end"                # 区间：整体归结束（醒来）那天
 SPLIT_AT_MIDNIGHT = "split_at_midnight"    # 可加总时长：按本地午夜切分
@@ -52,14 +54,17 @@ ATTRIBUTION: dict[str, str] = {
 
 
 def _aware(raw: str) -> _dt.datetime:
-    """解析成带 offset 的时刻。没有 offset 就报错 —— 不猜。"""
+    """解析成带 offset 的时刻。没有 offset 就报错 —— 不猜。
+
+    🔴 **走 ``contracts._time`` 那一个解析器，不许自己调 ``fromisoformat``。**
+    3.10 的 ``fromisoformat`` 只认三位或六位小数秒，真实 producer 发的是
+    ``23:59:59.96+08:00`` 这种两位的；自己调就是"3.12 上全绿、3.10 上
+    整条上报被拒"。这个包声明 ``requires-python>=3.10``，那就得真的能跑。
+    """
     try:
-        parsed = _dt.datetime.fromisoformat(str(raw))
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"无法解析时间：{raw!r}") from exc
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError(f"时间缺少时区 offset，拒绝按 UTC 或本机时区猜测：{raw!r}")
-    return parsed
+        return _time.parse_timestamp(raw, field="时间")
+    except _time.TimestampError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def _utc_naive(dtobj: _dt.datetime) -> _dt.datetime:

@@ -179,19 +179,25 @@ class StoragePort(Protocol):
     def list_calendar_events(
         self, *, subject_id: str,
         start: datetime | None = None, end: datetime | None = None,
-        limit: int = 50,
+        limit: int = 50, offset: int = 0,
     ) -> Sequence[CalendarEventMirror]:
         """镜像里现在还存在的日程，按开始时间排序。
 
         产品规范的端口清单里只有写入没有读取 —— 但读取侧要用，不给它一个
         端口方法，实现就只能去摸具体存储的内部结构，换个宿主就静默返回空。
+
+        🔴 ``offset`` 必须真的下推到存储。分页的语义是"一页最多这么多"，
+        不是"这个人最多只能看到这么多" —— 读一批固定上限回来再在内存里切页，
+        游标就只在那一批里打转，第 N+1 条**永远**取不到，而且不报错：
+        用户看到的是"我八月没有日程"，不是"结果被截断了"。
         """
         ...
 
     def list_reminders(
-        self, *, subject_id: str, include_completed: bool = False, limit: int = 50,
+        self, *, subject_id: str, include_completed: bool = False,
+        limit: int = 50, offset: int = 0,
     ) -> Sequence[ReminderItemMirror]:
-        """镜像里现在还存在的提醒事项。理由同上。"""
+        """镜像里现在还存在的提醒事项。``offset`` 的要求同上。"""
         ...
 
     def apply_source_snapshot(
@@ -270,7 +276,31 @@ class StoragePort(Protocol):
     def list_pending_events(
         self, *, subject_id: str | None = None, limit: int = 100,
     ) -> Sequence[EventOutboxEntry]:
-        """列出还没送达的事件。给宿主的 worker 和 backlog 告警用。"""
+        """列出还没送达的事件。给宿主的 worker 和 backlog 告警用。
+
+        **只给 worker 用。** 排查要看的是 suppressed / rejected 这些终态，
+        那些事件按定义不在这里 —— 排查走 :meth:`list_events`。
+        """
+        ...
+
+    def list_events(
+        self, *, subject_id: str,
+        delivery_states: Sequence[str] | None = None,
+        event_type: str | None = None,
+        start: datetime | None = None, end: datetime | None = None,
+        limit: int = 50, offset: int = 0,
+    ) -> Sequence[EventOutboxEntry]:
+        """**任何投递状态**的事件，按 ``occurred_at`` 倒序（新的在前）。
+
+        这是"为什么没提醒我"的唯一答案来源。那个问题的答案通常**不是**
+        pending，而是 suppressed（撞了安静时段/冷却）或 rejected（宿主拒了）
+        —— 而这两种恰好都是终态，用 :meth:`list_pending_events` 一条都看不到，
+        看上去就像这个事件"压根没产生过"，排查直接走进死胡同。
+
+        三个筛选条件（状态 / 类型 / 时间窗）和 ``offset`` **都必须下推到存储**。
+        取一批回来再在内存里筛，等于"只在最近这批里找 suppressed"，
+        找不到不代表没有。
+        """
         ...
 
     # -- 用户数据 --------------------------------------------------------

@@ -42,18 +42,43 @@ def _clamp(limit: int) -> int:
     return max(1, min(int(limit or DEFAULT_LIMIT), MAX_LIMIT))
 
 
-def _page(rows: list, cursor: str | None, limit: int) -> tuple[list, str | None]:
-    """按偏移量分页。
+#: 日历展开时一次从存储读多少条基础日程。展开会放大条数，所以按"读一批、
+#: 展开、够一页就停"来走，而不是先取一个固定上限再切页。
+_BASE_CHUNK = 100
 
-    **只用在有界集合上**（一个人的日历镜像、待投递的事件）—— 观测时间线
-    那种可能上百万行的，用的是 ``(occurred_at, observation_id)`` 键游标，
-    因为偏移量分页在中间插入一条迟到数据时会漏掉或重复一条，而且不报错。
-    这里的集合不会被中途插入到打乱顺序的程度，用偏移量换取不改端口。
+
+def _join_cursor(base_at: int, inner_at: int) -> str:
+    return f"{base_at}:{inner_at}"
+
+
+def _split_cursor(cursor: str | None) -> tuple[int, int]:
+    """日历的复合游标：``"读到第几条基础日程:那一条展开后消费到第几个"``。
+
+    需要两个数是因为一条重复日程会展开成几十条 —— 一页在它中间用完时，
+    只记"读到第几条"会把这条日程从头再给一遍。
     """
-    start = int(cursor) if cursor else 0
-    size = _clamp(limit)
-    page = rows[start:start + size]
-    return page, (str(start + size) if start + size < len(rows) else None)
+    if not cursor:
+        return 0, 0
+    base, _, inner = str(cursor).partition(":")
+    try:
+        return max(0, int(base)), max(0, int(inner or 0))
+    except ValueError:
+        return 0, 0
+
+
+def _offset(cursor: str | None) -> int:
+    """游标就是偏移量，**下推给存储**。坏游标当第一页，不炸在用户脸上。
+
+    🔴 **不许"从存储读一个固定上限回来、再在内存里切页"。** 那是一次静默
+    截断：存储只给了前 N 条，游标就只在这 N 条里打转，第 N+1 条永远取不到，
+    而且没有任何错误 —— 用户看到的是"我八月没有日程"，不是"结果被截断了"。
+    同理，按状态/类型筛也必须下推：在"最近 N 条"里找 suppressed，找不到
+    不代表没有。
+    """
+    try:
+        return max(0, int(cursor)) if cursor else 0
+    except (TypeError, ValueError):
+        return 0
 
 
 def visible_fields(sig: SignalDefinition, *, on_demand: bool = True) -> tuple[str, ...]:
@@ -263,49 +288,76 @@ def list_calendar_events(
     ⚠️ 同步长期失败时应该显示 stale，而不是继续声称这是最新完整的数据 ——
     调用方要自己去看 ``SourceSyncState.last_successful_sync_at``。
     """
-    # 先按窗口取一批（上限而不是页大小 —— 重复日程展开之后条数会变多，
-    # 按页大小取会让展开后不足一页）。
-    rows = storage.list_calendar_events(
-        subject_id=subject_id, start=start, end=end, limit=MAX_LIMIT,
-    )
+    size = _clamp(limit)
+    base_at, inner_at = _split_cursor(cursor)
     out: list[dict[str, Any]] = []
-    for e in rows:
-        base = {"source_event_id": e.source_event_id, **e.event_fields}
-        rule_raw = e.event_fields.get("recurrence")
-        if not rule_raw or start is None or end is None:
-            # 没有窗口就不展开 —— "把所有重复日程都给我"对一条无限重复的
-            # 规则没有答案，只有一个上限截断出来的假象。
-            out.append(base)
-            continue
-        try:
-            rule = _recurrence.RecurrenceRule.parse(rule_raw)
-            occurrences = _recurrence.expand(
-                e.event_fields["start_at"], rule,
-                window_start=start.date(), window_end=end.date(),
-            )
-        except (_recurrence.RecurrenceUnsupported, KeyError, ValueError) as exc:
-            # 展不开就把系列本身交出去并说清原因，**不猜日期**。
-            # 算错重复日程会让用户准时出现在一个不存在的会议上。
-            out.append({**base, "recurrence_expanded": False,
-                        "recurrence_note": str(exc)})
-            continue
-        for at in occurrences:
-            out.append({**base, "start_at": at, "recurrence_expanded": True,
-                        "recurrence_identity": e.recurrence_identity
-                        or e.source_event_id})
-    return _page(out, cursor, limit)
+    # 一批一批地从存储读，读到够一页就停 —— **不是**先取 MAX_LIMIT 条再切页。
+    # 展开会把一条基础日程变成几十条，所以"读了几条"和"产出几条"对不上，
+    # 游标必须记两个位置：读到第几条基础日程、以及那一条展开后消费到第几个。
+    while True:
+        rows = storage.list_calendar_events(
+            subject_id=subject_id, start=start, end=end,
+            limit=_BASE_CHUNK, offset=base_at,
+        )
+        if not rows:
+            return out, None
+        for e in rows:
+            base = {"source_event_id": e.source_event_id, **e.event_fields}
+            rule_raw = e.event_fields.get("recurrence")
+            if not rule_raw or start is None or end is None:
+                # 没有窗口就不展开 —— "把所有重复日程都给我"对一条无限重复的
+                # 规则没有答案，只有一个上限截断出来的假象。
+                produced = [base]
+            else:
+                try:
+                    rule = _recurrence.RecurrenceRule.parse(rule_raw)
+                    occurrences = _recurrence.expand(
+                        e.event_fields["start_at"], rule,
+                        window_start=start.date(), window_end=end.date(),
+                    )
+                except (_recurrence.RecurrenceUnsupported, KeyError,
+                        ValueError) as exc:
+                    # 展不开就把系列本身交出去并说清原因，**不猜日期**。
+                    # 算错重复日程会让用户准时出现在一个不存在的会议上。
+                    produced = [{**base, "recurrence_expanded": False,
+                                 "recurrence_note": str(exc)}]
+                else:
+                    produced = [
+                        {**base, "start_at": at, "recurrence_expanded": True,
+                         "recurrence_identity": e.recurrence_identity
+                         or e.source_event_id}
+                        for at in occurrences
+                    ]
+            # 上一页停在这条日程中间的话，跳过已经给过的那几个展开项。
+            skipped, inner_at = inner_at, 0
+            rest = produced[skipped:]
+            room = size - len(out)
+            if len(rest) > room:
+                out.extend(rest[:room])
+                # 这一条还没给完 —— 游标停在**它身上**，不是它后面。
+                return out, _join_cursor(base_at, skipped + room)
+            out.extend(rest)
+            base_at += 1
+            if len(out) >= size:
+                return out, _join_cursor(base_at, 0)
+        if len(rows) < _BASE_CHUNK:
+            return out, None
 
 
 def list_reminders(
     storage: StoragePort, *, subject_id: str, include_completed: bool = False,
     cursor: str | None = None, limit: int = DEFAULT_LIMIT,
 ) -> tuple[list[dict[str, Any]], str | None]:
-    rows = storage.list_reminders(
+    at, size = _offset(cursor), _clamp(limit)
+    # 多读一条只为判断"还有没有下一页" —— 不下推 offset 的话游标就只在
+    # 头 MAX_LIMIT 条里打转，第 MAX_LIMIT+1 条永远取不到。
+    rows = list(storage.list_reminders(
         subject_id=subject_id, include_completed=include_completed,
-        limit=MAX_LIMIT,
-    )
-    return _page([{"source_reminder_id": r.source_reminder_id, **r.reminder_fields}
-                  for r in rows], cursor, limit)
+        limit=size + 1, offset=at,
+    ))
+    more = len(rows) > size
+    return [{"source_reminder_id": r.source_reminder_id, **r.reminder_fields}
+            for r in rows[:size]], (str(at + size) if more else None)
 
 
 def list_events(
@@ -323,17 +375,18 @@ def list_events(
     返回 ``(事件, 下一页游标)``。所有 list 查询都必须分页或有明确上限
     （产品规范 §15）。
     """
-    rows = list(storage.list_pending_events(subject_id=subject_id,
-                                            limit=MAX_LIMIT))
-    if status is not None:
-        rows = [e for e in rows if e.delivery_state == status]
-    if event_type is not None:
-        rows = [e for e in rows if e.event_type == event_type]
-    if start is not None:
-        rows = [e for e in rows if e.occurred_at >= start]
-    if end is not None:
-        rows = [e for e in rows if e.occurred_at <= end]
-    page, nxt = _page(rows, cursor, limit)
+    at, size = _offset(cursor), _clamp(limit)
+    # 🔴 走 list_events 而不是 list_pending_events —— 后者按定义过滤掉所有
+    # 终态，而 suppressed / rejected 恰好都是终态，也恰好是这个查询要回答的
+    # 那个问题的答案。用 pending 那个端口，"为什么没提醒我"永远查不出来。
+    page = list(storage.list_events(
+        subject_id=subject_id,
+        delivery_states=(status,) if status is not None else None,
+        event_type=event_type, start=start, end=end,
+        limit=size + 1, offset=at,
+    ))
+    nxt = str(at + size) if len(page) > size else None
+    page = page[:size]
     return [
         {
             "event_id": e.event_id, "type": e.event_type,

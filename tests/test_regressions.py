@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import datetime as _real_dt
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -854,3 +855,171 @@ def test_a_stopped_player_is_a_state_the_system_can_hold():
     current = storage.get_current(subject_id="u", signals=["music_playback"]
                                   )["music_playback"][0]
     assert current.typed_value["playback_state"] == "stopped"
+
+
+# ---------------------------------------------------------------------------
+# I12 —— 「为什么没提醒我」这个问题，代码保证答不出来
+#
+# list_events 的 docstring 自己写着「答案往往不是 pending，而是 suppressed
+# 或 rejected」，下一行就调了 list_pending_events()，而它恰好过滤掉所有终态。
+# ---------------------------------------------------------------------------
+
+def _outbox(storage, subject, *, state, event_type="x", at=None, n=1):
+    from perceptkit.contracts.records import EventOutboxEntry
+    when = at or datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    for i in range(n):
+        eid = f"{state}-{event_type}-{i}"
+        storage.outbox[eid] = EventOutboxEntry(
+            event_id=eid, subject_id=subject, definition_id="d",
+            definition_version=1, event_type=event_type,
+            occurred_at=when + timedelta(seconds=i), detected_at=when,
+            fact_snapshot={}, delivery_state=state,
+        )
+
+
+def test_suppressed_events_are_visible_to_the_why_did_it_not_wake_me_query():
+    """被安静时段压掉的事件，排查时必须能查到。
+
+    它是终态，所以「待投递」那个端口按定义看不到它 —— 而它恰恰是
+    「为什么没提醒我」最常见的那个答案。查不到的话，排查看到的是
+    「压根没产生过这个事件」，方向直接错了。
+    """
+    from perceptkit.queries import api
+    s = InMemoryStorage()
+    _outbox(s, "u", state=delivery.SUPPRESSED)
+    _outbox(s, "u", state=delivery.REJECTED)
+    _outbox(s, "u", state=delivery.PENDING)
+
+    rows, _ = api.list_events(s, subject_id="u")
+    assert {r["delivery_state"] for r in rows} == {
+        delivery.SUPPRESSED, delivery.REJECTED, delivery.PENDING}
+
+    only, _ = api.list_events(s, subject_id="u", status=delivery.SUPPRESSED)
+    assert [r["delivery_state"] for r in only] == [delivery.SUPPRESSED]
+
+
+def test_status_filter_is_not_applied_to_only_the_first_batch():
+    """按状态筛必须下推到存储。
+
+    在"最近 N 条"里筛 suppressed，找不到不代表没有 —— 而这个查询的
+    全部用途就是把那一条找出来。
+    """
+    from perceptkit.queries import api
+    s = InMemoryStorage()
+    base = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    # 一条老的 suppressed，后面压着 800 条更新的 delivered。
+    _outbox(s, "u", state=delivery.SUPPRESSED, event_type="old", at=base)
+    _outbox(s, "u", state=delivery.DELIVERED, event_type="noise",
+            at=base + timedelta(days=1), n=800)
+
+    rows, _ = api.list_events(s, subject_id="u", status=delivery.SUPPRESSED)
+    assert [r["type"] for r in rows] == ["old"]
+
+
+# ---------------------------------------------------------------------------
+# I13 —— 「一页最多 500 条」被实现成「一个人最多只能看到 500 条」
+#
+# 从存储取一个固定上限、再在内存里切页：游标只在那一批里打转，
+# 第 501 条永远取不到，而且不报错。用户看到的是"我八月没有日程"。
+# ---------------------------------------------------------------------------
+
+def _reminders(storage, subject, n):
+    from perceptkit.contracts.records import ReminderItemMirror
+    base = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    for i in range(n):
+        rid = f"r{i:04d}"
+        storage.reminders[(subject, rid)] = ReminderItemMirror(
+            subject_id=subject, source_account_id="a", source_list_id="l",
+            source_reminder_id=rid,
+            reminder_fields={"title": rid, "due_at": base + timedelta(minutes=i)},
+        )
+
+
+def test_pagination_can_reach_past_the_read_batch_limit():
+    """翻页要真的能翻到第 600 条，而不是在前 500 条里绕圈。"""
+    from perceptkit.queries import api
+    s = InMemoryStorage()
+    _reminders(s, "u", 600)
+
+    seen, cursor, pages = [], None, 0
+    while True:
+        rows, cursor = api.list_reminders(s, subject_id="u", cursor=cursor,
+                                          limit=50)
+        seen.extend(r["source_reminder_id"] for r in rows)
+        pages += 1
+        if cursor is None or pages > 40:
+            break
+    assert len(seen) == 600, f"只翻到 {len(seen)} 条"
+    assert len(set(seen)) == 600, "有重复"
+    assert "r0599" in seen
+
+
+def test_calendar_pagination_walks_the_whole_mirror():
+    """日历同理 —— 而且展开重复日程时，游标不能把一条日程重给一遍。"""
+    from perceptkit.contracts.records import CalendarEventMirror
+    from perceptkit.queries import api
+    s = InMemoryStorage()
+    base = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    for i in range(600):
+        eid = f"c{i:04d}"
+        s.calendar[("u", eid)] = CalendarEventMirror(
+            subject_id="u", source_account_id="a", source_calendar_id="c",
+            source_event_id=eid,
+            event_fields={"title": eid, "start_at": base + timedelta(minutes=i)},
+        )
+
+    seen, cursor, pages = [], None, 0
+    while True:
+        rows, cursor = api.list_calendar_events(s, subject_id="u",
+                                                cursor=cursor, limit=50)
+        seen.extend(r["source_event_id"] for r in rows)
+        pages += 1
+        if cursor is None or pages > 40:
+            break
+    assert len(seen) == 600, f"只翻到 {len(seen)} 条"
+    assert len(set(seen)) == 600, "有重复"
+
+
+# ---------------------------------------------------------------------------
+# I14 —— 3.10 上两位小数秒的时间戳整条被拒
+#
+# 包声明 requires-python>=3.10，CI 只跑 3.12。3.10 的 fromisoformat 只认
+# 三位或六位小数秒，而真实 producer 发的是 23:59:59.96+08:00 这种。
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("raw", [
+    "2026-08-19T23:59:59.96+08:00",      # 两位小数秒 —— 3.10 的 fromisoformat 不认
+    "2026-08-19T23:59:59.96Z",           # 3.10 也不认 Z
+    "2026-08-19T23:59:59.9+08:00",       # 一位
+    "2026-08-19T23:59:59+08:00",
+    "2026-08-19T23:59:59.123456+08:00",
+])
+def test_producer_timestamps_parse_without_the_lenient_fromisoformat(raw, monkeypatch):
+    """把 fromisoformat 打断，模拟 3.10 那个窄版本。
+
+    直接跑不算证明 —— 本机是 3.12+，那一层是宽的，narrow 路径根本没被走到。
+    """
+    from perceptkit.contracts import _time
+    from perceptkit.algorithms import attribution
+
+    class Narrow(datetime):
+        @classmethod
+        def fromisoformat(cls, _s):
+            raise ValueError("3.10 的 fromisoformat 不认这个")
+
+    class NarrowModule:
+        """把 datetime 模块整个换掉 —— 谁在这个模块里调 fromisoformat 都变窄。
+
+        只打断 ``_time`` 那一份不算数：绕开 ``_time`` 自己调 ``_dt.datetime``
+        的代码拿到的还是本机那个宽版本，测试会假绿。
+        """
+        datetime = Narrow
+        date = _real_dt.date
+        timedelta = _real_dt.timedelta
+        timezone = _real_dt.timezone
+
+    monkeypatch.setattr(_time, "datetime", Narrow)
+    monkeypatch.setattr(attribution, "_dt", NarrowModule)
+    assert _time.parse_timestamp(raw).year == 2026
+    # 归属那一层以前自己调 fromisoformat，绕开了这个解析器。
+    assert attribution.attribute_instant(raw) == "2026-08-19"
