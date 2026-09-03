@@ -228,12 +228,12 @@ def _g8_partial_sync_does_not_delete_outside_its_window(new: StorageFactory) -> 
     problems: list[str] = []
     s = new()
     inside = CalendarEventMirror(
-        subject_id="u1", source_account_id="a", source_calendar_id="c",
+        subject_id="u1", source="ios", source_account_id="a", source_calendar_id="c",
         source_event_id="e_in", event_fields={"start_at": T0},
         last_seen_sync_id="old",
     )
     outside = CalendarEventMirror(
-        subject_id="u1", source_account_id="a", source_calendar_id="c",
+        subject_id="u1", source="ios", source_account_id="a", source_calendar_id="c",
         source_event_id="e_out", event_fields={"start_at": T0 - timedelta(days=400)},
         last_seen_sync_id="old",
     )
@@ -348,7 +348,7 @@ def _g11_both_source_mirrors_round_trip(new: StorageFactory) -> list[str]:
     problems: list[str] = []
     s = new()
     s.upsert_calendar_events(subject_id="u1", events=[CalendarEventMirror(
-        subject_id="u1", source_account_id="a", source_calendar_id="c",
+        subject_id="u1", source="ios", source_account_id="a", source_calendar_id="c",
         source_event_id="e1", event_fields={"title": "站会", "start_at": T0},
     )])
     got = list(s.list_calendar_events(subject_id="u1", limit=10))
@@ -357,7 +357,7 @@ def _g11_both_source_mirrors_round_trip(new: StorageFactory) -> list[str]:
 
     s2 = new()
     s2.upsert_reminders(subject_id="u1", items=[ReminderItemMirror(
-        subject_id="u1", source_account_id="a", source_list_id="l",
+        subject_id="u1", source="ios", source_account_id="a", source_list_id="l",
         source_reminder_id="r1", reminder_fields={"title": "买牛奶",
                                                   "is_completed": False},
     )])
@@ -368,7 +368,7 @@ def _g11_both_source_mirrors_round_trip(new: StorageFactory) -> list[str]:
         )
     # 已完成的默认不出现，除非明说要。
     s2.upsert_reminders(subject_id="u1", items=[ReminderItemMirror(
-        subject_id="u1", source_account_id="a", source_list_id="l",
+        subject_id="u1", source="ios", source_account_id="a", source_list_id="l",
         source_reminder_id="r2", reminder_fields={"title": "交房租",
                                                   "is_completed": True},
     )])
@@ -447,7 +447,7 @@ def _g12_terminal_events_and_offsets_are_queryable(new: StorageFactory) -> list[
 
     s2 = new()
     s2.upsert_calendar_events(subject_id="u1", events=[CalendarEventMirror(
-        subject_id="u1", source_account_id="a", source_calendar_id="c",
+        subject_id="u1", source="ios", source_account_id="a", source_calendar_id="c",
         source_event_id=f"e{i}",
         event_fields={"title": f"e{i}", "start_at": base + timedelta(minutes=i)},
     ) for i in range(4)])
@@ -460,7 +460,7 @@ def _g12_terminal_events_and_offsets_are_queryable(new: StorageFactory) -> list[
 
     s3 = new()
     s3.upsert_reminders(subject_id="u1", items=[ReminderItemMirror(
-        subject_id="u1", source_account_id="a", source_list_id="l",
+        subject_id="u1", source="ios", source_account_id="a", source_list_id="l",
         source_reminder_id=f"r{i}",
         reminder_fields={"title": f"r{i}", "is_completed": False,
                          "due_at": base + timedelta(minutes=i)},

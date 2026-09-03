@@ -196,14 +196,16 @@ class InMemoryStorage:
         self.sync_state[(state.subject_id, state.source, state.collection_kind)] = state
 
     def upsert_calendar_events(self, *, subject_id, events) -> None:
+        # 键里带 source —— 少了它，两个来源系统里碰巧同 id 的日程会互相覆盖，
+        # 而全量同步还会把另一个来源的条目当成"这轮没见到"删掉。
         for e in events:
-            self.calendar[(subject_id, e.source_account_id, e.source_calendar_id,
-                           e.source_event_id)] = e
+            self.calendar[(subject_id, e.source, e.source_account_id,
+                           e.source_calendar_id, e.source_event_id)] = e
 
     def upsert_reminders(self, *, subject_id, items) -> None:
         for r in items:
-            self.reminders[(subject_id, r.source_account_id, r.source_list_id,
-                            r.source_reminder_id)] = r
+            self.reminders[(subject_id, r.source, r.source_account_id,
+                            r.source_list_id, r.source_reminder_id)] = r
 
     def list_calendar_events(self, *, subject_id, start=None, end=None,
                              limit=50, offset=0):
@@ -235,6 +237,17 @@ class InMemoryStorage:
                                  i.source_reminder_id))
         return keep[offset:offset + limit]
 
+    def delete_source_items(self, *, subject_id, source, collection_kind,
+                            source_item_ids) -> int:
+        store = self.calendar if collection_kind == "calendar" else self.reminders
+        wanted = set(source_item_ids)
+        # key = (subject, source, account, collection, item_id) —— 最后一位是 id。
+        doomed = [k for k in store
+                  if k[0] == subject_id and k[1] == source and k[-1] in wanted]
+        for k in doomed:
+            del store[k]
+        return len(doomed)
+
     def apply_source_snapshot(self, *, subject_id, source, collection_kind, sync_id,
                               coverage_start, coverage_end, snapshot_kind) -> int:
         # 增量同步没有资格删任何东西 —— 它只知道"变了什么"，不知道"还剩什么"。
@@ -243,7 +256,11 @@ class InMemoryStorage:
         store = self.calendar if collection_kind == "calendar" else self.reminders
         doomed = []
         for key, item in store.items():
-            if key[0] != subject_id or item.last_seen_sync_id == sync_id:
+            # 🔴 必须同时限定 subject **和 source**。只按 subject 删的话，
+            # 一次 source="ios" 的全量同步会把 Google 日历的条目一起删掉 ——
+            # 它们当然没出现在这一轮 ios 的批次里。
+            if (key[0] != subject_id or item.source != source
+                    or item.last_seen_sync_id == sync_id):
                 continue
             # 🔴 只删【能证明落在覆盖范围内】的。拿局部窗口去删窗口外的数据，
             # 会让用户发现自己去年的日程凭空消失，而且不可逆。

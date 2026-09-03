@@ -46,6 +46,9 @@ INCREMENTAL = "incremental"
 CALENDAR = "calendar"
 REMINDERS = "reminders"
 
+#: 集合种类 -> 它唯一接受的条目类型。
+_ITEM_TYPE = {CALENDAR: CalendarEventMirror, REMINDERS: ReminderItemMirror}
+
 
 class SyncContractError(ValueError):
     """这一批的声明本身自相矛盾，处理它会造成不可逆的损失。
@@ -73,6 +76,13 @@ class SyncBatch:
     cursor: str | None = None
     attempted_at: datetime | None = None
     completed_at: datetime | None = None
+    #: 来源**明确说**被删掉的条目身份。见 ``sync_source_mirror`` 的文档。
+    #:
+    #: 和「这一批里没出现」是两回事：没出现推断不出删除（增量只知道变了什么，
+    #: 不知道还剩什么），但来源的 change feed 明确传来一条删除时，
+    #: 那是确定的事实，必须执行 —— 否则用户在手机上删掉的日程，
+    #: 在 agent 眼里永远还在。
+    deleted_item_ids: Sequence[str] = field(default_factory=tuple)
     #: 非空 = 这一批**没有成功拿到**。见 ``SyncOutcome`` 的文档。
     error_code: str | None = None
 
@@ -82,7 +92,12 @@ class SyncOutcome:
     """这一轮做了什么。``failed`` 时 ``upserted`` / ``deleted`` 一定是 0。"""
 
     upserted: int = 0
+    #: 全量收尾按范围删掉的条数。
     deleted: int = 0
+    #: 按来源明确的 tombstone 删掉的条数。和上面一个分开数 —— 一个是
+    #: "这轮没见到所以删"，一个是"来源说删了"，混在一起就分不清
+    #: 某次异常删除是范围判断出错还是来源真的删了。
+    tombstoned: int = 0
     failed: bool = False
     #: 记下来的错误码，原样来自这一批。
     error_code: str | None = None
@@ -162,6 +177,8 @@ def sync_source_mirror(
 
     with storage.transaction():
         upserted = _upsert(storage, batch, context)
+        # 来源明确的删除，全量和增量都执行 —— 它不是推断出来的。
+        tombstoned = _apply_tombstones(storage, batch, context)
         deleted = 0
         if kind == FULL:
             # 只有全量才有资格删，而且只在它自己声明的范围内。
@@ -189,8 +206,32 @@ def sync_source_mirror(
             last_error_code=None,
         ))
     return SyncOutcome(upserted=upserted, deleted=deleted,
+                       tombstoned=tombstoned,
                        cursor=batch.cursor if batch.cursor is not None
                        else prior_cursor)
+
+
+def _apply_tombstones(storage: StoragePort, batch: SyncBatch,
+                      context: IngestContext) -> int:
+    """执行来源**明确传来**的删除。
+
+    这和全量收尾的删除是两件事，别合并：
+
+        全量收尾   "覆盖范围内、这轮没见到的" —— 推断出来的，所以只有全量
+                   有资格，而且必须限定在声明的范围内
+        tombstone  "来源说这条删了" —— 确定的事实，增量也必须执行
+
+    早先把增量定义成「一条都不许删」，防住了「拿局部列表当全量」，
+    但同时也堵死了这条：用户在手机上删掉的日程，在 agent 眼里永远还在，
+    而且它会一直出现在"接下来有什么安排"里。
+    """
+    ids = [str(i) for i in (batch.deleted_item_ids or ()) if str(i).strip()]
+    if not ids:
+        return 0
+    return int(storage.delete_source_items(
+        subject_id=context.subject_id, source=batch.source,
+        collection_kind=batch.collection_kind, source_item_ids=ids,
+    ) or 0)
 
 
 def _upsert(storage: StoragePort, batch: SyncBatch,
@@ -204,20 +245,51 @@ def _upsert(storage: StoragePort, batch: SyncBatch,
     # 不打的话，刚写进去的条目在同一个事务里被自己的快照收尾删掉 ——
     # 一次"成功"的全量同步，结果是镜像空了。
     # 这个由 kit 打，不指望宿主记得：忘了不报错，只是数据没了。
-    items = [replace(i, last_seen_sync_id=batch.sync_id) for i in items]
+    # 这一批声明的 source 和 sync_id 由 kit 盖上去，不要求宿主在每个条目上
+    # 再写一遍。两者忘了都不报错，但后果不一样：
+    #   sync_id 忘了 → 刚写进去的被自己的快照收尾删掉
+    #   source  忘了 → 这批条目落在别的来源名下，下次那个来源的全量同步删掉它们
+    # 🔴 subject 一律用**可信上下文**的，不用条目自己带的那个。
+    #
+    # 条目是宿主从来源数据翻译出来的，它带的 subject_id 最好的情况是冗余、
+    # 最坏的情况是把 A 的日程写进 B 的花园。可信 subject 只有一个来源：
+    # IngestContext —— 那是宿主鉴权之后填的，不经过来源数据也不经过模型。
+    # 校验一致再拒绝也行，但覆盖更彻底：没有"该信哪个"这个问题存在。
+    items = [replace(i, subject_id=context.subject_id, source=batch.source,
+                     last_seen_sync_id=batch.sync_id)
+             for i in items]
     kinds = {type(i) for i in items}
-    if kinds == {CalendarEventMirror}:
-        storage.upsert_calendar_events(subject_id=context.subject_id,
-                                       events=items)
-    elif kinds == {ReminderItemMirror}:
-        storage.upsert_reminders(subject_id=context.subject_id, items=items)
-    else:
+    if len(kinds) > 1:
         # 混着来说明宿主那边的翻译出了问题。挑一部分写进去、剩下的丢掉，
         # 会得到一份"成功了"的半份镜像。
         raise SyncContractError(
             f"一批里混了 {sorted(k.__name__ for k in kinds)}："
             f"一次同步只处理一种集合，混着来会写出一份看起来成功的半份镜像"
         )
+    # 🔴 声明的集合种类必须和条目类型对上。
+    #
+    # 不校验的话，「collection_kind=reminders + 一批日历条目」会被照单全收：
+    # 日历表被写进去了，而**提醒的同步游标往前推进了** —— 数据和游标从此
+    # 互相矛盾，下一轮增量提醒同步会以为上一轮成功了，那段提醒永远补不回来。
+    expected = _ITEM_TYPE.get(batch.collection_kind)
+    if expected is None:
+        raise SyncContractError(
+            f"不认识的 collection_kind={batch.collection_kind!r}："
+            f"只有 {CALENDAR!r} 和 {REMINDERS!r}。放过去的话，"
+            f"这批数据会落在一个没人读的地方，而同步状态说成功了"
+        )
+    actual = kinds.pop()
+    if actual is not expected:
+        raise SyncContractError(
+            f"collection_kind={batch.collection_kind!r} 声明的是 "
+            f"{expected.__name__}，实际给的是 {actual.__name__}："
+            f"照做会把数据写进一张表、把另一张表的游标往前推"
+        )
+    if expected is CalendarEventMirror:
+        storage.upsert_calendar_events(subject_id=context.subject_id,
+                                       events=items)
+    else:
+        storage.upsert_reminders(subject_id=context.subject_id, items=items)
     return len(items)
 
 

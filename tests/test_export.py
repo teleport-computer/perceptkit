@@ -36,11 +36,11 @@ def build() -> tuple[PerceptionKit, InMemoryStorage]:
         ],
     }, context=IngestContext("u1", when("09:00")))
     s.upsert_calendar_events(subject_id="u1", events=[CalendarEventMirror(
-        subject_id="u1", source_account_id="a", source_calendar_id="c",
+        subject_id="u1", source="ios", source_account_id="a", source_calendar_id="c",
         source_event_id="e1",
         event_fields={"title": "牙医", "start_at": when("15:00")})])
     s.upsert_reminders(subject_id="u1", items=[ReminderItemMirror(
-        subject_id="u1", source_account_id="a", source_list_id="l",
+        subject_id="u1", source="ios", source_account_id="a", source_list_id="l",
         source_reminder_id="r1",
         reminder_fields={"title": "交房租", "is_completed": True})])
     return kit, s

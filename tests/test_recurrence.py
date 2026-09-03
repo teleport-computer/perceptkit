@@ -149,7 +149,7 @@ def series(rule: dict | None = None) -> CalendarEventMirror:
     if rule is not None:
         fields["recurrence"] = rule
     return CalendarEventMirror(
-        subject_id="u1", source_account_id="a", source_calendar_id="c",
+        subject_id="u1", source="ios", source_account_id="a", source_calendar_id="c",
         source_event_id="weekly-standup", event_fields=fields,
         recurrence_identity="series-1",
     )

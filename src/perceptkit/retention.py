@@ -28,6 +28,12 @@ KEEP_FOREVER = None
 
 _DAY = 86400.0
 
+# ⚠️ **这张表不再是任何查询的依据。** 它是早期设计的记录，键还是旧目录名。
+# 唯一的真相是 manifest（``manifest.minimal.MINIMAL_SIGNALS``），
+# ``retention_days()`` / ``stores_history()`` 现在都从那里查。
+# 保留它是因为下面那段 weather 的注释记着一次真实的四表打架，值得留着；
+# 但**别再往里加条目，也别照它做判断**。
+#
 # signal -> 保留天数；None = 永久；不在表里 = 不进历史表
 RETENTION_DAYS: dict[str, int | None] = {
     # 永久：趋势本身就是价值
@@ -178,17 +184,64 @@ def plan_retention(
     return plan
 
 
+#: 旧目录名 -> manifest 里的信号名。
+#:
+#: 这是一张**显式的兼容表**，不是第二套目录。它存在的唯一理由是老调用方还在
+#: 用旧名；查出来的答案一律来自 manifest。
+#:
+#: 🔴 审查（2026-09-03 §9）复现的：这两个公开函数原本读的是本模块自己那张
+#: ``RETENTION_DAYS``，和 manifest 七条全对不上 ——
+#: ``retention_days("focus_state")`` 抛 KeyError（manifest 说 365）、
+#: ``retention_days("audio_route")`` 返回 90（manifest 说 7）。
+#: 接入方和工程 AI 调公开 API 会拿到错的结论，而且没有任何地方报错。
+#: **同一件事有两个真相时，公开 API 必须指向那个会被执行的那个。**
+_LEGACY_NAMES: dict[str, str] = {
+    "focus": "focus_state",
+    "playback": "music_playback",
+    "location_signal": "location_city",
+}
+
+
+def _resolve(signal: str) -> "SignalDefinition | None":
+    from .manifest.minimal import MINIMAL_SIGNALS
+    return MINIMAL_SIGNALS.get(_LEGACY_NAMES.get(signal, signal))
+
+
 def stores_history(signal: str) -> bool:
-    """这个信号进不进历史表。"""
-    return signal in RETENTION_DAYS
+    """这个信号进不进历史表。**答案来自 manifest。**"""
+    sig = _resolve(signal)
+    return bool(sig and sig.stores_history)
 
 
-def retention_days(signal: str) -> int | None:
-    """保留天数；``KEEP_FOREVER``（None）表示永久。
+def retention_days(signal: str) -> int:
+    """明细保留多少天；``PERMANENT``（-1）= 永久。
 
-    不进历史表的信号调用这个是调用方的错，直接抛 —— 静默返回 None 会被
-    误当成「永久」，那是最坏的一种默认值。
+    **答案来自 manifest**，不是本模块顶上那张历史表 —— 那张表现在只作为
+    早期设计的记录留着，不再是任何查询的依据。
+
+    🔴 **不进历史表的信号抛 ``KeyError``，不返回 ``None``。**
+    这是本模块早就定下的决策，改用 manifest 之后仍然成立，而且理由更硬了：
+    旧表里 ``None`` 是「永久保存」（``KEEP_FOREVER``）。静默返回 ``None``
+    的话，一个照旧词表理解的调用方会把「这个信号根本不存历史」读成
+    「永久保留」—— 两个意思正好相反，而且不会有任何地方报错。
+
+    问"存不存历史"用 :func:`stores_history`，那才是它该回答的问题。
     """
-    if signal not in RETENTION_DAYS:
-        raise KeyError(f"signal {signal!r} 不进历史表，先用 stores_history() 判断")
-    return RETENTION_DAYS[signal]
+    sig = _resolve(signal)
+    if sig is None or not sig.stores_history:
+        raise KeyError(
+            f"{signal!r} 不进历史表，没有明细保留期。"
+            f"想问存不存历史用 stores_history()；"
+            f"这里不返回 None —— 旧词表里 None 是「永久保存」，"
+            f"两个意思正好相反"
+        )
+    return sig.history_retention_days
+
+
+__all__ = [
+    "KEEP_FOREVER", "RETENTION_DAYS", "MEASURED_AT_TTL_SEC", "LIFECYCLE_NOTE",
+    "RetentionAction", "RetentionPlan", "SkippedSignal", "plan_retention",
+    "SKIP_NO_HISTORY", "SKIP_DETAILS_PERMANENT", "SKIP_DETAILS_UNDECLARED",
+    "SKIP_AGGREGATES_PERMANENT", "SKIP_AGGREGATES_UNDECLARED",
+    "stores_history", "retention_days",
+]
