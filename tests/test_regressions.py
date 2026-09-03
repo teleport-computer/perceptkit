@@ -929,7 +929,7 @@ def _reminders(storage, subject, n):
     for i in range(n):
         rid = f"r{i:04d}"
         storage.reminders[(subject, rid)] = ReminderItemMirror(
-            subject_id=subject, source_account_id="a", source_list_id="l",
+            subject_id=subject, source="ios", source_account_id="a", source_list_id="l",
             source_reminder_id=rid,
             reminder_fields={"title": rid, "due_at": base + timedelta(minutes=i)},
         )
@@ -963,7 +963,7 @@ def test_calendar_pagination_walks_the_whole_mirror():
     for i in range(600):
         eid = f"c{i:04d}"
         s.calendar[("u", eid)] = CalendarEventMirror(
-            subject_id="u", source_account_id="a", source_calendar_id="c",
+            subject_id="u", source="ios", source_account_id="a", source_calendar_id="c",
             source_event_id=eid,
             event_fields={"title": eid, "start_at": base + timedelta(minutes=i)},
         )

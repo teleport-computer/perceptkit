@@ -480,7 +480,7 @@ def test_the_calendar_pages_like_everything_else():
     s = InMemoryStorage()
     s.upsert_calendar_events(subject_id="u1", events=[
         CalendarEventMirror(
-            subject_id="u1", source_account_id="a", source_calendar_id="c",
+            subject_id="u1", source="ios", source_account_id="a", source_calendar_id="c",
             source_event_id=f"e{i}",
             event_fields={"title": f"会 {i}", "start_at": t(f"2026-08-{i+1:02d}")})
         for i in range(5)])
@@ -497,7 +497,7 @@ def test_the_reminder_list_pages_too():
     s = InMemoryStorage()
     s.upsert_reminders(subject_id="u1", items=[
         ReminderItemMirror(
-            subject_id="u1", source_account_id="a", source_list_id="l",
+            subject_id="u1", source="ios", source_account_id="a", source_list_id="l",
             source_reminder_id=f"r{i}",
             reminder_fields={"title": f"事 {i}", "is_completed": False})
         for i in range(5)])

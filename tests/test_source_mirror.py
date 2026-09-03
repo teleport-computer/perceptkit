@@ -24,7 +24,7 @@ def t(day: str, hhmm: str = "09:00") -> datetime:
 def ev(eid: str, day: str | None, title: str, *, sync: str = "s1",
        revision: int | None = None, account: str = "acct", cal: str = "cal") -> CalendarEventMirror:
     return CalendarEventMirror(
-        subject_id="u1", source_account_id=account, source_calendar_id=cal,
+        subject_id="u1", source="ios", source_account_id=account, source_calendar_id=cal,
         source_event_id=eid,
         event_fields={"title": title, "start_at": t(day) if day else None},
         source_revision=revision, last_seen_sync_id=sync,
@@ -129,7 +129,7 @@ def test_one_subjects_sync_never_touches_another_subjects_data():
     s = InMemoryStorage()
     s.upsert_calendar_events(subject_id="u1", events=[ev("e1", "2026-08-10", "u1 的会", sync="s1")])
     other = CalendarEventMirror(
-        subject_id="u2", source_account_id="acct", source_calendar_id="cal",
+        subject_id="u2", source="ios", source_account_id="acct", source_calendar_id="cal",
         source_event_id="e1", event_fields={"title": "u2 的会", "start_at": t("2026-08-10")},
         last_seen_sync_id="s1",
     )
@@ -176,12 +176,12 @@ def test_completed_reminders_stay_out_of_the_way_unless_asked_for():
     s = InMemoryStorage()
     s.upsert_reminders(subject_id="u1", items=[
         ReminderItemMirror(
-            subject_id="u1", source_account_id="a", source_list_id="l",
+            subject_id="u1", source="ios", source_account_id="a", source_list_id="l",
             source_reminder_id="r1",
             reminder_fields={"title": "买牛奶", "is_completed": True,
                              "due_at": t("2026-08-10")}),
         ReminderItemMirror(
-            subject_id="u1", source_account_id="a", source_list_id="l",
+            subject_id="u1", source="ios", source_account_id="a", source_list_id="l",
             source_reminder_id="r2",
             reminder_fields={"title": "交房租", "is_completed": False,
                              "due_at": t("2026-08-11")}),

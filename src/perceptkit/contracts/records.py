@@ -218,11 +218,18 @@ class CalendarEventMirror:
     **镜像不是快照历史。** 存的是"来源现在有哪些条目"，条目自己带着
     过去或未来的时间；不存"我们每次同步时看到了什么"。来源删除 → 本地删除。
 
-    唯一身份必须**包含来源账户和日历**：不同账户碰巧用同一个 event id
-    是完全可能的。
+    唯一身份必须**包含来源系统、来源账户和日历**：不同账户碰巧用同一个
+    event id 是完全可能的，不同来源系统更是必然。
     """
 
     subject_id: str
+    #: 哪个来源系统（``ios`` / ``google`` / ``exchange`` …）。
+    #:
+    #: 🔴 **它是唯一身份的一部分，不是标签。** 少了它，一次
+    #: ``source="ios"`` 的全量同步会把概念上属于 Google 的日程一起删掉 ——
+    #: 快照收尾删的是「这轮没见到的」，而另一个来源的条目当然没在这轮里。
+    #: 用户发现自己另一个日历账户的日程凭空消失了，且不可逆。
+    source: str
     source_account_id: str
     source_calendar_id: str
     source_event_id: str
@@ -242,6 +249,8 @@ class ReminderItemMirror:
     """外部提醒里现在还存在的一条待办。"""
 
     subject_id: str
+    #: 哪个来源系统。理由同 :class:`CalendarEventMirror.source`。
+    source: str
     source_account_id: str
     source_list_id: str
     source_reminder_id: str

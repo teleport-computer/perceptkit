@@ -1,6 +1,13 @@
-"""保留期与保质期的声明表。
+"""保留期与保质期。
 
-只声明，不含删除逻辑 —— 清理任务属于接线层，不在本批。
+⚠️ **2026-09-03 起，公开的 ``retention_days()`` / ``stores_history()``
+从 manifest 查，不再读本模块顶上那张 ``RETENTION_DAYS``。**
+外部审查复现了两者七条全对不上（`focus_state` 抛 KeyError、`audio_route`
+返回 90 而 manifest 说 7）—— 接入方调公开 API 会拿到错的结论且不报错。
+
+所以这个文件里断言"公开 API 返回什么"的部分，现在断言的是 manifest；
+断言"那张历史表长什么样"的部分，改成直接读 ``RETENTION_DAYS``，
+说明它只是一份历史记录。一致性由 ``test_retention_single_truth.py`` 盯着。
 """
 from __future__ import annotations
 
@@ -10,46 +17,74 @@ import pytest
 
 import perceptkit.algorithms.history as history
 import perceptkit.retention as retention
+from perceptkit.manifest.types import PERMANENT
 
 
 def test_health_signals_are_kept_forever():
+    """健康数据的明细永久保存 —— 趋势本身就是价值。"""
     for signal in ("health_body", "health_sleep", "health_vitals", "health_activity",
                    "health_workout", "health_metabolic", "health_mood", "health_cycle"):
-        assert retention.retention_days(signal) is retention.KEEP_FOREVER, signal
+        assert retention.retention_days(signal) == PERMANENT, signal
 
 
-def test_location_is_kept_forever():
-    # 产品决策：这是私人场景，按价值留，不设过期
-    assert retention.retention_days("location_signal") is retention.KEEP_FOREVER
+def test_none_means_the_opposite_in_the_two_vocabularies():
+    """🔴 ``None`` 在旧表和新 API 里意思**正好相反**。
+
+        旧表      None = 永久保存
+        新 API    None = 不进历史表；-1（PERMANENT）才是永久
+
+    照旧表的文档去理解新 API，会把「永久保存」读成「不存历史」——
+    然后按 0 天清理掉。这条钉住这个碰撞，免得有人把两者当同一个约定。
+    """
+    assert retention.KEEP_FOREVER is None            # 旧表的"永久"
+    assert PERMANENT == -1                           # manifest 的"永久"
+    assert retention.retention_days("health_body") == PERMANENT
+    # 不进历史表的**抛错**，不返回 None —— 否则照旧词表读的人会把
+    # 「根本不存历史」当成「永久保留」，而这两个意思正好相反。
+    with pytest.raises(KeyError):
+        retention.retention_days("battery")
+    assert retention.stores_history("battery") is False
 
 
-def test_calendar_and_reminders_keep_sixty_days():
-    # 采集窗口是前后 14 天：未来的会变成过去的会，再留一个月回看
-    assert retention.retention_days("calendar_next_event") == 60
-    assert retention.retention_days("reminders") == 60
+def test_the_old_declaration_table_is_only_a_historical_record():
+    """那张表还在，但不再是任何查询的依据。
+
+    留着是因为它里面 weather 那段注释记着一次真实的四表打架，值得留。
+    """
+    assert retention.RETENTION_DAYS["weather"] == 90       # 旧表这么写
+    assert retention.retention_days("weather") == 7        # manifest 才算数
 
 
-def test_transient_states_keep_ninety_days():
-    for signal in ("motion_state", "focus", "audio_route"):
-        assert retention.retention_days(signal) == 90, signal
+def test_states_that_feed_long_term_habits_keep_a_year():
+    """产品 2026-09-02 定的：明细一年、聚合永久。"""
+    for signal in ("focus_state", "motion_state", "music_playback"):
+        assert retention.retention_days(signal) == 365, signal
 
 
-def test_playback_keeps_one_year():
-    assert retention.retention_days("playback") == 365
+def test_short_lived_states_are_swept_within_a_week():
+    for signal in ("audio_route", "weather"):
+        assert retention.retention_days(signal) == 7, signal
 
 
-def test_weather_currently_stores_history_matching_its_shape():
-    # weather 的 SHAPE 现在是 NUMERIC_DIST，仍在产生 rollup —— 保留期表必须
-    # 如实反映现状，不能提前按"即将改成仅当前+预报"的未来态声明成不存历史
-    # （Codex code_review 2026-08-23 抓到四张声明表互相矛盾）。
-    assert retention.stores_history("weather") is True
-    assert retention.retention_days("weather") == 90
+def test_calendar_and_reminders_are_mirrors_not_signals():
+    """日历和提醒不再是"有保留期的信号"，它们是**来源镜像**。
+
+    镜像存的是「来源现在有哪些条目」，来源删了本地就删 —— 没有"存多久"
+    这个问题。旧表里那两条 60 天是改成镜像之前的写法。
+    """
+    for old in ("calendar_next_event", "reminders"):
+        with pytest.raises(KeyError):
+            retention.retention_days(old)
+        assert retention.stores_history(old) is False, old
 
 
-def test_every_historized_signal_has_a_retention_value():
-    # 漏一个就意味着那个信号无限增长且没人知道
-    missing = [s for s in history.SHAPE if s not in retention.RETENTION_DAYS]
-    assert not missing, f"这些信号进历史表却没定保留期：{missing}"
+def test_every_historized_signal_answers_with_a_number_or_permanent():
+    from perceptkit.manifest import MINIMAL_SIGNALS
+    for key, sig in MINIMAL_SIGNALS.items():
+        if not sig.stores_history:
+            continue
+        got = retention.retention_days(key)
+        assert got == PERMANENT or got > 0, f"{key} 的保留期是 {got}"
 
 
 def test_measured_at_ttl_is_longer_than_the_upload_based_one():

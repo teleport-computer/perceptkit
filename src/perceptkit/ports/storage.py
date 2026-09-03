@@ -215,6 +215,27 @@ class StoragePort(Protocol):
         """镜像里现在还存在的提醒事项。``offset`` 的要求同上。"""
         ...
 
+    def delete_source_items(
+        self, *, subject_id: str, source: str, collection_kind: str,
+        source_item_ids: Sequence[str],
+    ) -> int:
+        """删掉来源**明确说删了**的那几条，返回删了几条。
+
+        和 :meth:`apply_source_snapshot` 是两件事，别合并：
+
+            全量收尾   "覆盖范围内、这轮没见到的" —— 推断出来的，所以只有
+                       全量有资格，而且必须限定在声明的范围内
+            这个方法   "来源说这条删了" —— 确定的事实，增量也必须执行
+
+        没有这个方法的话，增量同步只能选：要么一条都不删（用户在手机上
+        删掉的日程，在 agent 眼里永远还在，还会一直出现在"接下来有什么
+        安排"里），要么拿局部列表当全量删（更糟，且不可逆）。
+
+        🔴 ``source`` 是删除范围的一部分。少了它，一次 ``ios`` 的删除会
+        命中另一个来源系统里碰巧同 id 的条目。
+        """
+        ...
+
     def apply_source_snapshot(
         self, *, subject_id: str, source: str, collection_kind: str,
         sync_id: str, coverage_start: datetime, coverage_end: datetime,

@@ -26,7 +26,7 @@ CTX = IngestContext("u1", T0)
 
 def _event(eid: str, at: datetime = T0) -> CalendarEventMirror:
     return CalendarEventMirror(
-        subject_id="u1", source_account_id="a", source_calendar_id="c",
+        subject_id="u1", source="ios", source_account_id="a", source_calendar_id="c",
         source_event_id=eid, event_fields={"title": eid, "start_at": at},
         last_seen_sync_id="old",
     )
@@ -202,7 +202,7 @@ def test_a_mixed_batch_is_refused():
     """挑一部分写进去、剩下的丢掉，会得到一份"成功了"的半份镜像。"""
     s = InMemoryStorage()
     mixed = [_event("e1"), ReminderItemMirror(
-        subject_id="u1", source_account_id="a", source_list_id="l",
+        subject_id="u1", source="ios", source_account_id="a", source_list_id="l",
         source_reminder_id="r1", reminder_fields={"title": "买牛奶"})]
     with pytest.raises(SyncContractError, match="混"):
         sync_source_mirror(s, _batch(items=mixed), context=CTX)
@@ -211,7 +211,7 @@ def test_a_mixed_batch_is_refused():
 def test_reminders_go_down_the_reminder_path():
     s = InMemoryStorage()
     item = ReminderItemMirror(
-        subject_id="u1", source_account_id="a", source_list_id="l",
+        subject_id="u1", source="ios", source_account_id="a", source_list_id="l",
         source_reminder_id="r1",
         reminder_fields={"title": "买牛奶", "is_completed": False})
     out = sync_source_mirror(s, SyncBatch(
@@ -249,3 +249,137 @@ def test_a_full_sync_does_not_delete_the_items_it_just_wrote():
     left = {e.source_event_id for e in s.list_calendar_events(subject_id="u1", limit=50)}
     assert left == {"e1", "e2"}, f"全量同步把自己刚写的条目删了，剩下 {left}"
     assert out.upserted == 2
+
+
+# ---------------------------------------------------------------------------
+# 审查者自己复现的四条（2026-09-03，§8）
+#
+# 这四条都是 0.2.8 引入或遗留的契约漏洞。用她给的场景逐条钉住。
+# ---------------------------------------------------------------------------
+
+def test_one_source_full_sync_does_not_delete_another_source(_ios=None):
+    """§8.2 —— 她复现的：一次 source="ios" 的全量同步删掉了 Google 的日程。
+
+    快照收尾删的是「这轮没见到的」，而另一个来源的条目**当然**没在这轮里。
+    少了 source 这一维，用户会发现自己另一个日历账户的日程凭空消失，且不可逆。
+    """
+    s = InMemoryStorage()
+    s.upsert_calendar_events(subject_id="u1", events=[CalendarEventMirror(
+        subject_id="u1", source="google", source_account_id="g-acct",
+        source_calendar_id="g1", source_event_id="来自 Google 的日程",
+        event_fields={"start_at": T0}, last_seen_sync_id="google-round-1")])
+
+    sync_source_mirror(s, _batch(
+        snapshot_kind=FULL, sync_id="ios-round-1", items=[],
+        coverage_start=T0 - timedelta(days=1), coverage_end=T0 + timedelta(days=1),
+    ), context=CTX)
+
+    left = {e.source_event_id for e in s.list_calendar_events(subject_id="u1", limit=50)}
+    assert "来自 Google 的日程" in left, "ios 的全量同步删掉了另一个来源的数据"
+
+
+def test_two_sources_with_the_same_event_id_do_not_overwrite_each_other():
+    """同一个 event id 在两个来源系统里各有一条，是完全可能的。"""
+    s = InMemoryStorage()
+    for src in ("ios", "google"):
+        sync_source_mirror(s, SyncBatch(
+            source=src, collection_kind="calendar", sync_id=f"{src}-1",
+            items=[CalendarEventMirror(
+                subject_id="u1", source=src, source_account_id="a",
+                source_calendar_id="c", source_event_id="同一个 id",
+                event_fields={"title": src, "start_at": T0})]),
+            context=CTX)
+    titles = {e.event_fields["title"]
+              for e in s.list_calendar_events(subject_id="u1", limit=50)}
+    assert titles == {"ios", "google"}, f"两个来源互相覆盖了，剩下 {titles}"
+
+
+def test_the_declared_collection_kind_must_match_the_item_type():
+    """§8.3 —— 她复现的：collection_kind=reminders 塞日历条目被照单全收。
+
+    后果是数据和游标互相矛盾：日历表被写进去了，而**提醒的游标往前推进了**，
+    下一轮增量提醒同步会以为上一轮成功了，那段提醒永远补不回来。
+    """
+    s = InMemoryStorage()
+    with pytest.raises(SyncContractError, match="collection_kind"):
+        sync_source_mirror(s, SyncBatch(
+            source="ios", collection_kind="reminders", sync_id="s1",
+            items=[_event("e1")]), context=CTX)
+    # 拒绝时整个事务无变化 —— 两张表都没动，游标也没推进。
+    assert not s.list_calendar_events(subject_id="u1", limit=10)
+    assert s.get_sync_state(subject_id="u1", source="ios",
+                            collection_kind="reminders") is None
+
+
+def test_an_unknown_collection_kind_is_refused():
+    s = InMemoryStorage()
+    with pytest.raises(SyncContractError, match="不认识的 collection_kind"):
+        sync_source_mirror(s, _batch(collection_kind="photos"), context=CTX)
+
+
+def test_the_subject_comes_from_the_trusted_context_not_the_item():
+    """§8.4 —— 条目自带的 subject_id 是宿主从来源数据翻译出来的。
+
+    最好的情况是冗余，最坏的情况是把 A 的日程写进 B 的花园。
+    可信 subject 只有一个来源：IngestContext。
+    """
+    s = InMemoryStorage()
+    impostor = CalendarEventMirror(
+        subject_id="别人的-uid", source="ios", source_account_id="a",
+        source_calendar_id="c", source_event_id="e1",
+        event_fields={"start_at": T0})
+    sync_source_mirror(s, _batch(items=[impostor]), context=CTX)   # ctx = u1
+
+    assert not s.list_calendar_events(subject_id="别人的-uid", limit=10), \
+        "条目自带的 subject 把数据写进了别人的花园"
+    mine = s.list_calendar_events(subject_id="u1", limit=10)
+    assert [e.source_event_id for e in mine] == ["e1"]
+    assert mine[0].subject_id == "u1"
+
+
+def test_an_incremental_batch_applies_an_explicit_tombstone():
+    """§8.1 —— 「这批里没出现」推断不出删除，但「来源说删了」是确定的事实。
+
+    早先把增量定义成「一条都不许删」，防住了「拿局部列表当全量」，
+    但同时堵死了这条：用户在手机上删掉的日程，在 agent 眼里永远还在，
+    还会一直出现在"接下来有什么安排"里。
+    """
+    s = InMemoryStorage()
+    sync_source_mirror(s, _batch(items=[_event("keep"), _event("gone")]),
+                       context=CTX)
+    out = sync_source_mirror(s, _batch(items=[], deleted_item_ids=["gone"]),
+                             context=CTX)
+    assert out.tombstoned == 1 and out.deleted == 0, \
+        "tombstone 和范围删除要分开数，否则分不清是范围判断出错还是来源真删了"
+    left = {e.source_event_id for e in s.list_calendar_events(subject_id="u1", limit=50)}
+    assert left == {"keep"}
+
+
+def test_a_tombstone_does_not_reach_across_sources():
+    """来源 A 说删了某个 id，不能顺手删掉来源 B 里碰巧同 id 的条目。"""
+    s = InMemoryStorage()
+    for src in ("ios", "google"):
+        sync_source_mirror(s, SyncBatch(
+            source=src, collection_kind="calendar", sync_id=f"{src}-1",
+            items=[CalendarEventMirror(
+                subject_id="u1", source=src, source_account_id="a",
+                source_calendar_id="c", source_event_id="同一个 id",
+                event_fields={"title": src, "start_at": T0})]),
+            context=CTX)
+    sync_source_mirror(s, SyncBatch(
+        source="ios", collection_kind="calendar", sync_id="ios-2",
+        deleted_item_ids=["同一个 id"]), context=CTX)
+    titles = {e.event_fields["title"]
+              for e in s.list_calendar_events(subject_id="u1", limit=50)}
+    assert titles == {"google"}, f"ios 的删除越界了，剩下 {titles}"
+
+
+def test_a_failed_batch_does_not_apply_tombstones_either():
+    """来源临时不可达 ≠ 来源侧删了 —— 这一批的删除清单同样不可信。"""
+    s = InMemoryStorage()
+    sync_source_mirror(s, _batch(items=[_event("keep")]), context=CTX)
+    out = sync_source_mirror(s, _batch(
+        items=[], deleted_item_ids=["keep"], error_code="http_503"), context=CTX)
+    assert out.failed and out.tombstoned == 0
+    assert [e.source_event_id
+            for e in s.list_calendar_events(subject_id="u1", limit=10)] == ["keep"]
