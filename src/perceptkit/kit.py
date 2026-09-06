@@ -26,6 +26,7 @@ from .ports.wake import WakePort
 from .processing.dispatch import DispatchOutcome, drain
 from .processing.pipeline import AGGREGATION_VERSION, IngestOutcome, ingest_report
 from .processing.recompute import RecomputeOutcome, recompute_range
+from .processing.retract import apply_retractions
 from .processing.source_sync import sync_source_mirror
 from .retention import plan_retention
 from .processing.scheduled import ScheduledOutcome, evaluate_absence, evaluate_daily
@@ -160,6 +161,21 @@ class PerceptionKit:
         翻译成标准镜像记录是宿主的活。
         """
         return sync_source_mirror(self.storage, batch, context=context)
+
+    def apply_retractions(self, retractions, *, now: datetime):
+        """来源撤回了几条事实：记下来、当前值重选、返回受影响的天数。
+
+        和 :meth:`ingest` 是两条路：ingest 说"这是一条新读数"，这个说
+        "之前那条不作数了"。**刻意不做成 availability 的第四个状态** ——
+        那个状态位回答的是"这次有没有拿到数"，和"之前那条还作不作数"
+        是两个正交的问题；混在一起会让旧宿主把撤回当成传感器故障，
+        于是被删掉的数值作为 last_known 继续显示出来。
+
+        受影响那天的聚合要接着 :meth:`recompute_aggregates` ——
+        那条路已经会排除被撤回的观测。
+        """
+        return apply_retractions(self.storage, list(retractions),
+                                 signals=dict(self.signals), now=now)
 
     def run_retention(
         self, *, subject_id: str, now: datetime, dry_run: bool = True,

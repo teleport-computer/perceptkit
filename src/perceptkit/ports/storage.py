@@ -29,6 +29,7 @@ from ..contracts.records import (
     StoredObservation,
 )
 from ..contracts.receipt import IngestReceipt, WakeReceipt
+from ..contracts.retraction import Retraction
 
 
 @runtime_checkable
@@ -213,6 +214,31 @@ class StoragePort(Protocol):
         limit: int = 50, offset: int = 0,
     ) -> Sequence[ReminderItemMirror]:
         """镜像里现在还存在的提醒事项。``offset`` 的要求同上。"""
+        ...
+
+    def record_retraction(self, retraction: "Retraction") -> bool:
+        """记下来源撤回了哪条事实。已经记过返回 ``False``。
+
+        **只追加，不就地删除观测。** 撤回是一条新事实（"那条不作数了"），
+        不是把旧事实抹掉 —— 抹掉的话"这天为什么有个缺口"就再也答不出来，
+        而 agent 需要能说"那天曾经有条记录，后来被来源删了"。
+
+        必须**幂等**：同一条撤回被观察到两次（重传、崩溃重放）不能算两次。
+
+        🔴 和它引发的后续动作在**同一个事务**里：当前值重选、受影响日期
+        重算。分开提交的话会出现"撤回记下了但当前值还显示着被删的数值"，
+        而下一轮不会去修 —— 它以为上一轮成功了。
+        """
+        ...
+
+    def list_retractions(
+        self, *, subject_id: str, signal: str,
+        source_event_ids: Sequence[str] | None = None,
+    ) -> Sequence["Retraction"]:
+        """这个用户这个信号上，哪些源事实被撤回了。
+
+        重算要用：折当天的聚合时，被撤回的那些观测不能算进去。
+        """
         ...
 
     def delete_source_items(
