@@ -22,6 +22,11 @@ EPISODE_END = "episode_end"                # 区间：整体归结束（醒来�
 SPLIT_AT_MIDNIGHT = "split_at_midnight"    # 可加总时长：按本地午夜切分
 SOURCE_LOCAL_DATE = "source_local_date"    # 周期事件：用来源记录的本地日期，不重解释
 
+# ⚠️ 这张表按 **iOS 上报键**（宿主 legacy 路径问的那个名字）建索引，
+# 不是 manifest 的信号名。2026-09-06 把健康信号拆成单指标时，这张表也跟着
+# 拆过一次 —— 而它唯一的消费方就是 legacy 路径，拆完之后
+# `is_historized("health_vitals")` 直接返回 False，健康数据整类不再进历史，
+# 趋势和摘要一起变空，**不报错**。存储侧怎么拆看 manifest，跟这张表无关。
 ATTRIBUTION: dict[str, str] = {
     "health_sleep": EPISODE_END,
     "health_workout": EPISODE_END,

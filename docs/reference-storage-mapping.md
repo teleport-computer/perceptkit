@@ -14,12 +14,21 @@
 | `broadcast` | CurrentProjection + StoredObservation | 300s | 7 天 | 同明细 | deterministic_digest | instant |
 | `focus_state` | CurrentProjection + StoredObservation + DailyAggregate | 900s | 365 天 | 永久 | deterministic_digest | instant |
 | `health_activity` | CurrentProjection + StoredObservation + DailyAggregate | 3600s | 永久 | 同明细 | source_event_id | source_local_date |
-| `health_body` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | instant |
+| `health_blood_pressure` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | instant |
+| `health_bmi` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | instant |
+| `health_body_fat` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | instant |
+| `health_current_hr` | CurrentProjection | 3600s | 不存 | 不适用 | source_event_id | instant |
 | `health_cycle` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | instant |
-| `health_metabolic` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | instant |
+| `health_glucose` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | instant |
+| `health_height` | CurrentProjection | 86400s | 不存 | 不适用 | source_event_id | instant |
+| `health_hrv` | CurrentProjection + StoredObservation + DailyAggregate | 3600s | 永久 | 同明细 | source_event_id | instant |
 | `health_mood` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | instant |
+| `health_oxygen` | CurrentProjection + StoredObservation + DailyAggregate | 3600s | 永久 | 同明细 | source_event_id | instant |
+| `health_respiratory` | CurrentProjection + StoredObservation + DailyAggregate | 3600s | 永久 | 同明细 | source_event_id | instant |
+| `health_resting_hr` | CurrentProjection + StoredObservation + DailyAggregate | 3600s | 永久 | 同明细 | source_event_id | instant |
 | `health_sleep` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | episode_end |
-| `health_vitals` | CurrentProjection + StoredObservation + DailyAggregate | 3600s | 永久 | 同明细 | source_event_id | instant |
+| `health_vo2max` | CurrentProjection + StoredObservation + DailyAggregate | 3600s | 永久 | 同明细 | source_event_id | instant |
+| `health_weight` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | instant |
 | `health_workout` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | episode_end |
 | `location_city` | CurrentProjection + StoredObservation + DailyAggregate | 900s | 永久 | 同明细 | deterministic_digest | instant |
 | `motion_state` | CurrentProjection + StoredObservation + DailyAggregate | 900s | 365 天 | 永久 | deterministic_digest | instant |
@@ -61,25 +70,61 @@ iOS 拿不到前台 app（`frontmost_app` 恒为 null），数据全靠用户在
 
 和 steps 同一种形态：日内单调累加，当天代表值取【最大值】不是求和。取最大值天然不怕跨天回退 —— 00:01 的新一天读数会归到新的一天，不会和昨天的数字相减产生负增量。
 
-### `health_body`
+### `health_blood_pressure`
+
+🔴 收缩压和舒张压**留在同一个信号里**，因为来源侧它们是一次读数（HealthKit 建模成 correlation）。拆成两个信号就丢了「这是同一次量的」这个事实 —— 撤回时两条各自被删，中间任何一步失败就留下半条读数。
+
+### `health_bmi`
+
+通常由 app 从体重和身高算出来，不一定有独立的来源样本 —— 所以它可能拿不到稳定身份，撤回也就落不到它头上。
+
+### `health_body_fat`
 
 🔴 这一组是「用户改数据」最常发生的地方（体重录错、手动补录）——修订机制主要为它们服务。也是单位最容易标错的一组（kg / lb），所以 max_relative_jump 卡得比别的紧：70 kg 被标成 lb，换算完 31.8 kg 值域完全合法，只有「一次掉 55%」能看出不对。
+
+### `health_current_hr`
+
+**这一个不走逐条样本。** 运动时每几秒一条，而它的语义就是「最近一次读数」——不是一条你会想删掉的测量记录。当日权威值那一档：同一天最新的查询结果赢。
 
 ### `health_cycle`
 
 周期型：看【间隔】不看数值高低 —— 「比平均晚了 4 天」才是信号。
 
-### `health_metabolic`
+### `health_glucose`
 
-血糖本身波动就大（餐前餐后能差一倍），所以不设跳变阈值 —— 设了会天天误报。血压相对稳定，设一个宽的。
+波动本来就大（餐前餐后能差一倍），所以不设跳变阈值 —— 设了会天天误报。
+
+### `health_height`
+
+几年才变一次，**不存历史**。挤在 health_body 里时它跟着存了明细，而它自己的字段没有聚合策略 —— 那些明细没有任何东西读得到，只是白占地方。拆开之后校验器直接把这条指出来了。
+
+### `health_hrv`
+
+⚠️ 建模方式和规范不同。规范用 metric + value + unit（一条观测一个指标），那需要「同一信号下多条并列当前值」的支持 —— 这个能力我们还没有（已记为已知缺口）。这里先按【每个指标一个字段】建模，和宿主现状一致，今天就能跑。等多维当前值做出来再切回规范的形态。
 
 ### `health_mood`
 
 用户自己记的，一天可能好几条 —— 所以是 event_list 不是取当天某一个值。
 
-### `health_vitals`
+### `health_oxygen`
+
+同 health_respiratory：声明了趋势却没有聚合，趋势永远读到空。
+
+### `health_respiratory`
+
+⚠️ 拆分暴露的旧账：它在趋势表里声明了 fluctuating，但字段没有聚合策略，而趋势是从日聚合读的 —— 于是「最近呼吸率怎么样」永远读到空。挤在 health_vitals 里时靠兄弟字段蒙混过了 manifest 校验。
+
+### `health_resting_hr`
+
+一天测一次，是「一次测量」不是「当日代表值」—— 用户能指着某一次说「删掉它」。⚠️ 当前值有效期沿用了 health_vitals 的 1 小时，对一天一次的量偏短；改它是独立的产品决定，本次不动。
+
+### `health_vo2max`
 
 ⚠️ 建模方式和规范不同。规范用 metric + value + unit（一条观测一个指标），那需要「同一信号下多条并列当前值」的支持 —— 这个能力我们还没有（已记为已知缺口）。这里先按【每个指标一个字段】建模，和宿主现状一致，今天就能跑。等多维当前值做出来再切回规范的形态。
+
+### `health_weight`
+
+「用户改数据」最常发生的地方（录错、手动补录）——修订和撤回主要为它服务。也是单位最容易标错的：70 kg 被标成 lb，换算完 31.8 kg 值域完全合法，只有「一次掉 55%」能看出不对。
 
 ### `location_city`
 

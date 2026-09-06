@@ -386,6 +386,10 @@ def _update_current(
                 received_at=stored.received_at,
                 expires_at=expires,
                 source_observation_id=stored.observation_id,
+                # 源事实身份跟着当前值走 —— 撤回靠它定位，而 current_only
+                # 的信号没有观测可以反查。
+                source=stored.source,
+                source_event_id=stored.source_event_id,
                 source_revision=stored.source_revision,
                 version=(existing.version + 1) if existing else 0,
                 content_digest=item.content_digest,

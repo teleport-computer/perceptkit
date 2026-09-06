@@ -58,6 +58,32 @@ class SyncContractError(ValueError):
     """
 
 
+@dataclass(frozen=True)
+class DeletedItem:
+    """来源明确删掉的一条，**带上它的完整范围**。
+
+    🔴 只给一个裸 id 不够。同一个来源系统里，两个账户各自的日历完全可能
+    用同一个 event id —— 那是两件不同的事。按裸 id 删，用户删掉工作账户的
+    一个会，私人日历里碰巧同 id 的安排**一起消失**，而且不可逆。
+
+    ``source`` 不在这里：它由批次声明，一批只属于一个来源。
+    """
+
+    source_account_id: str
+    #: 日历用 calendar id，提醒用 list id。
+    source_collection_id: str
+    #: 日历用 event id，提醒用 reminder id。
+    source_item_id: str
+
+    def __post_init__(self) -> None:
+        for name in ("source_account_id", "source_collection_id",
+                     "source_item_id"):
+            if not (getattr(self, name) or "").strip():
+                raise ValueError(
+                    f"{name} 不能为空：范围缺一层，删除就会命中同名的兄弟条目"
+                )
+
+
 @dataclass
 class SyncBatch:
     """一批来源镜像数据，以及它自己声明的边界。
@@ -82,7 +108,7 @@ class SyncBatch:
     #: 不知道还剩什么），但来源的 change feed 明确传来一条删除时，
     #: 那是确定的事实，必须执行 —— 否则用户在手机上删掉的日程，
     #: 在 agent 眼里永远还在。
-    deleted_item_ids: Sequence[str] = field(default_factory=tuple)
+    deleted_items: Sequence[DeletedItem] = field(default_factory=tuple)
     #: 非空 = 这一批**没有成功拿到**。见 ``SyncOutcome`` 的文档。
     error_code: str | None = None
 
@@ -225,17 +251,30 @@ def _apply_tombstones(storage: StoragePort, batch: SyncBatch,
     但同时也堵死了这条：用户在手机上删掉的日程，在 agent 眼里永远还在，
     而且它会一直出现在"接下来有什么安排"里。
     """
-    ids = [str(i) for i in (batch.deleted_item_ids or ()) if str(i).strip()]
-    if not ids:
+    items = [i for i in (batch.deleted_items or ())]
+    if not items:
         return 0
     return int(storage.delete_source_items(
         subject_id=context.subject_id, source=batch.source,
-        collection_kind=batch.collection_kind, source_item_ids=ids,
+        collection_kind=batch.collection_kind, deleted_items=items,
     ) or 0)
 
 
 def _upsert(storage: StoragePort, batch: SyncBatch,
             context: IngestContext) -> int:
+    # 🔴 集合种类先校验，**再**看有没有条目。
+    #
+    # 早先这条写在 `if not items: return 0` 后面，于是一个空批次带着未知的
+    # collection_kind 能一路走完：什么都没写，但全量收尾照样执行、同步游标
+    # 照样推进。下一轮增量以为上一轮成功了，那段数据永远补不回来 ——
+    # 而"什么都没发生"是最难发现的一种失败。
+    expected = _ITEM_TYPE.get(batch.collection_kind)
+    if expected is None:
+        raise SyncContractError(
+            f"不认识的 collection_kind={batch.collection_kind!r}："
+            f"只有 {CALENDAR!r} 和 {REMINDERS!r}。放过去的话，"
+            f"这批数据会落在一个没人读的地方，而同步状态说成功了"
+        )
     items = list(batch.items)
     if not items:
         return 0
@@ -266,18 +305,6 @@ def _upsert(storage: StoragePort, batch: SyncBatch,
             f"一批里混了 {sorted(k.__name__ for k in kinds)}："
             f"一次同步只处理一种集合，混着来会写出一份看起来成功的半份镜像"
         )
-    # 🔴 声明的集合种类必须和条目类型对上。
-    #
-    # 不校验的话，「collection_kind=reminders + 一批日历条目」会被照单全收：
-    # 日历表被写进去了，而**提醒的同步游标往前推进了** —— 数据和游标从此
-    # 互相矛盾，下一轮增量提醒同步会以为上一轮成功了，那段提醒永远补不回来。
-    expected = _ITEM_TYPE.get(batch.collection_kind)
-    if expected is None:
-        raise SyncContractError(
-            f"不认识的 collection_kind={batch.collection_kind!r}："
-            f"只有 {CALENDAR!r} 和 {REMINDERS!r}。放过去的话，"
-            f"这批数据会落在一个没人读的地方，而同步状态说成功了"
-        )
     actual = kinds.pop()
     if actual is not expected:
         raise SyncContractError(
@@ -295,5 +322,6 @@ def _upsert(storage: StoragePort, batch: SyncBatch,
 
 __all__ = [
     "CALENDAR", "REMINDERS", "FULL", "INCREMENTAL",
-    "SyncBatch", "SyncOutcome", "SyncContractError", "sync_source_mirror",
+    "SyncBatch", "SyncOutcome", "SyncContractError", "DeletedItem",
+    "sync_source_mirror",
 ]

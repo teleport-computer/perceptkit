@@ -55,6 +55,8 @@ class InMemoryStorage:
         self.rule_state: dict[tuple[str, str, str], dict[str, Any]] = {}
         self.outbox: dict[str, EventOutboxEntry] = {}
         self.receipts: list[WakeReceipt] = []
+        #: (subject, signal, source, source_event_id) -> Retraction
+        self.retractions: dict[tuple[str, str, str, str], Any] = {}
         #: 测试用：数一数事务嵌套层数，验证调用方确实把该原子的操作包起来了。
         self.transaction_depth = 0
         self.transactions_opened = 0
@@ -237,13 +239,30 @@ class InMemoryStorage:
                                  i.source_reminder_id))
         return keep[offset:offset + limit]
 
+    def record_retraction(self, retraction) -> bool:
+        key = (retraction.subject_id, retraction.signal,
+               retraction.source, retraction.source_event_id)
+        if key in self.retractions:
+            return False
+        self.retractions[key] = retraction
+        return True
+
+    def list_retractions(self, *, subject_id, signal, source_event_ids=None):
+        wanted = set(source_event_ids) if source_event_ids is not None else None
+        return [r for (sub, sig, _src, eid), r in self.retractions.items()
+                if sub == subject_id and sig == signal
+                and (wanted is None or eid in wanted)]
+
     def delete_source_items(self, *, subject_id, source, collection_kind,
-                            source_item_ids) -> int:
+                            deleted_items) -> int:
         store = self.calendar if collection_kind == "calendar" else self.reminders
-        wanted = set(source_item_ids)
-        # key = (subject, source, account, collection, item_id) —— 最后一位是 id。
+        # key = (subject, source, account, collection, item_id)。
+        # **五段全比**：少一层就会命中同名的兄弟条目。
+        wanted = {(i.source_account_id, i.source_collection_id, i.source_item_id)
+                  for i in deleted_items}
         doomed = [k for k in store
-                  if k[0] == subject_id and k[1] == source and k[-1] in wanted]
+                  if k[0] == subject_id and k[1] == source
+                  and (k[2], k[3], k[4]) in wanted]
         for k in doomed:
             del store[k]
         return len(doomed)
@@ -391,6 +410,7 @@ class InMemoryStorage:
             "sync_state": drop(self.sync_state, lambda k, v: k[0]),
             "rule_state": drop(self.rule_state, lambda k, v: k[0]),
             "outbox": drop(self.outbox, lambda k, v: v.subject_id),
+            "retractions": drop(self.retractions, lambda k, v: k[0]),
         }
         before = len(self.identities)
         self.identities = {i for i in self.identities if i[0] != subject_id}

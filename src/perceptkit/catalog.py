@@ -81,10 +81,30 @@ CAPABILITIES: dict[str, Capability] = {c.key: c for c in [
     Capability("reminders", "提醒事项", 2, query_tool=True),
     Capability("health_sleep", "睡眠", 2, query_tool=True),
     Capability("health_workout", "运动", 2, query_tool=True),
-    Capability("health_vitals", "身体趋势", 2, query_tool=True),
+    # 2026-09-06 拆成单指标。**能力表分两种角色，别混**：
+    #   报告闸   客户端按 HealthKit 的授权分组一次报一整包（体征、身体测量、
+    #            代谢），闸就得按包来 —— 下面三个 health_vitals / health_body /
+    #            health_metabolic 是这个用途，SIGNALS 里三条上报键指向它们。
+    #   查询档   agent 按**单个指标**问（"我最近血氧怎么样"），所以查询工具
+    #            按拆完的指标各占一行。
+    # 拆分只发生在第二种上。把第一种一并拆掉的后果是上报键在 SIGNALS 里
+    # 查不到 → 整包体征被判 unknown_signal 退回，而客户端不会报错。
+    Capability("health_vitals", "身体趋势", 2),
+    Capability("health_body", "身体测量（体重/BMI/体脂/身高）", 2),
+    Capability("health_metabolic", "代谢点值（血糖/血压）", 2),
+    Capability("health_resting_hr", "静息心率", 2, query_tool=True),
+    Capability("health_current_hr", "实时心率", 2, query_tool=True),
+    Capability("health_hrv", "心率变异性", 2, query_tool=True),
+    Capability("health_respiratory", "呼吸率", 2, query_tool=True),
+    Capability("health_oxygen", "血氧", 2, query_tool=True),
+    Capability("health_vo2max", "最大摄氧量", 2, query_tool=True),
     Capability("health_activity", "活动量（能量/锻炼/站立/正念）", 2, query_tool=True),
-    Capability("health_body", "身体测量（体重/BMI/体脂/身高）", 2, query_tool=True),
-    Capability("health_metabolic", "代谢点值（血糖/血压）", 2, query_tool=True),
+    Capability("health_weight", "体重", 2, query_tool=True),
+    Capability("health_bmi", "BMI", 2, query_tool=True),
+    Capability("health_body_fat", "体脂率", 2, query_tool=True),
+    Capability("health_height", "身高", 2, query_tool=True),
+    Capability("health_glucose", "血糖", 2, query_tool=True),
+    Capability("health_blood_pressure", "血压", 2, query_tool=True),
     Capability("health_cycle", "经期", 2, query_tool=True),
     Capability("health_mood", "心情 / State of Mind", 2, query_tool=True),
 ]}
@@ -130,6 +150,12 @@ SIGNALS: dict[str, Signal] = {s.input: s for s in [
            resolver="health_sleep", ttl_sec=86400.0, significant=False),
     Signal("health_workout", "health_workout", ("workout_type", "duration_min", "count_today"),
            resolver="health_workout", ttl_sec=86400.0, significant=False),
+    # ⚠️ 这张表是按 **iOS 上报键**（context_snapshot 的 `key`）建索引的 ——
+    # 客户端一次报一整包，键名是 health_vitals / health_body / health_metabolic。
+    # 2026-09-06 把**存储侧**的信号拆成了单指标（见 manifest.minimal），
+    # 但**上报契约没变**，所以这里保持原样。曾经把这三条也改成拆完的名字，
+    # 结果是这三个上报键在表里查不到 → service 判 unknown_signal 整包退回，
+    # 客户端拿到 200、用户什么都不知道。存储侧怎么拆，看宿主的 SPLIT_OFF。
     Signal("health_vitals", "health_vitals",
            ("resting_heart_rate", "step_count", "current_heart_rate", "hrv_sdnn_ms",
             "respiratory_rate", "oxygen_saturation_pct", "vo2_max"),
@@ -141,7 +167,8 @@ SIGNALS: dict[str, Signal] = {s.input: s for s in [
            ("weight_kg", "bmi", "body_fat_pct", "height_cm"),
            ttl_sec=86400.0, significant=False),
     Signal("health_metabolic", "health_metabolic",
-           ("blood_glucose_mmol_l", "blood_pressure_systolic", "blood_pressure_diastolic"),
+           ("blood_glucose_mmol_l", "blood_pressure_systolic",
+            "blood_pressure_diastolic"),
            ttl_sec=86400.0, significant=False),
     Signal("health_cycle", "health_cycle",
            ("flow_level", "is_active_period"),
@@ -196,7 +223,7 @@ COMPOSITE_KEYS: dict[str, list[str]] = {}
 KIND_CAPABILITY = {
     "workout": "health_workout",
     "sleep": "health_sleep",
-    "vitals": "health_vitals",
+    "vitals": "health_resting_hr",
 }
 
 # Burst de-dup backstop. Clustering is primarily done ON DEVICE (iOS collapses a

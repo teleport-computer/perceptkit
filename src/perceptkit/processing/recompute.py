@@ -117,6 +117,33 @@ def _canonical(rows: list, sig: SignalDefinition) -> list:
     return [o for o in rows if o.source_event_id is None or id(o) in winners]
 
 
+def _drop_retracted(storage: StoragePort, rows: list, *,
+                    subject_id: str, signal: str) -> list:
+    """去掉来源已经撤回的那些观测。
+
+    **不是把观测删掉，是折聚合时不算它。** 观测留着，"那天曾经有条记录、
+    后来被来源删了"才答得出来；抹掉的话那天只是凭空少一块，没人说得清为什么。
+
+    宿主没实现撤回端口时原样返回 —— 那等于"从不撤回"，是安全的那一边：
+    宁可多留一条已经被删的旧数据，也不要因为端口缺失把好数据当成撤回删掉。
+    """
+    ids = {o.source_event_id for o in rows if o.source_event_id}
+    if not ids:
+        return rows
+    lookup = getattr(storage, "list_retractions", None)
+    if lookup is None:
+        return rows
+    # 🔴 (source, id) 成对比，不能只比 id。同一个 subject 下 iOS 和 Google
+    # 完全可能用同一个 source_event_id —— 只比 id 的话，撤回 iOS 那条会
+    # 把 Google 那条一起从聚合里踢掉。
+    retracted = {(r.source, r.source_event_id) for r in lookup(
+        subject_id=subject_id, signal=signal, source_event_ids=sorted(ids))}
+    if not retracted:
+        return rows
+    return [o for o in rows
+            if (o.source, o.source_event_id) not in retracted]
+
+
 def recompute_day(
     storage: StoragePort,
     sig: SignalDefinition,
@@ -143,6 +170,11 @@ def recompute_day(
 
     same_day = [o for o in page if o.effective_local_date == day]
     same_day = _canonical(same_day, sig)
+    # 被来源撤回的那些不算数。**放在 canonical 之后**：撤回针对的是一条
+    # 源事实，而 canonical 已经把同一源事实的多个修订收敛成一条了 ——
+    # 先滤会让"撤回了 revision 1、但 revision 2 还在"这种情况删错东西。
+    same_day = _drop_retracted(storage, same_day, subject_id=subject_id,
+                               signal=sig.key)
     same_day = [o for o in same_day if o.availability == "observed"]
     same_day.sort(key=lambda o: (o.occurred_at, o.observation_id))
 

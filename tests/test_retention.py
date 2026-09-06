@@ -22,8 +22,8 @@ from perceptkit.manifest.types import PERMANENT
 
 def test_health_signals_are_kept_forever():
     """健康数据的明细永久保存 —— 趋势本身就是价值。"""
-    for signal in ("health_body", "health_sleep", "health_vitals", "health_activity",
-                   "health_workout", "health_metabolic", "health_mood", "health_cycle"):
+    for signal in ("health_weight", "health_sleep", "health_resting_hr", "health_activity",
+                   "health_workout", "health_glucose", "health_mood", "health_cycle"):
         assert retention.retention_days(signal) == PERMANENT, signal
 
 
@@ -38,7 +38,7 @@ def test_none_means_the_opposite_in_the_two_vocabularies():
     """
     assert retention.KEEP_FOREVER is None            # 旧表的"永久"
     assert PERMANENT == -1                           # manifest 的"永久"
-    assert retention.retention_days("health_body") == PERMANENT
+    assert retention.retention_days("health_weight") == PERMANENT
     # 不进历史表的**抛错**，不返回 None —— 否则照旧词表读的人会把
     # 「根本不存历史」当成「永久保留」，而这两个意思正好相反。
     with pytest.raises(KeyError):
@@ -87,11 +87,40 @@ def test_every_historized_signal_answers_with_a_number_or_permanent():
         assert got == PERMANENT or got > 0, f"{key} 的保留期是 {got}"
 
 
+#: 这张表跨了**两套词表**，所以单独写出来：左边是存储侧的信号名
+#: （2026-09-06 拆成单指标之后的），右边是**装着它上来的那个 iOS 上报键**。
+#: 客户端仍然按 HealthKit 的授权分组一次报一整包，上报契约没跟着拆。
+_CARRIED_BY = {
+    "health_weight": "health_body", "health_bmi": "health_body",
+    "health_body_fat": "health_body", "health_height": "health_body",
+    "health_glucose": "health_metabolic",
+    "health_blood_pressure": "health_metabolic",
+    "health_cycle": "health_cycle",
+    "health_resting_hr": "health_vitals", "health_hrv": "health_vitals",
+    "health_respiratory": "health_vitals", "health_oxygen": "health_vitals",
+    "health_vo2max": "health_vitals",
+}
+
+
 def test_measured_at_ttl_is_longer_than_the_upload_based_one():
-    # 改判测量时间后若沿用旧值，不常测的指标会永远是 null
+    """改判测量时间后若沿用旧值，不常测的指标会永远是 null。
+
+    比的是「这个指标的保质期」和「装它上来的那包的上传保质期」——
+    后者按上报节奏定（体征一小时、身体测量一天），前者按人多久测一次定
+    （血氧一周、体重三个月）。前者不比后者长，就等于没改。
+    """
     from perceptkit.catalog import SIGNALS
     for signal, ttl in retention.MEASURED_AT_TTL_SEC.items():
-        assert ttl > SIGNALS[signal].ttl_sec, signal
+        carrier = _CARRIED_BY[signal]
+        assert ttl > SIGNALS[carrier].ttl_sec, signal
+
+
+def test_the_carrier_table_covers_exactly_the_measured_at_signals():
+    """上面那张对照表是手写的 —— 加了新指标却忘了登记，测试会安静地
+    少验一条。这里钉住两边一一对应。"""
+    assert set(_CARRIED_BY) == set(retention.MEASURED_AT_TTL_SEC)
+    from perceptkit.catalog import SIGNALS
+    assert set(_CARRIED_BY.values()) <= set(SIGNALS)
 
 
 # --- 以下为 Codex code_review 补的契约加固：原有断言只防「漏配」，
@@ -111,13 +140,16 @@ def test_measured_at_ttl_keys_and_values_are_pinned():
     # 遍历字典的断言在字典被删空时会空转过关；这里钉死键集合和精确天数，
     # 防止「改判测量时间」这四个信号的目标值被静默改掉或整体删除。
     assert set(retention.MEASURED_AT_TTL_SEC) == {
-        "health_body", "health_metabolic", "health_cycle", "health_vitals",
+        "health_weight", "health_bmi", "health_body_fat", "health_height",
+        "health_glucose", "health_blood_pressure", "health_cycle",
+        "health_resting_hr", "health_hrv", "health_respiratory",
+        "health_oxygen", "health_vo2max",
     }
     _DAY = 86400.0
-    assert retention.MEASURED_AT_TTL_SEC["health_body"] == 90 * _DAY
-    assert retention.MEASURED_AT_TTL_SEC["health_metabolic"] == 30 * _DAY
+    assert retention.MEASURED_AT_TTL_SEC["health_weight"] == 90 * _DAY
+    assert retention.MEASURED_AT_TTL_SEC["health_glucose"] == 30 * _DAY
     assert retention.MEASURED_AT_TTL_SEC["health_cycle"] == 60 * _DAY
-    assert retention.MEASURED_AT_TTL_SEC["health_vitals"] == 7 * _DAY
+    assert retention.MEASURED_AT_TTL_SEC["health_resting_hr"] == 7 * _DAY
 
 
 def test_retention_days_raises_for_non_historized_signal():

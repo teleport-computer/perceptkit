@@ -35,6 +35,10 @@ _DAY = 86400.0
 # 但**别再往里加条目，也别照它做判断**。
 #
 # signal -> 保留天数；None = 永久；不在表里 = 不进历史表
+# ⚠️ 这张表按 **iOS 上报键**建索引（和 history.SHAPE /
+# attribution.ATTRIBUTION / trend_models.TREND_MODEL 同一套词表），不是
+# manifest 的信号名 —— 那三张的消费方是宿主的 legacy 路径。查询保留期请用
+# `retention_days()`，它的答案来自 manifest；这张表只是早期设计的记录。
 RETENTION_DAYS: dict[str, int | None] = {
     # 永久：趋势本身就是价值
     "health_body": KEEP_FOREVER,
@@ -69,10 +73,20 @@ RETENTION_DAYS: dict[str, int | None] = {
 # 改判「测量时间」之后的保质期。只列与 catalog 现值不同的；
 # 「现在测现在传」的信号（位置/运动/专注/音频/播放）不需要改。
 MEASURED_AT_TTL_SEC: dict[str, float] = {
-    "health_body": 90 * _DAY,        # 三个月内称过就还算数
-    "health_metabolic": 30 * _DAY,   # 一个月内测过就还算数
+    # 身体测量拆开之后各留各的保质期。数值沿用拆分前的，
+    # 改它是独立的产品决定，不混在拆分这一批里。
+    "health_weight": 90 * _DAY,      # 三个月内称过就还算数
+    "health_bmi": 90 * _DAY,
+    "health_body_fat": 90 * _DAY,
+    "health_height": 90 * _DAY,
+    "health_glucose": 30 * _DAY,     # 一个月内测过就还算数
+    "health_blood_pressure": 30 * _DAY,
     "health_cycle": 60 * _DAY,       # 两个月内有记录就还算数
-    "health_vitals": 7 * _DAY,       # 一周内测过就还算数
+    "health_resting_hr": 7 * _DAY,   # 一周内测过就还算数
+    "health_hrv": 7 * _DAY,
+    "health_respiratory": 7 * _DAY,
+    "health_oxygen": 7 * _DAY,
+    "health_vo2max": 7 * _DAY,
 }
 
 

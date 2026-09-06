@@ -48,6 +48,11 @@ _TALLY_CAP = 30                      # keep only the top-N artists/tracks per da
 # Signal (canonical catalog input key) -> shape. ONE line per signal; fields are
 # discovered from the observation. Signals absent here are NOT historized
 # (pure-instant / no daily pattern: time, battery, broadcast, now, app).
+# ⚠️ 这张表按 **iOS 上报键**（宿主 legacy 路径问的那个名字）建索引，
+# 不是 manifest 的信号名。2026-09-06 把健康信号拆成单指标时，这张表也跟着
+# 拆过一次 —— 而它唯一的消费方就是 legacy 路径，拆完之后
+# `is_historized("health_vitals")` 直接返回 False，健康数据整类不再进历史，
+# 趋势和摘要一起变空，**不报错**。存储侧怎么拆看 manifest，跟这张表无关。
 SHAPE: dict[str, str] = {
     "health_vitals": NUMERIC_DIST,
     "health_metabolic": NUMERIC_DIST,

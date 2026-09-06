@@ -462,3 +462,77 @@ def test_an_interval_strategy_requires_the_signal_to_actually_send_intervals():
         if not {"start_at", "end_at"} & set(sig.field_map()):
             offenders.append(key)
     assert not offenders, f"这些信号声明了区间策略却不发区间：{offenders}"
+
+
+# ---------------------------------------------------------------------------
+# 信号拆成单指标之后要守住的几条（2026-09-06）
+# ---------------------------------------------------------------------------
+
+def test_no_signal_mixes_metrics_with_different_lifecycles():
+    """保留期 / 身份策略 / 当前值有效期是**整个信号共用**的。
+
+    多指标信号会把生命周期不同的量锁死在同一套声明里 —— 体重要永久留、
+    身高几年才变一次、实时心率是"最近一次读数"而静息心率是"一次测量"。
+
+    更要命的是逐条样本天然一次只带一个指标：存进去会把同信号的兄弟字段
+    从当前值里**静默抹掉**（2026-09-06 实测：送一条新体重，BMI 和体脂
+    从 current 消失）。
+
+    所以健康这一组一律单指标。血压是**唯一的例外**，理由在下一条。
+    """
+    from perceptkit.manifest import MINIMAL_SIGNALS
+    multi = {k: [f.key for f in s.fields
+                 if f.aggregation_strategy != "none" or f.wake_eligible]
+             for k, s in MINIMAL_SIGNALS.items() if k.startswith("health_")}
+    # 走 Lane B（当日权威值）的不受这条约束：它们的事实单位就是"今天的
+    # 累计/代表值"，一次上报本来就带齐全部指标，不存在"只带一个"的情况。
+    # health_activity 是典型 —— 活动能量/运动分钟/站立分钟总是一起来的。
+    LANE_B = {"health_activity"}
+    # 这三个是多字段但有各自的理由（见下面两条测试和它们的 note）。
+    BY_DESIGN = {"health_blood_pressure", "health_sleep", "health_workout"}
+    offenders = {k: v for k, v in multi.items()
+                 if len(v) > 1 and k not in (LANE_B | BY_DESIGN)}
+    assert not offenders, (
+        f"这些健康信号还混着多个指标：{offenders}。"
+        f"逐条样本一次只带一个指标，会把兄弟字段从当前值里抹掉")
+
+
+def test_blood_pressure_keeps_both_numbers_in_one_signal():
+    """收缩压和舒张压**必须**留在一起。
+
+    来源侧它们是一次读数（HealthKit 建模成 correlation）。拆成两个信号就
+    丢了「这是同一次量的」这个事实 —— 撤回时两条各自被删，中间任何一步
+    失败就留下半条读数。
+    """
+    from perceptkit.manifest import MINIMAL_SIGNALS
+    fields = {f.key for f in MINIMAL_SIGNALS["health_blood_pressure"].fields}
+    assert fields == {"blood_pressure_systolic_mmhg",
+                      "blood_pressure_diastolic_mmhg"}
+
+
+def test_a_signal_that_stores_history_has_something_that_reads_it():
+    """存了明细却没有任何字段声明聚合 = 存下来没人读。
+
+    拆分之前有四个指标是这个状态（身高、实时心率、呼吸率、血氧），
+    靠同信号的兄弟字段蒙混过了校验。呼吸率和血氧更糟：它们在趋势表里
+    声明了 fluctuating，而趋势是从日聚合读的 —— 「最近血氧怎么样」
+    永远读到空。
+    """
+    from perceptkit.manifest import MINIMAL_SIGNALS
+    from perceptkit.processing.aggregate import aggregating_fields
+    for key, sig in MINIMAL_SIGNALS.items():
+        if sig.stores_history:
+            assert aggregating_fields(sig), f"{key}: 存了明细但没人读"
+
+
+def test_the_four_legacy_tables_agree_with_each_other():
+    """保留期 / 形状 / 归属 / 趋势四张表必须覆盖同一批信号。
+
+    拆分时它们各自散在四个文件里，漏改一张的后果不一样但都不报错：
+    漏保留期 → 清理时抛 KeyError；漏形状 → 不进历史；
+    漏归属 → 算错哪一天；漏趋势 → 趋势查询瞎猜算法。
+    """
+    from perceptkit import retention
+    from perceptkit.algorithms import attribution, history
+    assert set(retention.RETENTION_DAYS) == set(history.SHAPE)
+    assert set(attribution.ATTRIBUTION) == set(history.SHAPE)

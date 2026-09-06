@@ -17,6 +17,11 @@ DRIFTING = "drifting"         # 没有「平时水平」，方向与速率才是
 CYCLICAL = "cyclical"         # 看间隔，不看数值高低
 
 # signal -> 模型。未列出的信号沿用波动型（现有 read_trend 的行为）。
+# ⚠️ 这张表按 **iOS 上报键**（宿主 legacy 路径问的那个名字）建索引，
+# 不是 manifest 的信号名。2026-09-06 把健康信号拆成单指标时，这张表也跟着
+# 拆过一次 —— 而它唯一的消费方就是 legacy 路径，拆完之后
+# `is_historized("health_vitals")` 直接返回 False，健康数据整类不再进历史，
+# 趋势和摘要一起变空，**不报错**。存储侧怎么拆看 manifest，跟这张表无关。
 TREND_MODEL: dict[str, str] = {
     "health_sleep": FLUCTUATING,
     "health_vitals": FLUCTUATING,
@@ -40,6 +45,10 @@ QUERY_ONLY: frozenset[str] = frozenset({
 # 一个字段；而 health_vitals 整体是 FLUCTUATING 且不在 QUERY_ONLY 里，
 # 单看"有模型 + 不在 QUERY_ONLY"会让当前心率被判定成可以叫醒——但它每次
 # 心跳都在变，跟血糖血压一样缺采样协议，不该拿来触发主动打扰。
+#
+# （2026-09-06 一度以为拆分让这条例外消失、把表清空了。清空是错的：这张
+# 表说的是**上报键**里的字段，而上报契约没拆 —— health_vitals 仍然一次
+# 带着当前心率一起上来。）
 # 存 (signal, field) 二元组，不是单独一张 field 名单：同名字段换了信号
 # 语境可能就该叫醒，必须连着信号一起认。
 QUERY_ONLY_FIELDS: frozenset[tuple[str, str]] = frozenset({

@@ -193,12 +193,12 @@ def test_trend_picks_the_algorithm_the_manifest_declares():
     """
     s = InMemoryStorage()
     s.put_aggregate(daily("steps", "2026-08-01", {"step_count": {"total": 8000}}))
-    s.put_aggregate(daily("health_body", "2026-08-01", {"weight_kg": {"value": 70.0}}))
+    s.put_aggregate(daily("health_weight", "2026-08-01", {"weight_kg": {"value": 70.0}}))
 
     steps = api.get_trend(s, subject_id="u1", signal="steps", field="step_count",
                           manifest=MINIMAL_SIGNALS,
                           start_date=date(2026, 8, 1), end_date=date(2026, 8, 1))
-    body = api.get_trend(s, subject_id="u1", signal="health_body", field="weight_kg",
+    body = api.get_trend(s, subject_id="u1", signal="health_weight", field="weight_kg",
                          manifest=MINIMAL_SIGNALS,
                          start_date=date(2026, 8, 1), end_date=date(2026, 8, 1))
     assert steps["model"] == "fluctuating"

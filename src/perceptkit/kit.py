@@ -26,6 +26,7 @@ from .ports.wake import WakePort
 from .processing.dispatch import DispatchOutcome, drain
 from .processing.pipeline import AGGREGATION_VERSION, IngestOutcome, ingest_report
 from .processing.recompute import RecomputeOutcome, recompute_range
+from .processing.retract import apply_retractions
 from .processing.source_sync import sync_source_mirror
 from .retention import plan_retention
 from .processing.scheduled import ScheduledOutcome, evaluate_absence, evaluate_daily
@@ -39,7 +40,7 @@ class PerceptionKit:
 
     storage: StoragePort
     wake: WakePort | None = None
-    #: 信号声明。默认是 ``MINIMAL_SIGNALS``（23 个，覆盖四种存储形态）；
+    #: 信号声明。默认是 ``MINIMAL_SIGNALS``（32 个，覆盖四种存储形态）；
     #: 宿主应当传自己的完整 manifest。
     signals: Mapping[str, SignalDefinition] = field(
         default_factory=lambda: dict(MINIMAL_SIGNALS)
@@ -160,6 +161,39 @@ class PerceptionKit:
         翻译成标准镜像记录是宿主的活。
         """
         return sync_source_mirror(self.storage, batch, context=context)
+
+    def apply_retractions(self, retractions, *, now: datetime,
+                          recompute: bool = True):
+        """来源撤回了几条事实：记下来、当前值重选、返回受影响的天数。
+
+        和 :meth:`ingest` 是两条路：ingest 说"这是一条新读数"，这个说
+        "之前那条不作数了"。**刻意不做成 availability 的第四个状态** ——
+        那个状态位回答的是"这次有没有拿到数"，和"之前那条还作不作数"
+        是两个正交的问题；混在一起会让旧宿主把撤回当成传感器故障，
+        于是被删掉的数值作为 last_known 继续显示出来。
+
+        默认**直接把受影响那几天的聚合重算并写回**（``recompute=False``
+        可以关掉，由调用方自己按更大的范围重算）。重算那条路已经会排除
+        被撤回的观测。
+        """
+        outcome = apply_retractions(self.storage, list(retractions),
+                                    signals=dict(self.signals), now=now)
+        if recompute:
+            # 🔴 受影响那几天的聚合**在这里真的重算并写回**。
+            #
+            # 早先只返回一个"有几天受影响"的计数，调用方拿不到是哪几天，
+            # 于是谁也没去重算 —— 撤回记下了、当前值改了，而存着的日聚合
+            # 原封不动。测试当时是直接调 recompute_day 验纯函数，所以是绿的：
+            # **它验的是那个函数会算对，不是这条路会去调它。**
+            for subject_id, signal, day in sorted(outcome.affected_days):
+                self.recompute_aggregates(
+                    subject_id=subject_id, signal=signal,
+                    start=day, end=day, now=now,
+                    # 明细可能已经按保留期清掉了。清掉之后重算会得到一份
+                    # 残缺统计，而那比"没重算"更糟 —— 旧值已经被覆盖。
+                    allow_incomplete=False,
+                )
+        return outcome
 
     def run_retention(
         self, *, subject_id: str, now: datetime, dry_run: bool = True,
