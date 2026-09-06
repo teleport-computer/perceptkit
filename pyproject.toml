@@ -10,9 +10,24 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 keywords = ["perception", "agent", "proactive", "wake", "context"]
+authors = [{ name = "Teleport Computer" }]
 
 # 零依赖:全部标准库。tests/test_purity.py 用 AST 扫描盯着这条,别手改这里而不更新那条测试。
 dependencies = []
+
+# 🔴 这几个链接不是装饰。没有它们，PyPI 页面上看不出这个包属于谁、仓库在哪 ——
+# 2026-09-03 真的有人据此判断成"私有仓、还没发布"，而它一直是公开的、
+# 八个版本都在 PyPI 上。接入方（或工程 AI）从包页面得不到源头就只能猜，
+# 而猜出来的结论会被当成事实往下传。
+#
+# ⚠️ TOML：表头之后的所有键值都归那个表。这一段必须放在 [project] 的
+# 全部键值之后 —— 插在中间会把后面的 `dependencies` 吸进 urls 里，
+# 零依赖声明就静默消失了（写这段时真踩到）。
+[project.urls]
+Homepage = "https://github.com/teleport-computer/perceptkit"
+Source = "https://github.com/teleport-computer/perceptkit"
+Changelog = "https://github.com/teleport-computer/perceptkit/blob/main/CHANGELOG.md"
+Issues = "https://github.com/teleport-computer/perceptkit/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

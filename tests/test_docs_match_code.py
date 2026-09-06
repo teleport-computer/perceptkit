@@ -45,3 +45,31 @@ def test_the_changelog_top_entry_matches_the_packaged_version():
     assert "未发布" not in head or version.endswith("dev"), (
         f"{version} 已经是要发的版本了，CHANGELOG 还写着未发布"
     )
+
+
+def test_the_package_says_where_it_comes_from():
+    """PyPI 页面上要能看出这个包属于谁、仓库在哪。
+
+    2026-09-03 真的有人据此判断成"私有仓、还没发布"——而它一直是公开的、
+    八个版本都在 PyPI 上。接入方（或工程 AI）从包页面得不到源头就只能猜，
+    猜出来的结论会被当成事实往下传。
+    """
+    text = (ROOT / "pyproject.toml").read_text()
+    for key in ("Homepage", "Source", "Changelog", "Issues"):
+        assert f"{key} = " in text, f"project.urls 缺 {key}"
+    assert "authors = " in text
+
+
+def test_the_package_still_declares_zero_dependencies():
+    """`[project.urls]` 这类表头插错位置会把后面的键吸进去。
+
+    写 project.urls 时真踩到：表头插在 `dependencies = []` 之前，
+    零依赖声明就静默变成了 urls 的一个键 —— TOML 合法、构建不报错，
+    只是这个包从此不再声明"零依赖"，而 test_purity.py 那条 AST 扫描
+    盯的是源码不是元信息，它抓不到。
+    """
+    import re
+    text = (ROOT / "pyproject.toml").read_text()
+    project = text.split("[project]", 1)[1].split("\n[", 1)[0]
+    assert re.search(r"^dependencies = \[\]", project, re.M), (
+        "dependencies 不在 [project] 里了 —— 多半被某个表头吸走了")
