@@ -243,7 +243,7 @@ class StoragePort(Protocol):
 
     def delete_source_items(
         self, *, subject_id: str, source: str, collection_kind: str,
-        source_item_ids: Sequence[str],
+        deleted_items: Sequence["DeletedItem"],
     ) -> int:
         """删掉来源**明确说删了**的那几条，返回删了几条。
 
@@ -257,8 +257,14 @@ class StoragePort(Protocol):
         删掉的日程，在 agent 眼里永远还在，还会一直出现在"接下来有什么
         安排"里），要么拿局部列表当全量删（更糟，且不可逆）。
 
-        🔴 ``source`` 是删除范围的一部分。少了它，一次 ``ios`` 的删除会
-        命中另一个来源系统里碰巧同 id 的条目。
+        🔴 **范围是完整的五段**：subject + source + account + collection +
+        item id。少任何一层都会命中同名的兄弟条目 ——
+
+            少 source      一次 ios 的删除命中 Google 里同 id 的条目
+            少 account     删掉工作账户的一个会，私人日历里同 id 的安排一起没
+            少 collection  同一账户下两个日历撞 id 时一起没
+
+        每一种都不可逆，而且用户只会发现"我的日程凭空少了"。
         """
         ...
 

@@ -254,12 +254,15 @@ class InMemoryStorage:
                 and (wanted is None or eid in wanted)]
 
     def delete_source_items(self, *, subject_id, source, collection_kind,
-                            source_item_ids) -> int:
+                            deleted_items) -> int:
         store = self.calendar if collection_kind == "calendar" else self.reminders
-        wanted = set(source_item_ids)
-        # key = (subject, source, account, collection, item_id) —— 最后一位是 id。
+        # key = (subject, source, account, collection, item_id)。
+        # **五段全比**：少一层就会命中同名的兄弟条目。
+        wanted = {(i.source_account_id, i.source_collection_id, i.source_item_id)
+                  for i in deleted_items}
         doomed = [k for k in store
-                  if k[0] == subject_id and k[1] == source and k[-1] in wanted]
+                  if k[0] == subject_id and k[1] == source
+                  and (k[2], k[3], k[4]) in wanted]
         for k in doomed:
             del store[k]
         return len(doomed)

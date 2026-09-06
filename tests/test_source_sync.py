@@ -17,7 +17,8 @@ from perceptkit import IngestContext, PerceptionKit
 from perceptkit.conformance import InMemoryStorage
 from perceptkit.contracts.records import CalendarEventMirror, ReminderItemMirror
 from perceptkit.processing.source_sync import (
-    FULL, INCREMENTAL, SyncBatch, SyncContractError, sync_source_mirror,
+    FULL, INCREMENTAL, DeletedItem, SyncBatch, SyncContractError,
+    sync_source_mirror,
 )
 
 T0 = datetime(2026, 9, 2, 9, 0, tzinfo=timezone.utc)
@@ -347,7 +348,7 @@ def test_an_incremental_batch_applies_an_explicit_tombstone():
     s = InMemoryStorage()
     sync_source_mirror(s, _batch(items=[_event("keep"), _event("gone")]),
                        context=CTX)
-    out = sync_source_mirror(s, _batch(items=[], deleted_item_ids=["gone"]),
+    out = sync_source_mirror(s, _batch(items=[], deleted_items=[DeletedItem("a", "c", "gone")]),
                              context=CTX)
     assert out.tombstoned == 1 and out.deleted == 0, \
         "tombstone 和范围删除要分开数，否则分不清是范围判断出错还是来源真删了"
@@ -368,7 +369,7 @@ def test_a_tombstone_does_not_reach_across_sources():
             context=CTX)
     sync_source_mirror(s, SyncBatch(
         source="ios", collection_kind="calendar", sync_id="ios-2",
-        deleted_item_ids=["同一个 id"]), context=CTX)
+        deleted_items=[DeletedItem("a", "c", "同一个 id")]), context=CTX)
     titles = {e.event_fields["title"]
               for e in s.list_calendar_events(subject_id="u1", limit=50)}
     assert titles == {"google"}, f"ios 的删除越界了，剩下 {titles}"
@@ -379,7 +380,62 @@ def test_a_failed_batch_does_not_apply_tombstones_either():
     s = InMemoryStorage()
     sync_source_mirror(s, _batch(items=[_event("keep")]), context=CTX)
     out = sync_source_mirror(s, _batch(
-        items=[], deleted_item_ids=["keep"], error_code="http_503"), context=CTX)
+        items=[], deleted_items=[DeletedItem("a", "c", "keep")], error_code="http_503"), context=CTX)
     assert out.failed and out.tombstoned == 0
     assert [e.source_event_id
             for e in s.list_calendar_events(subject_id="u1", limit=10)] == ["keep"]
+
+
+# ---------------------------------------------------------------------------
+# 外部复核（2026-09-06）复现的两条，我也复现了
+# ---------------------------------------------------------------------------
+
+def test_a_tombstone_only_hits_its_own_account_and_collection():
+    """同一来源里两个账户撞 event id 完全正常 —— 那是两件不同的事。
+
+    只按裸 id 删：用户删掉工作账户的一个会，私人日历里同 id 的安排
+    **一起消失**，不可逆，而用户只会发现"我的日程凭空少了"。
+    """
+    s = InMemoryStorage()
+    s.upsert_calendar_events(subject_id="u1", events=[
+        CalendarEventMirror(
+            subject_id="u1", source="ios", source_account_id="work",
+            source_calendar_id="c1", source_event_id="evt-1",
+            event_fields={"title": "工作账户的会"}, last_seen_sync_id="r0"),
+        CalendarEventMirror(
+            subject_id="u1", source="ios", source_account_id="personal",
+            source_calendar_id="c2", source_event_id="evt-1",   # 同 id
+            event_fields={"title": "私人账户的安排"}, last_seen_sync_id="r0"),
+    ])
+    out = sync_source_mirror(s, _batch(
+        items=[], deleted_items=[DeletedItem("work", "c1", "evt-1")]),
+        context=CTX)
+    assert out.tombstoned == 1
+    left = {e.source_account_id for e in s.list_calendar_events(
+        subject_id="u1", limit=10)}
+    assert left == {"personal"}, f"删过头了，剩下 {left}"
+
+
+def test_an_empty_batch_still_has_to_declare_a_known_collection_kind():
+    """校验写在 `if not items: return 0` 后面 = 永远走不到。
+
+    一个空批次带着未知的 collection_kind 能一路走完：什么都没写，
+    但全量收尾照样执行、游标照样推进。下一轮增量以为上一轮成功了。
+    **"什么都没发生"是最难发现的一种失败。**
+    """
+    s = InMemoryStorage()
+    with pytest.raises(SyncContractError, match="collection_kind"):
+        sync_source_mirror(s, _batch(
+            collection_kind="brand-new-kind", items=[], snapshot_kind=FULL,
+            coverage_start=T0 - timedelta(days=1),
+            coverage_end=T0 + timedelta(days=1)), context=CTX)
+    assert s.get_sync_state(subject_id="u1", source="ios",
+                            collection_kind="brand-new-kind") is None, \
+        "被拒的批次把游标推进了"
+
+
+def test_a_tombstone_without_full_scope_is_refused():
+    """范围缺一层，删除就会命中同名的兄弟条目。"""
+    for bad in (("", "c1", "e1"), ("a", "", "e1"), ("a", "c1", "")):
+        with pytest.raises(ValueError):
+            DeletedItem(*bad)

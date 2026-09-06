@@ -47,6 +47,8 @@ from ..contracts.records import (
     StoredObservation,
 )
 from ..contracts.receipt import WakeReceipt
+from ..contracts.retraction import Retraction
+from ..processing.source_sync import DeletedItem as _DeletedItem
 
 UTC = timezone.utc
 T0 = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
@@ -86,7 +88,7 @@ def _entry(**over: Any) -> EventOutboxEntry:
 
 
 # ---------------------------------------------------------------------------
-# 十二条保证
+# 十三条保证
 # ---------------------------------------------------------------------------
 
 def _g1_report_and_observation_idempotency(new: StorageFactory) -> list[str]:
@@ -474,6 +476,69 @@ def _g12_terminal_events_and_offsets_are_queryable(new: StorageFactory) -> list[
     return problems
 
 
+def _g13_deletes_hit_exactly_their_own_scope(new: StorageFactory) -> list[str]:
+    """⑬ 来源删除只命中它自己的那一条，撤回只作用于它指名的那条事实。
+
+    两种删除都**不可逆**，而且错了之后用户看到的是"我的东西凭空少了"，
+    没有任何东西说得清为什么。所以每个宿主都必须自己证明范围是全的。
+
+        来源条目   范围是五段：subject + source + account + collection + item
+                   少 source 一次 ios 的删除命中 Google 里同 id 的条目
+                   少 account 删工作账户的会，私人日历同 id 的一起没
+                   少 collection 同账户下两个日历撞 id 时一起没
+        事实撤回   同一条源事实上只作用一次，且必须幂等 ——
+                   重传/崩溃重放不能算两次
+
+    内存实现上这两条都很容易"看起来对"：真实存储要自己写 SQL，
+    少一个 AND 就是删过头，而测试如果只放一条数据是发现不了的。
+    """
+    problems: list[str] = []
+    s = new()
+    # 三条只差一层范围的日历条目，其余完全相同。
+    variants = [
+        ("ios", "work", "cal-1", "撞 id 的三条：这条才该被删"),
+        ("ios", "personal", "cal-2", "同来源、不同账户"),
+        ("google", "work", "cal-1", "同账户名、不同来源"),
+    ]
+    s.upsert_calendar_events(subject_id="u1", events=[
+        CalendarEventMirror(
+            subject_id="u1", source=src, source_account_id=acct,
+            source_calendar_id=cal, source_event_id="evt-1",
+            event_fields={"title": title, "start_at": T0},
+            last_seen_sync_id="r0")
+        for src, acct, cal, title in variants
+    ])
+    n = int(s.delete_source_items(
+        subject_id="u1", source="ios", collection_kind="calendar",
+        deleted_items=[_DeletedItem("work", "cal-1", "evt-1")]) or 0)
+    left = {(e.source, e.source_account_id)
+            for e in s.list_calendar_events(subject_id="u1", limit=10)}
+    if n != 1:
+        problems.append(f"⑬: 该删 1 条，实际删了 {n} 条 —— 范围少了一层")
+    if ("ios", "personal") not in left:
+        problems.append(
+            "⑬: 删工作账户的条目，把同来源另一个账户里同 id 的也删了")
+    if ("google", "work") not in left:
+        problems.append(
+            "⑬: 删 ios 的条目，把另一个来源系统里同 id 的也删了")
+
+    # 撤回：只作用于指名的那条，且幂等。
+    s2 = new()
+    r = Retraction("u1", "health_weight", "hk-A", "ios", T0)
+    other = Retraction("u1", "health_weight", "hk-B", "ios", T0)
+    if not s2.record_retraction(r):
+        problems.append("⑬: 第一次记撤回应该返回 True")
+    if s2.record_retraction(r):
+        problems.append(
+            "⑬: 同一条撤回记了两次都返回 True —— 重传会被当成两次撤回")
+    s2.record_retraction(other)
+    hit = {x.source_event_id for x in s2.list_retractions(
+        subject_id="u1", signal="health_weight", source_event_ids=["hk-A"])}
+    if hit != {"hk-A"}:
+        problems.append(f"⑬: 按身份查撤回返回了 {hit}，应该只有 hk-A")
+    return problems
+
+
 GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
     "①上报与观测幂等": _g1_report_and_observation_idempotency,
     "②旧数据不覆盖新当前值": _g2_old_does_not_overwrite_new,
@@ -487,6 +552,7 @@ GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
     "⑩用户隔离与删除": _g10_subject_isolation_and_purge,
     "⑪两个来源镜像都能往返": _g11_both_source_mirrors_round_trip,
     "⑫终态可查与翻页下推": _g12_terminal_events_and_offsets_are_queryable,
+    "⑬删除只命中自己的范围": _g13_deletes_hit_exactly_their_own_scope,
 }
 
 #: 这几条在内存实现上**永远是绿的**，因为内存天然原子、天然无并发。
@@ -495,7 +561,7 @@ NOT_PROVABLE_IN_MEMORY: frozenset[str] = frozenset({"⑤提供原子边界"})
 
 
 def run_storage_conformance(factory: StorageFactory) -> list[str]:
-    """跑全部十二条，返回问题清单（空 = 通过）。
+    """跑全部十三条，返回问题清单（空 = 通过）。
 
     返回列表而不是抛异常：一次看到全部缺口，比逐个修再重跑快得多。
     """
