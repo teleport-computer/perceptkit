@@ -19,12 +19,21 @@ CYCLICAL = "cyclical"         # 看间隔，不看数值高低
 # signal -> 模型。未列出的信号沿用波动型（现有 read_trend 的行为）。
 TREND_MODEL: dict[str, str] = {
     "health_sleep": FLUCTUATING,
-    "health_vitals": FLUCTUATING,
+    "health_resting_hr": FLUCTUATING,
+    "health_hrv": FLUCTUATING,
+    "health_respiratory": FLUCTUATING,
+    "health_oxygen": FLUCTUATING,
+    "health_vo2max": DRIFTING,
+    "health_current_hr": FLUCTUATING,
     "health_activity": FLUCTUATING,
-    "health_body": DRIFTING,
+    "health_weight": DRIFTING,
+    "health_bmi": DRIFTING,
+    "health_body_fat": DRIFTING,
+    "health_height": DRIFTING,
     "health_cycle": CYCLICAL,
     # 只查询、不叫醒（见下方 QUERY_ONLY）：血糖/血压/当前心率
-    "health_metabolic": FLUCTUATING,
+    "health_glucose": FLUCTUATING,
+    "health_blood_pressure": FLUCTUATING,
 }
 
 # 允许进入主动叫醒的指标必须同时满足：有模型 + 不在这张表里。
@@ -32,19 +41,28 @@ TREND_MODEL: dict[str, str] = {
 # 血糖、血压、当前心率缺餐前/餐后、体位、运动关系与稳定采样协议，
 # 这些数不能直接做同质趋势比较 —— 给 agent 查得到，但不主动打扰。
 QUERY_ONLY: frozenset[str] = frozenset({
-    "health_metabolic",
+    "health_glucose",
+    "health_blood_pressure",
+    # 当前心率：2026-09-06 信号拆分之后它自己就是一个信号，
+    # 所以从下面的字段级表升到这里。理由不变 —— 每次读数受体位、
+    # 运动、情绪影响，做同质趋势比较没有意义。
+    "health_current_hr",
 })
 
-# 字段级的"只查询、不叫醒"——比 QUERY_ONLY 更细一档（Codex code_review
-# 2026-08-23 抓到）：当前心率不是一个独立信号，是 health_vitals 信号里的
-# 一个字段；而 health_vitals 整体是 FLUCTUATING 且不在 QUERY_ONLY 里，
-# 单看"有模型 + 不在 QUERY_ONLY"会让当前心率被判定成可以叫醒——但它每次
-# 心跳都在变，跟血糖血压一样缺采样协议，不该拿来触发主动打扰。
-# 存 (signal, field) 二元组，不是单独一张 field 名单：同名字段换了信号
+# 字段级的"只查询、不叫醒"——比 QUERY_ONLY 更细一档。
+#
+# 这张表**现在是空的**，但机制留着，而且不能删：
+#
+#   2026-08-23 Codex 抓到过一次 —— 当前心率当时是 health_vitals 里的一个
+#   字段，而那个信号整体 FLUCTUATING 且不在 QUERY_ONLY 里，于是"有模型 +
+#   不在 QUERY_ONLY"这条判据会让它被判定成可以叫醒。
+#   2026-09-06 信号拆分之后它自己成了一个信号，升到了 QUERY_ONLY。
+#
+# 所以这张表空不代表这类例外不会再出现：只要还有多字段信号（睡眠、血压、
+# 运动都是），"信号整体可叫醒、但里面某个字段不该"就随时会再发生。
+# 存 (signal, field) 二元组而不是单独一张 field 名单：同名字段换了信号
 # 语境可能就该叫醒，必须连着信号一起认。
-QUERY_ONLY_FIELDS: frozenset[tuple[str, str]] = frozenset({
-    ("health_vitals", "current_heart_rate"),
-})
+QUERY_ONLY_FIELDS: frozenset[tuple[str, str]] = frozenset()
 
 # 不参与趋势的派生量 / 常量。
 #

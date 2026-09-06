@@ -33,12 +33,14 @@ KEY_TO_SIGNAL: dict[str, str] = {
     "audio_route": "audio_route",
     "weather": "weather",
     "playback": "music_playback",
-    "health_vitals": "health_vitals",
+    # iOS 送的是一个打包的 health_vitals，kit 侧已经拆成单指标 ——
+    # 拆包在 SPLIT_OFF 里做（见下），这里只认领信号名。
+    "health_vitals": "health_resting_hr",
     "health_sleep": "health_sleep",
     "health_workout": "health_workout",
     "health_activity": "health_activity",
-    "health_body": "health_body",
-    "health_metabolic": "health_metabolic",
+    "health_body": "health_weight",
+    "health_metabolic": "health_glucose",
     "health_cycle": "health_cycle",
     "health_mood": "health_mood",
 }

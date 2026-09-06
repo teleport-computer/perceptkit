@@ -30,7 +30,7 @@ SHORT_SLEEP_STREAK = EventDefinition.parse({
 
 NO_WEIGHT_FOR_DAYS = EventDefinition.parse({
     "id": "weight_gone_quiet", "version": 1,
-    "source": {"signal": "health_body", "field": "weight_kg"},
+    "source": {"signal": "health_weight", "field": "weight_kg"},
     "condition": {"type": "absence", "value": 259200},   # 3 天
     "lifecycle": {"scope": "local_day", "fire": "once"},
     "event": {"type": "health.weight_not_logged"},
@@ -139,7 +139,7 @@ def weight_report(kg: float, day: str, rid: str) -> dict:
     return {
         "schema_version": 1, "report_id": rid, "producer": "ios",
         "observations": [{
-            "signal": "health_body", "signal_schema_version": 1,
+            "signal": "health_weight", "signal_schema_version": 1,
             "occurred_at": t("08:00", day).isoformat(),
             "availability": "observed", "source_event_id": f"hk-w-{day}",
             "value": {"weight_kg": kg},

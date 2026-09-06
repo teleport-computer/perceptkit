@@ -49,12 +49,22 @@ _TALLY_CAP = 30                      # keep only the top-N artists/tracks per da
 # discovered from the observation. Signals absent here are NOT historized
 # (pure-instant / no daily pattern: time, battery, broadcast, now, app).
 SHAPE: dict[str, str] = {
-    "health_vitals": NUMERIC_DIST,
-    "health_metabolic": NUMERIC_DIST,
+    # 2026-09-06 拆成单指标。实时心率和身高不在这里 —— 它们
+    # storage_mode=current_only，本来就不该进历史表（拆分之前它们是
+    # 靠同信号的兄弟字段蒙混进来的，存下来的明细没有任何东西读得到）。
+    "health_resting_hr": NUMERIC_DIST,
+    "health_hrv": NUMERIC_DIST,
+    "health_respiratory": NUMERIC_DIST,
+    "health_oxygen": NUMERIC_DIST,
+    "health_vo2max": MAIN_OF_DAY,
+    "health_glucose": NUMERIC_DIST,
+    "health_blood_pressure": NUMERIC_DIST,
     "weather": NUMERIC_DIST,
     "health_activity": CUMULATIVE,
     "health_sleep": MAIN_OF_DAY,
-    "health_body": MAIN_OF_DAY,
+    "health_weight": MAIN_OF_DAY,
+    "health_bmi": MAIN_OF_DAY,
+    "health_body_fat": MAIN_OF_DAY,
     "health_cycle": MAIN_OF_DAY,
     "health_mood": SUBJECTIVE,
     "motion_state": DURATION_BY_STATE,

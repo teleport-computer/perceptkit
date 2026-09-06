@@ -14,7 +14,7 @@ def _rows(pairs):
 
 
 def test_weight_is_declared_drifting():
-    assert tm.TREND_MODEL["health_body"] == tm.DRIFTING
+    assert tm.TREND_MODEL["health_weight"] == tm.DRIFTING
 
 
 def test_sleep_is_declared_fluctuating():
@@ -27,7 +27,8 @@ def test_cycle_is_declared_cyclical():
 
 def test_metabolic_is_query_only():
     # 血糖/血压缺餐食、体位、运动上下文，不能做同质趋势比较 —> 查得到，不叫醒
-    assert "health_metabolic" in tm.QUERY_ONLY
+    assert "health_glucose" in tm.QUERY_ONLY
+    assert "health_blood_pressure" in tm.QUERY_ONLY
 
 
 def test_bmi_and_height_do_not_participate():
@@ -37,23 +38,24 @@ def test_bmi_and_height_do_not_participate():
 
 
 def test_current_heart_rate_is_query_only_despite_its_signal_being_wake_eligible():
-    # health_vitals 整体是 FLUCTUATING、不在 QUERY_ONLY 里 —— 只看"有模型 +
+    # 2026-09-06 拆分之后当前心率自己就是一个信号，升进了 QUERY_ONLY。
+    # 这条测试改成验"升上去了"，而不是原来的字段级例外。只看"有模型 +
     # 不在 QUERY_ONLY"这条粗规则会误判当前心率可以叫醒；但它每次心跳都在变，
     # 跟血糖血压一样缺采样协议，必须靠字段级例外单独拦。
-    assert tm.wake_eligible("health_vitals", "current_heart_rate") is False
+    assert tm.wake_eligible("health_current_hr", "current_heart_rate") is False
     # 同一个信号里的静息心率、HRV 不受影响，仍然可以叫醒
-    assert tm.wake_eligible("health_vitals", "resting_heart_rate") is True
-    assert tm.wake_eligible("health_vitals", "hrv_sdnn_ms") is True
+    assert tm.wake_eligible("health_resting_hr", "resting_heart_rate") is True
+    assert tm.wake_eligible("health_hrv", "hrv_sdnn_ms") is True
     # 信号级 QUERY_ONLY（血糖/血压）照样整体拦
-    assert tm.wake_eligible("health_metabolic", "glucose_mg_dl") is False
+    assert tm.wake_eligible("health_glucose", "blood_glucose_mmol_l") is False
     # 派生/常量字段跟信号无关，照样拦
-    assert tm.wake_eligible("health_body", "bmi") is False
+    assert tm.wake_eligible("health_bmi", "bmi") is False
 
 
 def test_year_long_weight_loss_reports_total_and_rate():
     # 12 个月 80 -> 60
     rows = _rows([(f"2025-{m:02d}-01", 80.0 - (20.0 * (m - 1) / 11)) for m in range(1, 13)])
-    out = tm.read_drift(rows, "health_body", "weight_kg")
+    out = tm.read_drift(rows, "health_weight", "weight_kg")
     assert out["model"] == tm.DRIFTING
     assert out["first"]["value"] == 80.0
     assert out["last"]["value"] == 60.0
@@ -64,7 +66,7 @@ def test_year_long_weight_loss_reports_total_and_rate():
 
 def test_flat_series_reports_zero_drift():
     rows = _rows([("2025-01-01", 68.0), ("2025-06-01", 68.0), ("2025-12-01", 68.0)])
-    out = tm.read_drift(rows, "health_body", "weight_kg")
+    out = tm.read_drift(rows, "health_weight", "weight_kg")
     assert out["total_delta"] == 0.0
     assert out["per_month"] == 0.0
     assert out["accelerating"] is False
@@ -74,18 +76,18 @@ def test_recent_acceleration_is_detected():
     # 前 10 个月几乎不动，最后 2 个月猛掉
     pairs = [(f"2025-{m:02d}-01", 80.0) for m in range(1, 11)]
     pairs += [("2025-11-01", 77.0), ("2025-12-01", 74.0)]
-    out = tm.read_drift(_rows(pairs), "health_body", "weight_kg")
+    out = tm.read_drift(_rows(pairs), "health_weight", "weight_kg")
     assert out["accelerating"] is True
 
 
 def test_single_point_cannot_drift():
-    out = tm.read_drift(_rows([("2025-01-01", 68.0)]), "health_body", "weight_kg")
+    out = tm.read_drift(_rows([("2025-01-01", 68.0)]), "health_weight", "weight_kg")
     assert out["per_month"] is None
     assert out["n"] == 1
 
 
 def test_empty_rows_are_safe():
-    out = tm.read_drift([], "health_body", "weight_kg")
+    out = tm.read_drift([], "health_weight", "weight_kg")
     assert out["n"] == 0
     assert out["total_delta"] is None
 

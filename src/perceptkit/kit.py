@@ -40,7 +40,7 @@ class PerceptionKit:
 
     storage: StoragePort
     wake: WakePort | None = None
-    #: 信号声明。默认是 ``MINIMAL_SIGNALS``（23 个，覆盖四种存储形态）；
+    #: 信号声明。默认是 ``MINIMAL_SIGNALS``（32 个，覆盖四种存储形态）；
     #: 宿主应当传自己的完整 manifest。
     signals: Mapping[str, SignalDefinition] = field(
         default_factory=lambda: dict(MINIMAL_SIGNALS)

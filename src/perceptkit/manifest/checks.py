@@ -99,7 +99,12 @@ def check_history_has_retention(signals: Mapping[str, SignalDefinition]) -> list
                     f"{key}: 声明了要存历史，但没有任何字段声明 aggregation_strategy"
                     f"（那存下来的明细没有任何东西会去读它）"
                 )
-        if sig.history_retention_days < -1:
+        # None = 没声明。对 current_only 的信号那是正确的（它本来就不存历史），
+        # 对存历史的信号则由上面那条规则去管。这里只判"声明了但值非法"——
+        # 早先直接拿 None 去比大小，校验器自己抛 TypeError，
+        # 而校验器崩掉比它漏报更糟：调用方拿到的是异常不是问题清单。
+        if (sig.history_retention_days is not None
+                and sig.history_retention_days < -1):
             problems.append(
                 f"{key}: history_retention_days={sig.history_retention_days} 非法"
                 f"（-1 表示永久，0 表示不存，正数表示天数）"

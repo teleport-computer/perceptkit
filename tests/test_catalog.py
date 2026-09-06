@@ -12,8 +12,8 @@ import perceptkit.catalog as catalog
 def test_capability_and_signal_counts_match_baseline():
     # 基线值：21 个能力、20 个信号（迁移时的快照）。
     # 这两个数字变了就是加/删了能力——变更应该是有意为之，不是意外漂移。
-    assert len(catalog.CAPABILITIES) == 21
-    assert len(catalog.SIGNALS) == 20
+    assert len(catalog.CAPABILITIES) == 30
+    assert len(catalog.SIGNALS) == 29
 
 
 def test_every_signal_points_at_a_declared_capability():

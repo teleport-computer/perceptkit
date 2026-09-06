@@ -31,7 +31,7 @@ def _weigh(kit, storage, kg, *, at, eid):
     out = kit.ingest({
         "schema_version": 1, "report_id": f"r-{eid}", "producer": "ios",
         "observations": [{
-            "signal": "health_body", "signal_schema_version": 1,
+            "signal": "health_weight", "signal_schema_version": 1,
             "occurred_at": at.isoformat(), "availability": "observed",
             "timezone": "Asia/Shanghai", "source_event_id": eid,
             "value": {"weight_kg": kg},
@@ -41,12 +41,12 @@ def _weigh(kit, storage, kg, *, at, eid):
 
 
 def _current(storage):
-    rows = storage.get_current(subject_id="u", signals=["health_body"])["health_body"]
+    rows = storage.get_current(subject_id="u", signals=["health_weight"])["health_weight"]
     return (rows[0].typed_value, rows[0].availability) if rows else (None, None)
 
 
 def _retract(eid, at=T0 + timedelta(hours=5)):
-    return Retraction("u", "health_body", eid, "ios", at)
+    return Retraction("u", "health_weight", eid, "ios", at)
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +88,7 @@ def test_an_unavailable_report_still_keeps_last_known():
     kit.ingest({
         "schema_version": 1, "report_id": "r-off", "producer": "ios",
         "observations": [{
-            "signal": "health_body", "signal_schema_version": 1,
+            "signal": "health_weight", "signal_schema_version": 1,
             "occurred_at": (T0 + timedelta(hours=1)).isoformat(),
             "availability": "unavailable", "timezone": "Asia/Shanghai",
             "source_event_id": "hk-A",
@@ -134,7 +134,7 @@ def test_the_observation_survives_so_the_gap_stays_explainable():
     before = len(s.observations)
     kit.apply_retractions([_retract("hk-A")], now=T0 + timedelta(hours=5))
     assert len(s.observations) == before, "撤回把观测就地删了"
-    assert s.list_retractions(subject_id="u", signal="health_body")
+    assert s.list_retractions(subject_id="u", signal="health_weight")
 
 
 # ---------------------------------------------------------------------------
@@ -147,12 +147,12 @@ def test_a_retracted_fact_is_left_out_of_the_recomputed_day():
     _weigh(kit, s, 70.5, at=T0, eid="hk-A")
     _weigh(kit, s, 90.0, at=T0 + timedelta(hours=2), eid="hk-bogus")
 
-    agg = recompute_day(s, MINIMAL_SIGNALS["health_body"], subject_id="u",
+    agg = recompute_day(s, MINIMAL_SIGNALS["health_weight"], subject_id="u",
                         day=DAY, version=1, updated_at=T0)
     assert agg.source_coverage["observations"] == 2
 
     kit.apply_retractions([_retract("hk-bogus")], now=T0 + timedelta(hours=5))
-    agg = recompute_day(s, MINIMAL_SIGNALS["health_body"], subject_id="u",
+    agg = recompute_day(s, MINIMAL_SIGNALS["health_weight"], subject_id="u",
                         day=DAY, version=1, updated_at=T0)
     assert agg.source_coverage["observations"] == 1, "被撤回的还在参与折聚合"
 
@@ -163,7 +163,7 @@ def test_a_retracted_fact_is_left_out_of_the_recomputed_day():
 
 def test_a_retraction_needs_a_target():
     with pytest.raises(ValueError, match="source_event_id"):
-        Retraction("u", "health_body", "", "ios", T0)
+        Retraction("u", "health_weight", "", "ios", T0)
 
 
 def test_purge_takes_retractions_too():
@@ -173,4 +173,4 @@ def test_purge_takes_retractions_too():
     kit.apply_retractions([_retract("hk-A")], now=T0 + timedelta(hours=5))
     counts = s.purge_subject(subject_id="u")
     assert counts.get("retractions") == 1
-    assert not s.list_retractions(subject_id="u", signal="health_body")
+    assert not s.list_retractions(subject_id="u", signal="health_weight")

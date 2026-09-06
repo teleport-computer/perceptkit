@@ -22,8 +22,8 @@ from perceptkit.manifest.types import PERMANENT
 
 def test_health_signals_are_kept_forever():
     """健康数据的明细永久保存 —— 趋势本身就是价值。"""
-    for signal in ("health_body", "health_sleep", "health_vitals", "health_activity",
-                   "health_workout", "health_metabolic", "health_mood", "health_cycle"):
+    for signal in ("health_weight", "health_sleep", "health_resting_hr", "health_activity",
+                   "health_workout", "health_glucose", "health_mood", "health_cycle"):
         assert retention.retention_days(signal) == PERMANENT, signal
 
 
@@ -38,7 +38,7 @@ def test_none_means_the_opposite_in_the_two_vocabularies():
     """
     assert retention.KEEP_FOREVER is None            # 旧表的"永久"
     assert PERMANENT == -1                           # manifest 的"永久"
-    assert retention.retention_days("health_body") == PERMANENT
+    assert retention.retention_days("health_weight") == PERMANENT
     # 不进历史表的**抛错**，不返回 None —— 否则照旧词表读的人会把
     # 「根本不存历史」当成「永久保留」，而这两个意思正好相反。
     with pytest.raises(KeyError):
@@ -111,13 +111,16 @@ def test_measured_at_ttl_keys_and_values_are_pinned():
     # 遍历字典的断言在字典被删空时会空转过关；这里钉死键集合和精确天数，
     # 防止「改判测量时间」这四个信号的目标值被静默改掉或整体删除。
     assert set(retention.MEASURED_AT_TTL_SEC) == {
-        "health_body", "health_metabolic", "health_cycle", "health_vitals",
+        "health_weight", "health_bmi", "health_body_fat", "health_height",
+        "health_glucose", "health_blood_pressure", "health_cycle",
+        "health_resting_hr", "health_hrv", "health_respiratory",
+        "health_oxygen", "health_vo2max",
     }
     _DAY = 86400.0
-    assert retention.MEASURED_AT_TTL_SEC["health_body"] == 90 * _DAY
-    assert retention.MEASURED_AT_TTL_SEC["health_metabolic"] == 30 * _DAY
+    assert retention.MEASURED_AT_TTL_SEC["health_weight"] == 90 * _DAY
+    assert retention.MEASURED_AT_TTL_SEC["health_glucose"] == 30 * _DAY
     assert retention.MEASURED_AT_TTL_SEC["health_cycle"] == 60 * _DAY
-    assert retention.MEASURED_AT_TTL_SEC["health_vitals"] == 7 * _DAY
+    assert retention.MEASURED_AT_TTL_SEC["health_resting_hr"] == 7 * _DAY
 
 
 def test_retention_days_raises_for_non_historized_signal():

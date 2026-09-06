@@ -503,12 +503,19 @@ def _vitals(kit, storage, at):
     kit.ingest({
         "schema_version": 1, "report_id": f"r{at.minute}", "producer": "ios",
         "observations": [{
-            "signal": "health_vitals", "signal_schema_version": 1,
+            "signal": "health_workout", "signal_schema_version": 1,
             "occurred_at": at.isoformat(), "availability": "observed",
             "timezone": "Asia/Shanghai",
-            # 静息心率是 numeric_dist，vo2_max 是 main_of_day —— manifest 里
-            # 唯一一个混了两种算法的信号，所以也是唯一炸的那个。
-            "value": {"resting_heart_rate": 58, "vo2_max": 41.3},
+            # duration_minutes 是 daily_total，workout_type 是 event_list ——
+            # 一个信号里混了两种算法，正是当初炸的那个形状。
+            #
+            # ⚠️ 原来这条测的是 health_vitals（静息心率 numeric_dist +
+            # vo2_max main_of_day）。2026-09-06 信号拆成单指标之后那个组合
+            # 不存在了，但**这个 bug 的形状还在**：只要还有多字段信号，
+            # 两种算法就可能撞在一起。所以换到还成立的信号上，不是删掉。
+            "value": {"workout_type": "running", "duration_minutes": 30,
+                      "start_at": at.isoformat(),
+                      "end_at": (at + timedelta(minutes=30)).isoformat()},
         }],
     }, context=IngestContext("u", at))
 
@@ -516,7 +523,7 @@ def _vitals(kit, storage, at):
 def test_two_reports_in_one_day_do_not_crash_a_mixed_strategy_signal():
     """同一个信号里两种聚合算法互相覆盖，第二条上报就崩。
 
-    main_of_day 把字段写成裸数字，numeric_dist 下一条进来读 cell["min"]，
+    一种算法把字段写成裸数字，另一种下一条进来当成 cell 去读 ——
     读到的是个 float。**每个用户每天第二次上报都会踩**。
     """
     storage = InMemoryStorage()
@@ -525,11 +532,13 @@ def test_two_reports_in_one_day_do_not_crash_a_mixed_strategy_signal():
     _vitals(kit, storage, base)
     _vitals(kit, storage, base + timedelta(minutes=5))      # 崩在这一行
 
-    doc = storage.get_aggregate(subject_id="u", signal="health_vitals",
+    doc = storage.get_aggregate(subject_id="u", signal="health_workout",
                                 start_date=base.date(), end_date=base.date()
                                 )[0].typed_aggregate
-    assert doc["resting_heart_rate"]["count"] == 2          # 分布还在累计
-    assert doc["vo2_max"] == 41.3                           # 快照还是裸值
+    assert doc["duration_minutes"]["total"] == 30           # 累计还在
+    # event_list 写的键是 events，不是字段名 —— 两种算法各写各的形状，
+    # 而这正是它们互相踩的原因。
+    assert doc["events"], "事件列表被另一种算法覆盖了"
 
 
 def test_a_field_that_declares_no_aggregation_is_not_aggregated():

@@ -28,7 +28,7 @@ T = datetime(2026, 9, 2, 9, 0, tzinfo=timezone.utc)
 def _obs(storage, oid, *, value, event_id, revision=None, minutes=0,
          availability="observed"):
     storage.append_observation(StoredObservation(
-        subject_id="u", observation_id=oid, signal="health_vitals",
+        subject_id="u", observation_id=oid, signal="health_resting_hr",
         signal_schema_version=1, source="ios",
         occurred_at=T + timedelta(minutes=minutes), received_at=T,
         availability=availability, effective_local_date=DAY,
@@ -38,7 +38,7 @@ def _obs(storage, oid, *, value, event_id, revision=None, minutes=0,
 
 
 def _rhr(storage):
-    agg = recompute_day(storage, MINIMAL_SIGNALS["health_vitals"],
+    agg = recompute_day(storage, MINIMAL_SIGNALS["health_resting_hr"],
                         subject_id="u", day=DAY, version=1, updated_at=T)
     return (agg.typed_aggregate.get("resting_heart_rate"),
             agg.source_coverage["observations"])

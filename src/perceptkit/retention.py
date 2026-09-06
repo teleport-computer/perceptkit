@@ -37,12 +37,22 @@ _DAY = 86400.0
 # signal -> 保留天数；None = 永久；不在表里 = 不进历史表
 RETENTION_DAYS: dict[str, int | None] = {
     # 永久：趋势本身就是价值
-    "health_body": KEEP_FOREVER,
+    "health_weight": KEEP_FOREVER,
+    "health_bmi": KEEP_FOREVER,
+    "health_body_fat": KEEP_FOREVER,
     "health_sleep": KEEP_FOREVER,
-    "health_vitals": KEEP_FOREVER,
+    # 实时心率和身高不在这张表里：它们 storage_mode=current_only，
+    # 不进历史。拆分之前它们跟着兄弟字段进了历史表，而存下来的明细
+    # 没有任何东西读得到 —— 拆开之后 manifest 校验器直接把这条指出来了。
+    "health_resting_hr": KEEP_FOREVER,
+    "health_hrv": KEEP_FOREVER,
+    "health_respiratory": KEEP_FOREVER,
+    "health_oxygen": KEEP_FOREVER,
+    "health_vo2max": KEEP_FOREVER,
     "health_activity": KEEP_FOREVER,
     "health_workout": KEEP_FOREVER,
-    "health_metabolic": KEEP_FOREVER,
+    "health_glucose": KEEP_FOREVER,
+    "health_blood_pressure": KEEP_FOREVER,
     "health_mood": KEEP_FOREVER,
     "health_cycle": KEEP_FOREVER,
     "location_signal": KEEP_FOREVER,
@@ -69,10 +79,20 @@ RETENTION_DAYS: dict[str, int | None] = {
 # 改判「测量时间」之后的保质期。只列与 catalog 现值不同的；
 # 「现在测现在传」的信号（位置/运动/专注/音频/播放）不需要改。
 MEASURED_AT_TTL_SEC: dict[str, float] = {
-    "health_body": 90 * _DAY,        # 三个月内称过就还算数
-    "health_metabolic": 30 * _DAY,   # 一个月内测过就还算数
+    # 身体测量拆开之后各留各的保质期。数值沿用拆分前的，
+    # 改它是独立的产品决定，不混在拆分这一批里。
+    "health_weight": 90 * _DAY,      # 三个月内称过就还算数
+    "health_bmi": 90 * _DAY,
+    "health_body_fat": 90 * _DAY,
+    "health_height": 90 * _DAY,
+    "health_glucose": 30 * _DAY,     # 一个月内测过就还算数
+    "health_blood_pressure": 30 * _DAY,
     "health_cycle": 60 * _DAY,       # 两个月内有记录就还算数
-    "health_vitals": 7 * _DAY,       # 一周内测过就还算数
+    "health_resting_hr": 7 * _DAY,   # 一周内测过就还算数
+    "health_hrv": 7 * _DAY,
+    "health_respiratory": 7 * _DAY,
+    "health_oxygen": 7 * _DAY,
+    "health_vo2max": 7 * _DAY,
 }
 
 

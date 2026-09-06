@@ -1,4 +1,4 @@
-"""默认 manifest —— 23 个信号。
+"""默认 manifest —— 32 个信号。
 
 **它是怎么长到 23 个的。** 一开始只有五个：管线的正确性（幂等、乱序、TTL、
 聚合重算、规则求值、投递可靠性）和信号数量无关，所以先用五个把管线跑通，
@@ -19,6 +19,8 @@
 并且都进了 ``OPEN-QUESTIONS.md`` 等确认 —— 不是默默改掉。
 """
 from __future__ import annotations
+
+from dataclasses import replace
 
 from .types import PERMANENT, FieldDefinition, SignalDefinition
 
@@ -828,6 +830,29 @@ HEALTH_ACTIVITY = SignalDefinition(
     ),
 )
 
+def _split_off(base: SignalDefinition, *, key: str, label: str,
+               fields: tuple[str, ...], note: str = "",
+               **over: object) -> SignalDefinition:
+    """从一个多指标信号里切出一个单指标信号。
+
+    **字段属性原样带过来**，不手抄 —— 十二个信号手抄一遍，必然有一处
+    单位或值域抄错，而那种错落库之后看不出来（值合法、单位标错）。
+
+    为什么要拆（2026-09-06 拍板）：保留期、身份策略、当前值有效期是
+    **整个信号共用**的，而这些指标的生命周期本来就不一样 ——
+    体重要永久留、身高几年才变一次、实时心率是"最近一次读数"而
+    静息心率是"一次测量"。挤在一个信号里，它们被迫共用一套声明；
+    更要命的是逐条样本天然一次只带一个指标，存进去会把同信号的
+    兄弟字段从当前值里**静默抹掉**（实测过）。
+    """
+    picked = tuple(f for f in base.fields if f.key in fields)
+    missing = set(fields) - {f.key for f in picked}
+    if missing:
+        raise ValueError(f"{key}: 源信号里没有这些字段 {sorted(missing)}")
+    return replace(base, key=key, label=label, fields=picked,
+                   note=note or base.note, **over)
+
+
 HEALTH_BODY = SignalDefinition(
     key="health_body", label="身体测量", schema_version=1,
     capability="health_body", storage_mode="current_timeline_aggregate",
@@ -1272,6 +1297,95 @@ APP_USAGE = SignalDefinition(
 )
 
 
+
+# ---------------------------------------------------------------------------
+# 上面三个多指标信号切成单指标（2026-09-06 拍板，理由见 _split_off 的文档）
+#
+# 🔴 切出来的才是 manifest 里的正式信号；HEALTH_BODY / HEALTH_VITALS /
+#    HEALTH_METABOLIC 三个只作为**声明的模板**存在，不进 MINIMAL_SIGNALS。
+#    留两套并存 = 第二套目录，正是 0.3.0 刚清掉的那种双重真相。
+# ---------------------------------------------------------------------------
+
+HEALTH_WEIGHT = _split_off(
+    HEALTH_BODY, key="health_weight", label="体重", fields=("weight_kg",),
+    note=("「用户改数据」最常发生的地方（录错、手动补录）——修订和撤回主要"
+          "为它服务。也是单位最容易标错的：70 kg 被标成 lb，换算完 31.8 kg "
+          "值域完全合法，只有「一次掉 55%」能看出不对。"),
+)
+HEALTH_BMI = _split_off(
+    HEALTH_BODY, key="health_bmi", label="BMI", fields=("bmi",),
+    note=("通常由 app 从体重和身高算出来，不一定有独立的来源样本 —— "
+          "所以它可能拿不到稳定身份，撤回也就落不到它头上。"),
+)
+HEALTH_BODY_FAT = _split_off(
+    HEALTH_BODY, key="health_body_fat", label="体脂率",
+    fields=("body_fat_ratio",),
+)
+HEALTH_HEIGHT = _split_off(
+    HEALTH_BODY, key="health_height", label="身高", fields=("height_cm",),
+    storage_mode="current_only", history_retention_days=0,
+    note=("几年才变一次，**不存历史**。挤在 health_body 里时它跟着存了明细，"
+          "而它自己的字段没有聚合策略 —— 那些明细没有任何东西读得到，"
+          "只是白占地方。拆开之后校验器直接把这条指出来了。"),
+)
+
+HEALTH_RESTING_HR = _split_off(
+    HEALTH_VITALS, key="health_resting_hr", label="静息心率",
+    fields=("resting_heart_rate",),
+    note=("一天测一次，是「一次测量」不是「当日代表值」—— 用户能指着某一次说"
+          "「删掉它」。⚠️ 当前值有效期沿用了 health_vitals 的 1 小时，"
+          "对一天一次的量偏短；改它是独立的产品决定，本次不动。"),
+)
+HEALTH_HRV = _split_off(
+    HEALTH_VITALS, key="health_hrv", label="心率变异性",
+    fields=("hrv_sdnn_ms",),
+)
+HEALTH_RESPIRATORY = _split_off(
+    HEALTH_VITALS, key="health_respiratory", label="呼吸率",
+    fields=("respiratory_rate",),
+    note=("⚠️ 拆分暴露的旧账：它在趋势表里声明了 fluctuating，但字段没有聚合策略，"
+          "而趋势是从日聚合读的 —— 于是「最近呼吸率怎么样」永远读到空。"
+          "挤在 health_vitals 里时靠兄弟字段蒙混过了 manifest 校验。"),
+)
+HEALTH_RESPIRATORY = replace(HEALTH_RESPIRATORY, fields=(
+    replace(HEALTH_RESPIRATORY.fields[0], aggregation_strategy="numeric_dist",
+            trend_model="fluctuating"),
+))
+HEALTH_OXYGEN = _split_off(
+    HEALTH_VITALS, key="health_oxygen", label="血氧",
+    fields=("oxygen_saturation_pct",),
+    note="同 health_respiratory：声明了趋势却没有聚合，趋势永远读到空。",
+)
+HEALTH_OXYGEN = replace(HEALTH_OXYGEN, fields=(
+    replace(HEALTH_OXYGEN.fields[0], aggregation_strategy="numeric_dist",
+            trend_model="fluctuating"),
+))
+HEALTH_VO2MAX = _split_off(
+    HEALTH_VITALS, key="health_vo2max", label="最大摄氧量",
+    fields=("vo2_max",),
+)
+HEALTH_CURRENT_HR = _split_off(
+    HEALTH_VITALS, key="health_current_hr", label="实时心率",
+    fields=("current_heart_rate",), storage_mode="current_only",
+    history_retention_days=0,
+    note=("**这一个不走逐条样本。** 运动时每几秒一条，而它的语义就是"
+          "「最近一次读数」——不是一条你会想删掉的测量记录。"
+          "当日权威值那一档：同一天最新的查询结果赢。"),
+)
+
+HEALTH_GLUCOSE = _split_off(
+    HEALTH_METABOLIC, key="health_glucose", label="血糖",
+    fields=("blood_glucose_mmol_l",),
+    note=("波动本来就大（餐前餐后能差一倍），所以不设跳变阈值 —— 设了会天天误报。"),
+)
+HEALTH_BLOOD_PRESSURE = _split_off(
+    HEALTH_METABOLIC, key="health_blood_pressure", label="血压",
+    fields=("blood_pressure_systolic_mmhg", "blood_pressure_diastolic_mmhg"),
+    note=("🔴 收缩压和舒张压**留在同一个信号里**，因为来源侧它们是一次读数"
+          "（HealthKit 建模成 correlation）。拆成两个信号就丢了「这是同一次量的」"
+          "这个事实 —— 撤回时两条各自被删，中间任何一步失败就留下半条读数。"),
+)
+
 MINIMAL_SIGNALS: dict[str, SignalDefinition] = {
     s.key: s for s in (
         # 阶段二的五个代表信号
@@ -1283,8 +1397,15 @@ MINIMAL_SIGNALS: dict[str, SignalDefinition] = {
         # §5.3 行为、应用与媒体
         MOTION_STATE, PHOTO_LIBRARY_ADDED, MUSIC_PLAYBACK, APP_USAGE,
         # §5.5 健康与长期趋势
-        HEALTH_SLEEP, HEALTH_WORKOUT, HEALTH_VITALS, HEALTH_ACTIVITY,
-        HEALTH_BODY, HEALTH_METABOLIC, HEALTH_CYCLE, HEALTH_MOOD,
+        HEALTH_SLEEP, HEALTH_WORKOUT, HEALTH_ACTIVITY,
+        HEALTH_CYCLE, HEALTH_MOOD,
+        # 身体测量、体征、代谢：拆成单指标（见 _split_off）。
+        # 逐条样本一次只带一个指标，挤在一个信号里会把兄弟字段
+        # 从当前值里静默抹掉。
+        HEALTH_WEIGHT, HEALTH_BMI, HEALTH_BODY_FAT, HEALTH_HEIGHT,
+        HEALTH_RESTING_HR, HEALTH_HRV, HEALTH_RESPIRATORY,
+        HEALTH_OXYGEN, HEALTH_VO2MAX, HEALTH_CURRENT_HR,
+        HEALTH_GLUCOSE, HEALTH_BLOOD_PRESSURE,
     )
 }
 

@@ -72,7 +72,7 @@ def test_an_empty_reading_becomes_no_data_not_zero():
 def test_a_denied_permission_becomes_unavailable_not_no_data():
     """「没权限」和「没数据」要分开：前者该引导用户去开权限，后者只该闭嘴。"""
     env = convert(fixture("unauthorized"))
-    assert states(env)["health_vitals"] == "unavailable"
+    assert states(env)["health_resting_hr"] == "unavailable"
     assert states(env)["motion_state"] == "unavailable"
 
 
@@ -184,8 +184,8 @@ def test_a_denied_snapshot_lands_as_unavailable_all_the_way_through():
     kit.ingest(convert(fixture("unauthorized"), at=later.isoformat()),
                context=IngestContext("u1", later))
 
-    view = kit.get_current(subject_id="u1", signals=["health_vitals"],
-                           now=NOW + timedelta(minutes=2))["health_vitals"]
+    view = kit.get_current(subject_id="u1", signals=["health_resting_hr"],
+                           now=NOW + timedelta(minutes=2))["health_resting_hr"]
     assert view.state == "unavailable"
     assert view.last_known is not None      # 上次读到的还在
 

@@ -2,6 +2,32 @@
 
 ## 0.4.0 — 2026-09-06
 
+**信号拆成单指标（破坏性）。** `health_body` / `health_vitals` /
+`health_metabolic` 三个多指标信号拆成十二个，23 个信号 → 32 个。
+
+    health_body      → health_weight / health_bmi / health_body_fat / health_height
+    health_vitals    → health_resting_hr / health_hrv / health_respiratory
+                       health_oxygen / health_vo2max / health_current_hr
+    health_metabolic → health_glucose / health_blood_pressure
+
+**为什么必须拆**：保留期、身份策略、当前值有效期是**整个信号共用**的，
+而这些指标的生命周期本来就不一样。更要命的是逐条样本天然一次只带一个指标 ——
+实测：送一条新体重，同信号的 BMI 和体脂**从当前值里静默消失**。
+
+**血压是唯一保留两个字段的**：来源侧它是一次读数（correlation），拆开就丢了
+「这是同一次量的」，撤回时两条各自被删、中间失败就留半条。
+
+### 拆分暴露的旧账（都已修）
+
+- **四个指标存了明细但没人读**：身高、实时心率、呼吸率、血氧的字段都没有
+  聚合策略，靠同信号的兄弟字段蒙混过了 manifest 校验。
+- **呼吸率和血氧声明了趋势却读不到**：趋势是从日聚合读的，没聚合 →
+  「最近血氧怎么样」永远是空的。现在给了 `numeric_dist`。
+- **身高和实时心率本来就不该存历史**：改成 `current_only`。
+- **manifest 校验器自己会崩**：`history_retention_days` 为 `None` 时拿去比
+  大小抛 `TypeError` —— 校验器崩掉比漏报更糟，调用方拿到的是异常不是问题清单。
+
+
 **来源撤回。** 用户在健康 app 里删掉一条记录之后，这边跟着不作数。
 
     之前：用户删掉那次难看的心率 → 我们不知道 → agent 继续说那个数

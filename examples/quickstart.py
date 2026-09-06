@@ -109,11 +109,11 @@ def main() -> None:
         {"date": "2026-04-23", "doc": {"weight_kg": 68.0}},
         {"date": "2026-08-23", "doc": {"weight_kg": 60.0}},
     ]
-    print(f"\n     health_body 的模型 -> {trend_models.model_for('health_body')}")
-    wrong_way = history.read_trend(weight_rows, "health_body", "weight_kg")
+    print(f"\n     health_weight 的模型 -> {trend_models.model_for('health_weight')}")
+    wrong_way = history.read_trend(weight_rows, "health_weight", "weight_kg")
     print(f"     ✗ 用波动型的读法(跟中位数比) -> 「比平时轻了 {abs(wrong_way['delta'])} 公斤」"
           "  —— 这个人根本没有一个叫「平时」的体重")
-    right_way = trend_models.read_drift(weight_rows, "health_body", "weight_kg")
+    right_way = trend_models.read_drift(weight_rows, "health_weight", "weight_kg")
     print(f"     ✓ 用漂移型的读法(看方向和速率) -> 一年内共 {right_way['total_delta']} 公斤，"
           f"平均每月 {right_way['per_month']} 公斤，还在加速={right_way['accelerating']}")
 
