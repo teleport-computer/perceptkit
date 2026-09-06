@@ -35,24 +35,18 @@ _DAY = 86400.0
 # 但**别再往里加条目，也别照它做判断**。
 #
 # signal -> 保留天数；None = 永久；不在表里 = 不进历史表
+# ⚠️ 这张表按 **iOS 上报键**建索引（和 history.SHAPE /
+# attribution.ATTRIBUTION / trend_models.TREND_MODEL 同一套词表），不是
+# manifest 的信号名 —— 那三张的消费方是宿主的 legacy 路径。查询保留期请用
+# `retention_days()`，它的答案来自 manifest；这张表只是早期设计的记录。
 RETENTION_DAYS: dict[str, int | None] = {
     # 永久：趋势本身就是价值
-    "health_weight": KEEP_FOREVER,
-    "health_bmi": KEEP_FOREVER,
-    "health_body_fat": KEEP_FOREVER,
+    "health_body": KEEP_FOREVER,
     "health_sleep": KEEP_FOREVER,
-    # 实时心率和身高不在这张表里：它们 storage_mode=current_only，
-    # 不进历史。拆分之前它们跟着兄弟字段进了历史表，而存下来的明细
-    # 没有任何东西读得到 —— 拆开之后 manifest 校验器直接把这条指出来了。
-    "health_resting_hr": KEEP_FOREVER,
-    "health_hrv": KEEP_FOREVER,
-    "health_respiratory": KEEP_FOREVER,
-    "health_oxygen": KEEP_FOREVER,
-    "health_vo2max": KEEP_FOREVER,
+    "health_vitals": KEEP_FOREVER,
     "health_activity": KEEP_FOREVER,
     "health_workout": KEEP_FOREVER,
-    "health_glucose": KEEP_FOREVER,
-    "health_blood_pressure": KEEP_FOREVER,
+    "health_metabolic": KEEP_FOREVER,
     "health_mood": KEEP_FOREVER,
     "health_cycle": KEEP_FOREVER,
     "location_signal": KEEP_FOREVER,

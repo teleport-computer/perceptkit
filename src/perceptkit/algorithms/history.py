@@ -48,23 +48,18 @@ _TALLY_CAP = 30                      # keep only the top-N artists/tracks per da
 # Signal (canonical catalog input key) -> shape. ONE line per signal; fields are
 # discovered from the observation. Signals absent here are NOT historized
 # (pure-instant / no daily pattern: time, battery, broadcast, now, app).
+# ⚠️ 这张表按 **iOS 上报键**（宿主 legacy 路径问的那个名字）建索引，
+# 不是 manifest 的信号名。2026-09-06 把健康信号拆成单指标时，这张表也跟着
+# 拆过一次 —— 而它唯一的消费方就是 legacy 路径，拆完之后
+# `is_historized("health_vitals")` 直接返回 False，健康数据整类不再进历史，
+# 趋势和摘要一起变空，**不报错**。存储侧怎么拆看 manifest，跟这张表无关。
 SHAPE: dict[str, str] = {
-    # 2026-09-06 拆成单指标。实时心率和身高不在这里 —— 它们
-    # storage_mode=current_only，本来就不该进历史表（拆分之前它们是
-    # 靠同信号的兄弟字段蒙混进来的，存下来的明细没有任何东西读得到）。
-    "health_resting_hr": NUMERIC_DIST,
-    "health_hrv": NUMERIC_DIST,
-    "health_respiratory": NUMERIC_DIST,
-    "health_oxygen": NUMERIC_DIST,
-    "health_vo2max": MAIN_OF_DAY,
-    "health_glucose": NUMERIC_DIST,
-    "health_blood_pressure": NUMERIC_DIST,
+    "health_vitals": NUMERIC_DIST,
+    "health_metabolic": NUMERIC_DIST,
     "weather": NUMERIC_DIST,
     "health_activity": CUMULATIVE,
     "health_sleep": MAIN_OF_DAY,
-    "health_weight": MAIN_OF_DAY,
-    "health_bmi": MAIN_OF_DAY,
-    "health_body_fat": MAIN_OF_DAY,
+    "health_body": MAIN_OF_DAY,
     "health_cycle": MAIN_OF_DAY,
     "health_mood": SUBJECTIVE,
     "motion_state": DURATION_BY_STATE,

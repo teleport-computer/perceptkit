@@ -121,7 +121,7 @@ def test_odd_second_span_across_midnight_sums_exactly():
 
 def test_attribution_rules_are_declared_per_signal():
     assert attr.ATTRIBUTION["health_sleep"] == attr.EPISODE_END
-    assert attr.ATTRIBUTION["health_weight"] == attr.INSTANT
+    assert attr.ATTRIBUTION["health_body"] == attr.INSTANT
     assert attr.ATTRIBUTION["location_signal"] == attr.SPLIT_AT_MIDNIGHT
     assert attr.ATTRIBUTION["health_cycle"] == attr.SOURCE_LOCAL_DATE
 
