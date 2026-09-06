@@ -87,11 +87,40 @@ def test_every_historized_signal_answers_with_a_number_or_permanent():
         assert got == PERMANENT or got > 0, f"{key} 的保留期是 {got}"
 
 
+#: 这张表跨了**两套词表**，所以单独写出来：左边是存储侧的信号名
+#: （2026-09-06 拆成单指标之后的），右边是**装着它上来的那个 iOS 上报键**。
+#: 客户端仍然按 HealthKit 的授权分组一次报一整包，上报契约没跟着拆。
+_CARRIED_BY = {
+    "health_weight": "health_body", "health_bmi": "health_body",
+    "health_body_fat": "health_body", "health_height": "health_body",
+    "health_glucose": "health_metabolic",
+    "health_blood_pressure": "health_metabolic",
+    "health_cycle": "health_cycle",
+    "health_resting_hr": "health_vitals", "health_hrv": "health_vitals",
+    "health_respiratory": "health_vitals", "health_oxygen": "health_vitals",
+    "health_vo2max": "health_vitals",
+}
+
+
 def test_measured_at_ttl_is_longer_than_the_upload_based_one():
-    # 改判测量时间后若沿用旧值，不常测的指标会永远是 null
+    """改判测量时间后若沿用旧值，不常测的指标会永远是 null。
+
+    比的是「这个指标的保质期」和「装它上来的那包的上传保质期」——
+    后者按上报节奏定（体征一小时、身体测量一天），前者按人多久测一次定
+    （血氧一周、体重三个月）。前者不比后者长，就等于没改。
+    """
     from perceptkit.catalog import SIGNALS
     for signal, ttl in retention.MEASURED_AT_TTL_SEC.items():
-        assert ttl > SIGNALS[signal].ttl_sec, signal
+        carrier = _CARRIED_BY[signal]
+        assert ttl > SIGNALS[carrier].ttl_sec, signal
+
+
+def test_the_carrier_table_covers_exactly_the_measured_at_signals():
+    """上面那张对照表是手写的 —— 加了新指标却忘了登记，测试会安静地
+    少验一条。这里钉住两边一一对应。"""
+    assert set(_CARRIED_BY) == set(retention.MEASURED_AT_TTL_SEC)
+    from perceptkit.catalog import SIGNALS
+    assert set(_CARRIED_BY.values()) <= set(SIGNALS)
 
 
 # --- 以下为 Codex code_review 补的契约加固：原有断言只防「漏配」，

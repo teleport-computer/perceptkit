@@ -61,9 +61,27 @@
       "key": "health_vitals",
       "data": {
         "resting_heart_rate": 58,
-        "hrv_sdnn_ms": 42.5
+        "hrv_sdnn_ms": 42.5,
+        "step_count": 4211,
+        "oxygen_saturation_pct": 97
       },
       "message": "生命体征"
+    },
+    {
+      "key": "health_body",
+      "data": {
+        "weight_kg": 68.2,
+        "bmi": 22.1,
+        "body_fat_pct": 18.4,
+        "height_cm": 175
+      }
+    },
+    {
+      "key": "health_metabolic",
+      "data": {
+        "blood_pressure_systolic": 118,
+        "blood_pressure_diastolic": 76
+      }
     },
     {
       "key": "unsupported",

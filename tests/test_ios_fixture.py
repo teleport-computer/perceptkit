@@ -197,3 +197,77 @@ def test_replaying_the_same_snapshot_is_idempotent():
     first = kit.ingest(env, context=IngestContext("u1", NOW))
     second = kit.ingest(env, context=IngestContext("u1", NOW))
     assert first.applied and not second.applied
+
+
+# ---------------------------------------------------------------------------
+# 拆包 —— iOS 一次报一整包，kit 侧是单指标
+#
+# 2026-09-06 kit 把健康信号拆成单指标，**iOS 的上报契约没跟着拆**：客户端
+# 仍然按 HealthKit 的授权分组一次送 health_vitals / health_body /
+# health_metabolic 一整包。适配器不拆包的后果不是报错，是静默丢失 ——
+# 兄弟指标跟着主信号一起送出去，manifest 里没声明，被当未声明字段过滤掉。
+# 参考适配器漏了这段（评审抓的），所以这里逐条钉住。
+# ---------------------------------------------------------------------------
+
+def test_a_packed_health_report_fans_out_to_the_single_metric_signals():
+    env = convert(fixture("normal"))
+    got = {o["signal"]: o.get("value") for o in env["observations"]}
+    assert got["health_resting_hr"] == {"resting_heart_rate": 58}
+    assert got["health_hrv"] == {"hrv_sdnn_ms": 42.5}
+    assert got["health_oxygen"] == {"oxygen_saturation_pct": 97}
+    assert got["health_weight"] == {"weight_kg": 68.2}
+    assert got["health_bmi"] == {"bmi": 22.1}
+    assert got["health_height"] == {"height_cm": 175}
+
+
+def test_body_fat_is_converted_to_a_ratio_not_just_renamed():
+    """iOS 送 18.4（百分比），manifest 声明的是 0~1 的比率。
+
+    只改名的话存进去是 18.4 —— 区间检查会拒掉它，然后体脂**再也没有到过**，
+    一声不吭。名字这么像、差 100 倍，正是手工维护的别名表最容易搞错的地方。
+    """
+    got = {o["signal"]: o.get("value") for o in convert(fixture("normal"))["observations"]}
+    assert got["health_body_fat"] == {"body_fat_ratio": pytest.approx(0.184)}
+
+
+def test_both_halves_of_a_blood_pressure_reading_arrive_together():
+    """收缩压和舒张压在来源侧是**一次**读数（HealthKit correlation）。
+
+    拆成两条观测就丢了「这是同一次量的」，而且后一条会把前一条的当前值
+    顶掉 —— 留下一个只有收缩压的半条读数。
+    """
+    got = {o["signal"]: o.get("value") for o in convert(fixture("normal"))["observations"]}
+    assert got["health_blood_pressure"] == {"blood_pressure_systolic_mmhg": 118,
+                                            "blood_pressure_diastolic_mmhg": 76}
+
+
+def test_the_main_signal_does_not_keep_a_copy_of_what_was_split_off():
+    """两边都留一份 = 同一个数字被两套聚合规则各写一遍。"""
+    got = {o["signal"]: o.get("value") for o in convert(fixture("normal"))["observations"]}
+    assert "step_count" not in got["health_resting_hr"]
+    assert set(got["health_weight"]) == {"weight_kg"}
+
+
+def test_a_pack_whose_main_metric_is_missing_makes_no_empty_observation():
+    """这份快照里没有血糖，只有血压。
+
+    照旧发一条 health_glucose + 空 value，等于替设备说了句「我看了血糖，
+    结果是空」—— 下游会当成一次真实测量。
+    """
+    got = {o["signal"] for o in convert(fixture("normal"))["observations"]}
+    assert "health_glucose" not in got
+
+
+def test_the_fanned_out_observations_are_accepted_by_the_kit():
+    """上面几条只证明适配器**产出**了这些观测。真正的验收是它们能落进 kit ——
+    字段名或单位对不上的话，管线会拒收，而拒收在这里才看得见。"""
+    s = InMemoryStorage()
+    kit = PerceptionKit(storage=s)
+    out = kit.ingest(convert(fixture("normal")), context=IngestContext("u1", NOW))
+    assert out.applied and not out.rejected, out.rejected
+
+    wanted = ["health_body_fat", "health_blood_pressure", "health_oxygen", "steps"]
+    views = kit.get_current(subject_id="u1", signals=wanted, now=NOW)
+    for name in wanted:
+        assert views[name].state == "fresh", f"{name} 没落进 kit"
+    assert views["health_body_fat"].value["body_fat_ratio"] == pytest.approx(0.184)

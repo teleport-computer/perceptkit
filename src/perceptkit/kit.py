@@ -162,7 +162,8 @@ class PerceptionKit:
         """
         return sync_source_mirror(self.storage, batch, context=context)
 
-    def apply_retractions(self, retractions, *, now: datetime):
+    def apply_retractions(self, retractions, *, now: datetime,
+                          recompute: bool = True):
         """来源撤回了几条事实：记下来、当前值重选、返回受影响的天数。
 
         和 :meth:`ingest` 是两条路：ingest 说"这是一条新读数"，这个说
@@ -171,11 +172,28 @@ class PerceptionKit:
         是两个正交的问题；混在一起会让旧宿主把撤回当成传感器故障，
         于是被删掉的数值作为 last_known 继续显示出来。
 
-        受影响那天的聚合要接着 :meth:`recompute_aggregates` ——
-        那条路已经会排除被撤回的观测。
+        默认**直接把受影响那几天的聚合重算并写回**（``recompute=False``
+        可以关掉，由调用方自己按更大的范围重算）。重算那条路已经会排除
+        被撤回的观测。
         """
-        return apply_retractions(self.storage, list(retractions),
-                                 signals=dict(self.signals), now=now)
+        outcome = apply_retractions(self.storage, list(retractions),
+                                    signals=dict(self.signals), now=now)
+        if recompute:
+            # 🔴 受影响那几天的聚合**在这里真的重算并写回**。
+            #
+            # 早先只返回一个"有几天受影响"的计数，调用方拿不到是哪几天，
+            # 于是谁也没去重算 —— 撤回记下了、当前值改了，而存着的日聚合
+            # 原封不动。测试当时是直接调 recompute_day 验纯函数，所以是绿的：
+            # **它验的是那个函数会算对，不是这条路会去调它。**
+            for subject_id, signal, day in sorted(outcome.affected_days):
+                self.recompute_aggregates(
+                    subject_id=subject_id, signal=signal,
+                    start=day, end=day, now=now,
+                    # 明细可能已经按保留期清掉了。清掉之后重算会得到一份
+                    # 残缺统计，而那比"没重算"更糟 —— 旧值已经被覆盖。
+                    allow_incomplete=False,
+                )
+        return outcome
 
     def run_retention(
         self, *, subject_id: str, now: datetime, dry_run: bool = True,

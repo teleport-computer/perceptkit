@@ -238,6 +238,11 @@ class StoragePort(Protocol):
         """这个用户这个信号上，哪些源事实被撤回了。
 
         重算要用：折当天的聚合时，被撤回的那些观测不能算进去。
+
+        🔴 **返回的 Retraction 带着 source，调用方必须按 (source, id) 比对。**
+        只按 id 比会连坐：同一个 subject 下 iOS 和 Google 完全可能用同一个
+        source_event_id —— 撤回 iOS 那条，Google 那条也跟着从当前值和聚合里
+        消失，而用户只会发现"我的体重记录凭空少了一条"。
         """
         ...
 

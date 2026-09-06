@@ -116,8 +116,8 @@ def test_the_same_retraction_twice_counts_once():
     _weigh(kit, s, 70.5, at=T0, eid="hk-A")
     first = kit.apply_retractions([_retract("hk-A")], now=T0 + timedelta(hours=5))
     again = kit.apply_retractions([_retract("hk-A")], now=T0 + timedelta(hours=6))
-    assert first["recorded"] == 1
-    assert again["recorded"] == 0, "重传被算成了第二次撤回"
+    assert first.recorded == 1
+    assert again.recorded == 0, "重传被算成了第二次撤回"
 
 
 # ---------------------------------------------------------------------------
@@ -174,3 +174,94 @@ def test_purge_takes_retractions_too():
     counts = s.purge_subject(subject_id="u")
     assert counts.get("retractions") == 1
     assert not s.list_retractions(subject_id="u", signal="health_weight")
+
+
+# ---------------------------------------------------------------------------
+# Codex code review（2026-09-06）抓的四条，我逐条复现过
+# ---------------------------------------------------------------------------
+
+def test_retracting_one_source_does_not_touch_another_with_the_same_id():
+    """同一个 subject 下 iOS 和 Google 完全可能用同一个 source_event_id。
+
+    只按 id 比：撤回 iOS 那条，Google 那条也从当前值和聚合里消失 ——
+    用户只会发现"我的体重记录凭空少了一条"。
+
+    ⚠️ 这和 tombstone 那条连坐是**同一个错**，我在撤回这边又犯了一遍。
+    """
+    s = InMemoryStorage(); kit = _kit(s)
+    for src, kg in (("ios", 70.5), ("google", 80.0)):
+        kit.ingest({
+            "schema_version": 1, "report_id": f"r-{src}", "producer": src,
+            "observations": [{
+                "signal": "health_weight", "signal_schema_version": 1,
+                "occurred_at": T0.isoformat(), "availability": "observed",
+                "timezone": "Asia/Shanghai", "source_event_id": "same-id",
+                "value": {"weight_kg": kg},
+            }],
+        }, context=IngestContext("u", T0))
+
+    kit.apply_retractions([Retraction("u", "health_weight", "same-id", "ios", T0)],
+                          now=T0 + timedelta(hours=1))
+    value, availability = _current(s)
+    assert value is not None, "撤回 ios 把 google 那条也干掉了"
+    assert value["weight_kg"] == 80.0
+    assert availability == "observed"
+
+
+def test_a_current_only_signal_still_reselects():
+    """``current_only`` 的信号不写观测。
+
+    靠反查观测来定位当前值的话，这类信号撤回之后当前值纹丝不动 ——
+    记下了撤回，而被删的数值继续显示。
+    """
+    s = InMemoryStorage(); kit = _kit(s)
+    kit.ingest({
+        "schema_version": 1, "report_id": "r1", "producer": "ios",
+        "observations": [{
+            "signal": "health_height", "signal_schema_version": 1,
+            "occurred_at": T0.isoformat(), "availability": "observed",
+            "timezone": "Asia/Shanghai", "source_event_id": "hk-h",
+            "value": {"height_cm": 175},
+        }],
+    }, context=IngestContext("u", T0))
+    assert not s.observations, "health_height 应该是 current_only，不写观测"
+
+    out = kit.apply_retractions(
+        [Retraction("u", "health_height", "hk-h", "ios", T0)],
+        now=T0 + timedelta(hours=1))
+    assert out.reselected == 1, f"没重选：{out}"
+    rows = s.get_current(subject_id="u", signals=["health_height"])["health_height"]
+    assert rows[0].typed_value is None, "被撤回的身高还留在当前值里"
+
+
+def test_the_stored_aggregate_is_actually_rewritten():
+    """🔴 这条是"测试测偏了"的活标本。
+
+    原来那条测试直接调 ``recompute_day`` 验纯函数，所以一直是绿的 ——
+    **它验的是那个函数会算对，不是这条路会去调它。** 生产路径上根本没有
+    任何东西去调，于是撤回记下了、当前值改了，而存着的日聚合原封不动。
+    """
+    s = InMemoryStorage(); kit = _kit(s)
+    _weigh(kit, s, 70.5, at=T0, eid="hk-A")
+    _weigh(kit, s, 90.0, at=T0 + timedelta(hours=2), eid="hk-bogus")
+
+    def stored():
+        rows = s.get_aggregate(subject_id="u", signal="health_weight",
+                               start_date=DAY, end_date=DAY)
+        return rows[0].typed_aggregate.get("weight_kg") if rows else None
+
+    assert stored() == 90.0                     # main_of_day：当天最后一条
+    kit.apply_retractions(
+        [Retraction("u", "health_weight", "hk-bogus", "ios", T0)],
+        now=T0 + timedelta(hours=5))
+    assert stored() == 70.5, "存着的聚合没被重算，还是被撤回的那个值"
+
+
+def test_affected_days_come_back_so_the_caller_can_act_on_them():
+    """只给一个计数，调用方知道"有几天要重算"却不知道是哪几天。"""
+    s = InMemoryStorage(); kit = _kit(s)
+    _weigh(kit, s, 70.5, at=T0, eid="hk-A")
+    out = kit.apply_retractions(
+        [Retraction("u", "health_weight", "hk-A", "ios", T0)],
+        now=T0 + timedelta(hours=5), recompute=False)
+    assert out.affected_days == {("u", "health_weight", DAY)}

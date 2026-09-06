@@ -133,11 +133,15 @@ def _drop_retracted(storage: StoragePort, rows: list, *,
     lookup = getattr(storage, "list_retractions", None)
     if lookup is None:
         return rows
-    retracted = {r.source_event_id for r in lookup(
+    # 🔴 (source, id) 成对比，不能只比 id。同一个 subject 下 iOS 和 Google
+    # 完全可能用同一个 source_event_id —— 只比 id 的话，撤回 iOS 那条会
+    # 把 Google 那条一起从聚合里踢掉。
+    retracted = {(r.source, r.source_event_id) for r in lookup(
         subject_id=subject_id, signal=signal, source_event_ids=sorted(ids))}
     if not retracted:
         return rows
-    return [o for o in rows if o.source_event_id not in retracted]
+    return [o for o in rows
+            if (o.source, o.source_event_id) not in retracted]
 
 
 def recompute_day(

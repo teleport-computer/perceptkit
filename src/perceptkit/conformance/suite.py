@@ -523,19 +523,52 @@ def _g13_deletes_hit_exactly_their_own_scope(new: StorageFactory) -> list[str]:
             "⑬: 删 ios 的条目，把另一个来源系统里同 id 的也删了")
 
     # 撤回：只作用于指名的那条，且幂等。
+    #
+    # 只放一条撤回是证不了范围的 —— 少写一个 AND 的实现照样全绿。
+    # 所以这里在**每一个**范围维度上都放一条"长得几乎一样"的兄弟数据：
+    # 同 id 不同用户 / 同 id 不同信号 / 同 id 不同来源。前两个漏了是串号
+    # （删我的体重把你的也撤了），第三个漏了是连坐 —— 撤 iOS 的一条，
+    # Google 里同 id 的那条事实跟着没，这个 bug 在 tombstone 上真出过。
     s2 = new()
-    r = Retraction("u1", "health_weight", "hk-A", "ios", T0)
-    other = Retraction("u1", "health_weight", "hk-B", "ios", T0)
-    if not s2.record_retraction(r):
+    target = Retraction("u1", "health_weight", "hk-A", "ios", T0)
+    siblings = [
+        Retraction("u2", "health_weight", "hk-A", "ios", T0),    # 同 id，别人的
+        Retraction("u1", "health_bmi", "hk-A", "ios", T0),       # 同 id，另一个信号
+        Retraction("u1", "health_weight", "hk-A", "google", T0),  # 同 id，另一个来源
+        Retraction("u1", "health_weight", "hk-B", "ios", T0),    # 同一处，另一条
+    ]
+    if not s2.record_retraction(target):
         problems.append("⑬: 第一次记撤回应该返回 True")
-    if s2.record_retraction(r):
+    if s2.record_retraction(target):
         problems.append(
             "⑬: 同一条撤回记了两次都返回 True —— 重传会被当成两次撤回")
-    s2.record_retraction(other)
-    hit = {x.source_event_id for x in s2.list_retractions(
-        subject_id="u1", signal="health_weight", source_event_ids=["hk-A"])}
-    if hit != {"hk-A"}:
-        problems.append(f"⑬: 按身份查撤回返回了 {hit}，应该只有 hk-A")
+    for sib in siblings:
+        if not s2.record_retraction(sib):
+            problems.append(
+                f"⑬: {sib.subject_id}/{sib.signal}/{sib.source} 只是和已有那条"
+                " id 相同，被误判成重复 —— 幂等键少了一个维度")
+
+    hit = [(x.subject_id, x.signal, x.source, x.source_event_id)
+           for x in s2.list_retractions(subject_id="u1", signal="health_weight",
+                                        source_event_ids=["hk-A"])]
+    stray = [h for h in hit if h[0] != "u1"]
+    if stray:
+        problems.append(f"⑬: 查撤回带出了别人的记录 {stray} —— 少了 subject 这层")
+    if any(h[1] != "health_weight" for h in hit):
+        problems.append(f"⑬: 查撤回带出了别的信号 {hit} —— 少了 signal 这层")
+    if any(h[3] != "hk-A" for h in hit):
+        problems.append(f"⑬: 查撤回带出了没点名的条目 {hit}")
+    if not hit:
+        problems.append("⑬: 按身份查撤回一条都没查到")
+    # source 不是查询条件（契约见 ports.storage.list_retractions）——
+    # 它必须**原样带回来**，由调用方按 (source, id) 比对。存储把它丢了
+    # 或者归一成同一个值，调用方就分不出 iOS 和 Google 那两条，
+    # 撤一条连坐两条。
+    sources = {h[2] for h in hit}
+    if sources != {"ios", "google"}:
+        problems.append(
+            f"⑬: 同 id 不同来源的两条撤回回来时 source 是 {sources}，"
+            "应该原样保留 ios 和 google —— 丢了它调用方无法避免连坐")
     return problems
 
 

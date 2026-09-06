@@ -88,6 +88,16 @@ class CurrentProjection:
     #: 超过这个时刻就不能再叫"当前" —— 但仍可作为带 ``as_of`` 的 last known 返回。
     expires_at: datetime | None = None
     source_observation_id: str | None = None
+    #: 这个当前值来自哪条源事实。**撤回要靠它定位。**
+    #:
+    #: 🔴 不能靠 ``source_observation_id`` 反查观测拿到 —— ``current_only``
+    #: 的信号（身高、实时心率）压根不写观测，反查得到空，于是撤回记下了、
+    #: 当前值纹丝不动，被删掉的数值继续显示。
+    #:
+    #: ``source`` 也必须存：同一个 subject 下 iOS 和 Google 完全可能用同一个
+    #: ``source_event_id``，只比 id 会让撤回一条连坐另一条。
+    source: str | None = None
+    source_event_id: str | None = None
     source_revision: str | int | None = None
     #: 乐观并发用的版本号。宿主的 compare-and-put 靠它。
     version: int = 0

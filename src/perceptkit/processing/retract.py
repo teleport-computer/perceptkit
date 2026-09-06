@@ -22,6 +22,7 @@
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Iterable, Sequence
 
@@ -31,126 +32,152 @@ from ..manifest.types import SignalDefinition
 from ..ports.storage import StoragePort
 
 
+#: 当前值写入撞车时重读重判几次。和 ingest 那条路同一个数量级 ——
+#: 撤回和一次正常上报同时到达是完全正常的。
+_MAX_CAS_RETRIES = 3
+
+
+@dataclass
+class RetractionOutcome:
+    """这一轮做了什么。
+
+    ``affected_days`` 是 ``(subject, signal, day)`` 三元组，**不是计数** ——
+    调用方要拿它去重算那几天的聚合。只给数字的话它知道"有三天要重算"
+    却不知道是哪三天。
+    """
+
+    recorded: int = 0
+    reselected: int = 0
+    #: 当前值连续写入竞争失败的次数。**不算成功。**
+    contended: int = 0
+    affected_days: set[tuple[str, str, date]] = field(default_factory=set)
+    #: 撤回记下了，但信号不在 manifest 里，没法重选。
+    unknown_signals: list[str] = field(default_factory=list)
+
+
 def apply_retractions(
     storage: StoragePort,
     retractions: Sequence[Retraction],
     *,
     signals: dict[str, SignalDefinition],
     now: datetime,
-) -> dict[str, int]:
-    """记下撤回，重选当前值，返回各做了多少。
+) -> RetractionOutcome:
+    """记下撤回，重选当前值，报出受影响的日期。
 
-    受影响日期的重算由调用方接着做 —— 它要按 manifest 的聚合版本走
-    ``recompute_range``，那条路已经会排除被撤回的观测。
+    **受影响日期是返回值的一部分，不只是个计数。** 调用方要拿它去
+    ``recompute_aggregates`` —— 只给个数字的话，它知道"有三天要重算"却
+    不知道是哪三天，于是要么全量重算、要么什么都不做。早先就是后者：
+    撤回记下了，而已经存着的日聚合原封不动。
     """
-    recorded = 0
-    reselected = 0
-    affected: set[tuple[str, str, date]] = set()
+    outcome = RetractionOutcome()
 
     with storage.transaction():
         for r in retractions:
             if not storage.record_retraction(r):
                 continue                     # 重传，已经记过
-            recorded += 1
+            outcome.recorded += 1
             sig = signals.get(r.signal)
             if sig is None:
                 # 信号不在 manifest 里：撤回照样记下（它是事实），
                 # 但没法重选 —— 不知道这个信号的当前值长什么样。
+                outcome.unknown_signals.append(r.signal)
                 continue
             for day in _affected_days(storage, r):
-                affected.add((r.subject_id, r.signal, day))
-            if _reselect_current(storage, r, sig, now=now):
-                reselected += 1
+                outcome.affected_days.add((r.subject_id, r.signal, day))
+            state = _reselect_current(storage, r, sig, now=now)
+            if state == "reselected":
+                outcome.reselected += 1
+            elif state == "contended":
+                outcome.contended += 1
 
-    return {"recorded": recorded, "reselected": reselected,
-            "affected_days": len(affected)}
+    return outcome
 
 
-def _affected_days(storage: StoragePort, r: Retraction) -> Iterable[date]:
+def _affected_days(storage: StoragePort, r: Retraction) -> set[date]:
     """被撤回的那条事实落在哪几天。
 
     一条事实通常只落一天，但跨午夜的睡眠/运动会被切成两天 ——
     只重算一天会留下另一半错的。
+
+    ``current_only`` 的信号没有观测，返回空集：它们本来也没有日聚合。
     """
+    if not hasattr(storage, "list_observations"):
+        return set()
+    page = _all_observations(storage, r.subject_id, r.signal)
+    return {o.effective_local_date for o in page
+            if (o.source, o.source_event_id) == (r.source, r.source_event_id)}
+
+
+def _all_observations(storage: StoragePort, subject_id: str, signal: str) -> list:
     rows, cursor = storage.list_observations(
-        subject_id=r.subject_id, signal=r.signal, cursor=None, limit=500)
+        subject_id=subject_id, signal=signal, cursor=None, limit=500)
     page = list(rows)
     while cursor:
         more, cursor = storage.list_observations(
-            subject_id=r.subject_id, signal=r.signal, cursor=cursor, limit=500)
+            subject_id=subject_id, signal=signal, cursor=cursor, limit=500)
         page.extend(more)
-    return {o.effective_local_date for o in page
-            if o.source_event_id == r.source_event_id}
+    return page
 
 
 def _reselect_current(storage: StoragePort, r: Retraction,
-                      sig: SignalDefinition, *, now: datetime) -> bool:
-    """把当前值重选成下一条仍然有效的。一条都不剩就写成没有有效样本。"""
-    existing = storage.get_current(
-        subject_id=r.subject_id, signals=[r.signal]).get(r.signal) or ()
-    hit = [c for c in existing if c.source_observation_id
-           and _is_from(storage, c, r)]
-    if not hit:
-        return False                          # 被撤回的那条不是当前值
+                      sig: SignalDefinition, *, now: datetime) -> str:
+    """把当前值重选成下一条仍然有效的。返回做了什么。
 
-    rows, cursor = storage.list_observations(
-        subject_id=r.subject_id, signal=r.signal, cursor=None, limit=500)
-    page = list(rows)
-    while cursor:
-        more, cursor = storage.list_observations(
-            subject_id=r.subject_id, signal=r.signal, cursor=cursor, limit=500)
-        page.extend(more)
+    靠 ``CurrentProjection`` 自己带的 ``(source, source_event_id)`` 定位 ——
+    **不反查观测**：``current_only`` 的信号压根不写观测，反查得到空，
+    于是撤回记下了、当前值纹丝不动。
+    """
+    for _ in range(_MAX_CAS_RETRIES):
+        existing = storage.get_current(
+            subject_id=r.subject_id, signals=[r.signal]).get(r.signal) or ()
+        hit = [c for c in existing
+               if (c.source, c.source_event_id) == (r.source, r.source_event_id)]
+        if not hit:
+            return "untouched"              # 被撤回的那条不是当前值
 
-    retracted = {x.source_event_id for x in storage.list_retractions(
-        subject_id=r.subject_id, signal=r.signal)}
-    changed = False
-    for current in hit:
-        pool = [o for o in page
-                if o.availability == "observed"
-                and o.source_event_id not in retracted
-                and sig.dimension_key_for(o.typed_value) == current.dimension_key]
-        pool.sort(key=lambda o: (o.occurred_at, o.observation_id))
-        winner = pool[-1] if pool else None
-        storage.compare_and_put_current(
-            CurrentProjection(
-                subject_id=r.subject_id,
-                signal=r.signal,
-                dimension_key=current.dimension_key,
-                # 🔴 一条都不剩时写 None，**不是**留着被撤回的那个值。
-                # 留着的话 agent 会继续说出一个用户已经删掉的数字。
-                typed_value=winner.typed_value if winner else None,
-                availability="observed" if winner else "no_data",
-                observed_at=winner.occurred_at if winner else r.observed_at,
-                received_at=now,
-                expires_at=None,
-                source_observation_id=winner.observation_id if winner else None,
-                source_revision=winner.source_revision if winner else None,
-                version=current.version + 1,
-                # 观测上没有 content_digest（那是投递身份算出来的，不落在
-                # 观测记录上）。重选不改内容语义，沿用原来那个 —— 它只被
-                # "同身份异内容报冲突"那条路读，而重选不是新内容到达。
-                content_digest=current.content_digest,
-            ),
-            expected_version=current.version,
-        )
-        changed = True
-    return changed
+        page = (_all_observations(storage, r.subject_id, r.signal)
+                if hasattr(storage, "list_observations") else [])
+        retracted = {(x.source, x.source_event_id)
+                     for x in storage.list_retractions(
+                         subject_id=r.subject_id, signal=r.signal)}
 
-
-def _is_from(storage: StoragePort, current: CurrentProjection,
-             r: Retraction) -> bool:
-    """这条当前值是不是来自被撤回的那条事实。"""
-    rows, cursor = storage.list_observations(
-        subject_id=r.subject_id, signal=r.signal, cursor=None, limit=500)
-    page = list(rows)
-    while cursor:
-        more, cursor = storage.list_observations(
-            subject_id=r.subject_id, signal=r.signal, cursor=cursor, limit=500)
-        page.extend(more)
-    for o in page:
-        if o.observation_id == current.source_observation_id:
-            return o.source_event_id == r.source_event_id
-    return False
+        lost = False
+        for current in hit:
+            pool = [o for o in page
+                    if o.availability == "observed"
+                    and (o.source, o.source_event_id) not in retracted
+                    and sig.dimension_key_for(o.typed_value) == current.dimension_key]
+            pool.sort(key=lambda o: (o.occurred_at, o.observation_id))
+            winner = pool[-1] if pool else None
+            ok = storage.compare_and_put_current(
+                CurrentProjection(
+                    subject_id=r.subject_id,
+                    signal=r.signal,
+                    dimension_key=current.dimension_key,
+                    # 🔴 一条都不剩时写 None，**不是**留着被撤回的那个值。
+                    # 留着的话 agent 会继续说出一个用户已经删掉的数字。
+                    typed_value=winner.typed_value if winner else None,
+                    availability="observed" if winner else "no_data",
+                    observed_at=winner.occurred_at if winner else r.observed_at,
+                    received_at=now,
+                    expires_at=None,
+                    source_observation_id=winner.observation_id if winner else None,
+                    source=winner.source if winner else None,
+                    source_event_id=winner.source_event_id if winner else None,
+                    source_revision=winner.source_revision if winner else None,
+                    version=current.version + 1,
+                    content_digest=current.content_digest,
+                ),
+                expected_version=current.version,
+            )
+            if not ok:
+                # 有人在我们读之后写了。**不能报告成功** —— 早先忽略这个
+                # 返回值，于是并发下会出现"撤回说重选完了、当前值还是旧的"。
+                lost = True
+                break
+        if not lost:
+            return "reselected"
+    return "contended"
 
 
-__all__ = ["apply_retractions"]
+__all__ = ["apply_retractions", "RetractionOutcome"]

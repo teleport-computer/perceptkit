@@ -34,7 +34,7 @@ KEY_TO_SIGNAL: dict[str, str] = {
     "weather": "weather",
     "playback": "music_playback",
     # iOS 送的是一个打包的 health_vitals，kit 侧已经拆成单指标 ——
-    # 拆包在 SPLIT_OFF 里做（见下），这里只认领信号名。
+    # 这里只认领**主**信号，其余字段由 SPLIT_OFF 分出去。
     "health_vitals": "health_resting_hr",
     "health_sleep": "health_sleep",
     "health_workout": "health_workout",
@@ -65,6 +65,17 @@ FIELD_ALIASES: dict[str, dict[str, str]] = {
                 "apparent_temperature": "apparent_temperature_c",
                 "humidity": "humidity_ratio",
                 "precipitation_chance": "precipitation_probability"},
+    # 体脂：iOS 送百分比（18.4），manifest 声明的是 0~1 的比率。
+    # **只改名不换算**的话存进去是 18.4，区间检查会拒掉它，
+    # 然后体脂就再也没有到过 —— 一声不吭。换算见 _rename。
+    "health_weight": {"body_fat_pct": "body_fat_ratio"},
+    "health_glucose": {"blood_pressure_systolic": "blood_pressure_systolic_mmhg",
+                       "blood_pressure_diastolic": "blood_pressure_diastolic_mmhg"},
+}
+
+#: 改名之外还要换算单位的字段（归一后的名字 -> 乘数）。
+FIELD_SCALES: dict[str, dict[str, float]] = {
+    "health_weight": {"body_fat_ratio": 0.01},
 }
 
 #: manifest 里没有、但 iOS 会发的字段。**显式丢掉而不是让它悄悄被过滤** ——
@@ -74,6 +85,43 @@ DROPPED_FIELDS: dict[str, set[str]] = {
     "focus_state": {"authorization_status"},
     # 本地时间可以从 time_zone_id + occurred_at 推出来，不必存两份。
     "time_context": {"local_time"},
+}
+
+
+#: 一个 iOS key 里的字段，分头去往**别的**信号。
+#:
+#: 2026-09-06 kit 把健康信号拆成了单指标，但 iOS 的上报契约没跟着拆 ——
+#: 客户端仍然按 HealthKit 的授权分组一次报一整包。所以适配器要拆包。
+#: 不拆的后果不是报错，是**静默丢失**：bmi / 体脂 / 身高会跟着
+#: ``health_weight`` 一起送出去，manifest 里没声明这几个字段，
+#: 管线把它们当未声明字段过滤掉，用户只会发现这些指标从来没有过数据。
+#:
+#: 键是 iOS key，值是 ``{归一后的字段名: (目标信号, 目标字段名)}``。
+#: ⚠️ 写的是**归一之后**的名字（body_fat_ratio，不是 iOS 的 body_fat_pct）——
+#: 拆分在改名之后做，顺序反了就永远匹配不上。
+SPLIT_OFF: dict[str, dict[str, tuple[str, str]]] = {
+    "health_vitals": {
+        "step_count": ("steps", "step_count"),
+        "current_heart_rate": ("health_current_hr", "current_heart_rate"),
+        "hrv_sdnn_ms": ("health_hrv", "hrv_sdnn_ms"),
+        "respiratory_rate": ("health_respiratory", "respiratory_rate"),
+        "oxygen_saturation_pct": ("health_oxygen", "oxygen_saturation_pct"),
+        "vo2_max": ("health_vo2max", "vo2_max"),
+    },
+    "health_body": {
+        "bmi": ("health_bmi", "bmi"),
+        "body_fat_ratio": ("health_body_fat", "body_fat_ratio"),
+        "height_cm": ("health_height", "height_cm"),
+    },
+    "health_metabolic": {
+        # 收缩压和舒张压去**同一个**信号：来源侧它们是一次读数
+        # （HealthKit correlation）。拆成两条观测就丢了「这是同一次量的」，
+        # 而且后一条会把前一条的当前值顶掉、只剩半个读数。
+        "blood_pressure_systolic_mmhg":
+            ("health_blood_pressure", "blood_pressure_systolic_mmhg"),
+        "blood_pressure_diastolic_mmhg":
+            ("health_blood_pressure", "blood_pressure_diastolic_mmhg"),
+    },
 }
 
 
@@ -111,11 +159,16 @@ def _rename(signal: str, value: Mapping[str, Any]) -> dict[str, Any]:
     """
     alias = FIELD_ALIASES.get(signal, {})
     dropped = DROPPED_FIELDS.get(signal, set())
+    scales = FIELD_SCALES.get(signal, {})
     out: dict[str, Any] = {}
     for k, v in value.items():
         if v is None or k in dropped:
             continue
-        out[alias.get(k, k)] = v
+        name = alias.get(k, k)
+        factor = scales.get(name)
+        if factor is not None and isinstance(v, (int, float)) and not isinstance(v, bool):
+            v = v * factor
+        out[name] = v
     return out
 
 
@@ -157,9 +210,42 @@ def to_envelope(payload: Mapping[str, Any], *, occurred_at: str) -> dict[str, An
             "occurred_at": occurred_at,
             "availability": availability,
         }
+        # 先改名 / 换算，**再**按归一后的名字拆 —— 顺序反了的话
+        # SPLIT_OFF 里的 body_fat_ratio 永远匹配不上 iOS 的 body_fat_pct。
+        normalized = _rename(signal, data) if isinstance(data, Mapping) else {}
+        moved = set(SPLIT_OFF.get(key, {}))
+        emit_main = True
         if availability == "observed" and isinstance(data, Mapping):
-            obs["value"] = _rename(signal, data)
-        observations.append(obs)
+            value = {k2: v2 for k2, v2 in normalized.items() if k2 not in moved}
+            if moved and not value:
+                # 这趟上报里主信号的字段**一个都不剩**（只测了血压、
+                # 没测血糖）。照旧发一条 observed + 空 value，等于替设备
+                # 说了句「我看了血糖，结果是空」—— 下游会当成一次真实
+                # 测量：当前值被没有数值的记录顶掉、日聚合多算一次。
+                emit_main = False
+            obs["value"] = value
+        if emit_main:
+            observations.append(obs)
+
+        # 拆出去的字段：按**目标信号**分组再发，血压那两个字段必须
+        # 落进同一条观测。
+        grouped: dict[str, dict[str, Any]] = {}
+        for src, (target, field) in SPLIT_OFF.get(key, {}).items():
+            raw = normalized.get(src)
+            if raw is None:
+                # 没有就是没有。补一条 no_data 等于说「设备报告了它没走路」,
+                # 那是另一句话。
+                continue
+            grouped.setdefault(target, {})[field] = raw
+        for target, value in grouped.items():
+            split_obs: dict[str, Any] = {
+                "signal": target,
+                "signal_schema_version": 1,
+                "occurred_at": occurred_at,
+                "availability": "observed",
+                "value": value,
+            }
+            observations.append(split_obs)
 
     return {
         "schema_version": 1,
@@ -169,5 +255,6 @@ def to_envelope(payload: Mapping[str, Any], *, occurred_at: str) -> dict[str, An
     }
 
 
-__all__ = ["KEY_TO_SIGNAL", "IGNORED_KEYS", "FIELD_ALIASES", "DROPPED_FIELDS",
-           "AUTH_STATUS_FIELDS", "AUTHORIZED_VALUES", "report_id_for", "to_envelope"]
+__all__ = ["KEY_TO_SIGNAL", "IGNORED_KEYS", "FIELD_ALIASES", "FIELD_SCALES",
+           "DROPPED_FIELDS", "SPLIT_OFF", "AUTH_STATUS_FIELDS",
+           "AUTHORIZED_VALUES", "report_id_for", "to_envelope"]

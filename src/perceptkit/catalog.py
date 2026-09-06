@@ -81,8 +81,17 @@ CAPABILITIES: dict[str, Capability] = {c.key: c for c in [
     Capability("reminders", "提醒事项", 2, query_tool=True),
     Capability("health_sleep", "睡眠", 2, query_tool=True),
     Capability("health_workout", "运动", 2, query_tool=True),
-    # 2026-09-06 拆成单指标。能力（权限档）仍按 HealthKit 的授权分组走 ——
-    # 用户在系统里是按类别授权的，不是按我们拆出来的每个指标。
+    # 2026-09-06 拆成单指标。**能力表分两种角色，别混**：
+    #   报告闸   客户端按 HealthKit 的授权分组一次报一整包（体征、身体测量、
+    #            代谢），闸就得按包来 —— 下面三个 health_vitals / health_body /
+    #            health_metabolic 是这个用途，SIGNALS 里三条上报键指向它们。
+    #   查询档   agent 按**单个指标**问（"我最近血氧怎么样"），所以查询工具
+    #            按拆完的指标各占一行。
+    # 拆分只发生在第二种上。把第一种一并拆掉的后果是上报键在 SIGNALS 里
+    # 查不到 → 整包体征被判 unknown_signal 退回，而客户端不会报错。
+    Capability("health_vitals", "身体趋势", 2),
+    Capability("health_body", "身体测量（体重/BMI/体脂/身高）", 2),
+    Capability("health_metabolic", "代谢点值（血糖/血压）", 2),
     Capability("health_resting_hr", "静息心率", 2, query_tool=True),
     Capability("health_current_hr", "实时心率", 2, query_tool=True),
     Capability("health_hrv", "心率变异性", 2, query_tool=True),
@@ -141,37 +150,25 @@ SIGNALS: dict[str, Signal] = {s.input: s for s in [
            resolver="health_sleep", ttl_sec=86400.0, significant=False),
     Signal("health_workout", "health_workout", ("workout_type", "duration_min", "count_today"),
            resolver="health_workout", ttl_sec=86400.0, significant=False),
-    # 2026-09-06 拆成单指标：逐条样本一次只带一个指标，挤在一个信号里
-    # 会把兄弟字段从当前值里静默抹掉。ttl 沿用拆分前的值 —— 改它是独立的
-    # 产品决定，不混在拆分这一批里。
-    Signal("health_resting_hr", "health_resting_hr", ("resting_heart_rate",),
-           resolver="health_vitals", ttl_sec=3600.0, significant=False),
-    Signal("health_current_hr", "health_current_hr", ("current_heart_rate",),
-           resolver="health_vitals", ttl_sec=3600.0, significant=False),
-    Signal("health_hrv", "health_hrv", ("hrv_sdnn_ms",),
-           resolver="health_vitals", ttl_sec=3600.0, significant=False),
-    Signal("health_respiratory", "health_respiratory", ("respiratory_rate",),
-           resolver="health_vitals", ttl_sec=3600.0, significant=False),
-    Signal("health_oxygen", "health_oxygen", ("oxygen_saturation_pct",),
-           resolver="health_vitals", ttl_sec=3600.0, significant=False),
-    Signal("health_vo2max", "health_vo2max", ("vo2_max",),
+    # ⚠️ 这张表是按 **iOS 上报键**（context_snapshot 的 `key`）建索引的 ——
+    # 客户端一次报一整包，键名是 health_vitals / health_body / health_metabolic。
+    # 2026-09-06 把**存储侧**的信号拆成了单指标（见 manifest.minimal），
+    # 但**上报契约没变**，所以这里保持原样。曾经把这三条也改成拆完的名字，
+    # 结果是这三个上报键在表里查不到 → service 判 unknown_signal 整包退回，
+    # 客户端拿到 200、用户什么都不知道。存储侧怎么拆，看宿主的 SPLIT_OFF。
+    Signal("health_vitals", "health_vitals",
+           ("resting_heart_rate", "step_count", "current_heart_rate", "hrv_sdnn_ms",
+            "respiratory_rate", "oxygen_saturation_pct", "vo2_max"),
            resolver="health_vitals", ttl_sec=3600.0, significant=False),
     Signal("health_activity", "health_activity",
            ("active_energy_kcal", "exercise_minutes", "stand_minutes", "mindful_minutes"),
            ttl_sec=3600.0, significant=False),
-    Signal("health_weight", "health_weight", ("weight_kg",),
+    Signal("health_body", "health_body",
+           ("weight_kg", "bmi", "body_fat_pct", "height_cm"),
            ttl_sec=86400.0, significant=False),
-    Signal("health_bmi", "health_bmi", ("bmi",),
-           ttl_sec=86400.0, significant=False),
-    Signal("health_body_fat", "health_body_fat", ("body_fat_pct",),
-           ttl_sec=86400.0, significant=False),
-    Signal("health_height", "health_height", ("height_cm",),
-           ttl_sec=86400.0, significant=False),
-    Signal("health_glucose", "health_glucose", ("blood_glucose_mmol_l",),
-           ttl_sec=86400.0, significant=False),
-    # 收缩压和舒张压留在一起：来源侧它们是一次读数（correlation）。
-    Signal("health_blood_pressure", "health_blood_pressure",
-           ("blood_pressure_systolic", "blood_pressure_diastolic"),
+    Signal("health_metabolic", "health_metabolic",
+           ("blood_glucose_mmol_l", "blood_pressure_systolic",
+            "blood_pressure_diastolic"),
            ttl_sec=86400.0, significant=False),
     Signal("health_cycle", "health_cycle",
            ("flow_level", "is_active_period"),
