@@ -1,5 +1,38 @@
 # 变更记录
 
+## 0.5.0 — 2026-09-07
+
+**EventDefinition 动态装配**（外部复核的 P0：「核心产品能力，不能只补说明文档」）。
+
+    之前  规则只能在构造 kit 时传一份固定的表；「用户自己配规则」这件事的
+          存储、版本、按人加载、热更新、删除后仍可解释，全靠每家宿主自己发明
+    之后  一个窄接口 DefinitionProviderPort，kit 只问两件事：
+          「这个人现在有哪些规则」和「按 id+版本回看一条已经不在用的规则」
+
+kit **仍然不拥有宿主的配置存储** —— 规则存哪张表、谁能改、怎么缓存，都还是
+宿主的事。定这个接口是因为"宿主自己看着办"的实际后果是几件事做错了**不报错**：
+
+    按 subject 漏筛     把别人的规则用在这个人身上
+    改规则不换版本      历史事件再也解释不清是哪条规则产出的
+    删除后无从追溯      事件只记 id+version，回看不出来就是一串死 id
+    要重启才生效        用户配完规则没反应
+
+`PerceptionKit(definitions=[...])` 的老用法**一行不用改**：序列会被包成
+`StaticDefinitions`，和 provider 走同一条代码路径。按 subject 的筛选
+（`subject_id=None` 是宿主级、带 id 的只给那个人）现在由 kit 负责。
+
+### 新增
+
+- `perceptkit.DefinitionProviderPort` / `perceptkit.StaticDefinitions`
+- `PerceptionKit.definitions_for(subject_id)` / `.definition_at(id, version)`
+
+### 行为
+
+- `definitions` 改成**惰性解析**：宿主在运行时 `kit.definitions = [...]`
+  换规则仍然立刻生效。构造时缓存的话那种赋值会悄悄失效 —— 用户改了规则
+  却没反应，而且没有任何地方报错（既有回归测试盯着这一条）。
+
+
 ## 0.4.1 — 2026-09-07
 
 **睡眠的每一条真实数据此前都被拒收，现在能进来了 —— 而且总数是对的。**

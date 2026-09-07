@@ -45,13 +45,50 @@ class PerceptionKit:
     signals: Mapping[str, SignalDefinition] = field(
         default_factory=lambda: dict(MINIMAL_SIGNALS)
     )
-    definitions: Sequence[EventDefinition] = ()
+    #: 规则。可以是一份固定的表（对所有人相同 + 带 subject_id 的只给那个人），
+    #: 也可以是一个 :class:`~perceptkit.ports.definitions.DefinitionProviderPort`
+    #: —— 后者让"用户自己配规则、改完立刻生效、删了之后历史事件仍解释得清"
+    #: 有一条标准接法，而不是每家宿主自己发明一套。
+    definitions: Any = ()
     #: 宿主注册的自定义 evaluator。普通用户配置仍然只能用声明式模板。
     extra_evaluators: Mapping[str, Callable[..., Any]] | None = None
     #: 观测没带时区时用什么兜底。见 OPEN-QUESTIONS B2 —— 这一条还没和
     #: 产品方对齐，所以由宿主传，不在包里写死。
     timezone_fallback: str | None = None
     max_observations: int = 200
+
+    @property
+    def _definitions(self):
+        """把 `definitions` 统一成 provider —— 求值处只认一种形状。
+
+        **惰性解析而不是构造时缓存**：宿主会在运行时直接
+        ``kit.definitions = [...]`` 换规则（热更新最朴素的形态）。构造时
+        缓存的话那种赋值就悄悄不生效了 —— 用户改了规则却没反应，
+        而且没有任何地方报错。
+
+        按对象身份缓存，所以没换的时候不会每次重新包一遍。
+        """
+        from .ports.definitions import as_provider
+        source = self.definitions
+        cached = getattr(self, "_definitions_cache", None)
+        if cached is not None and cached[0] is source:
+            return cached[1]
+        provider = as_provider(source)
+        object.__setattr__(self, "_definitions_cache", (source, provider))
+        return provider
+
+    def definitions_for(self, subject_id: str) -> Sequence[EventDefinition]:
+        """这个人当前生效的规则。宿主传 provider 时每次都会重新问它 ——
+        所以"用户改完规则多久生效"由宿主的缓存策略决定，kit 不替它决定。"""
+        return self._definitions.definitions_for(subject_id)
+
+    def definition_at(self, definition_id: str, version: int):
+        """按 id + 版本回看一条规则，**包括已经删掉的**。
+
+        事件只记 id + 版本；答不出来的话，规则删掉之后那些历史事件就变成
+        一串无从追溯的 id，用户问「这条为什么叫醒我」再也答不了。
+        """
+        return self._definitions.definition_at(definition_id, version)
 
     # -- 写入侧 ----------------------------------------------------------
 
@@ -76,7 +113,7 @@ class PerceptionKit:
             context=context,
             storage=self.storage,
             signals=self.signals,
-            definitions=self.definitions,
+            definitions=self.definitions_for(context.subject_id),
             extra_evaluators=self.extra_evaluators,
             timezone_fallback=self.timezone_fallback,
             max_observations=self.max_observations,
@@ -123,7 +160,8 @@ class PerceptionKit:
         """某天的聚合算完后调一次，跑 ``streak`` 这类按天判的规则。"""
         return evaluate_daily(
             storage=self.storage, subject_id=subject_id, local_date=local_date,
-            now=now, signals=self.signals, definitions=self.definitions,
+            now=now, signals=self.signals,
+            definitions=self.definitions_for(subject_id),
             extra_evaluators=self.extra_evaluators,
         )
 
@@ -253,7 +291,8 @@ class PerceptionKit:
         """定时调，跑 ``absence``（该来的没来）。"""
         return evaluate_absence(
             storage=self.storage, subject_id=subject_id, now=now,
-            signals=self.signals, definitions=self.definitions,
+            signals=self.signals,
+            definitions=self.definitions_for(subject_id),
             extra_evaluators=self.extra_evaluators,
         )
 
@@ -312,7 +351,9 @@ class PerceptionKit:
 
     def list_definitions(self, *, subject_id: str | None = None, **kw):
         """当前装配了哪些规则。用户能自己配规则，就会问「我那条还在吗」。"""
-        return _queries.list_definitions(self.definitions, subject_id=subject_id, **kw)
+        source = (self.definitions_for(subject_id) if subject_id is not None
+                  else tuple(self._definitions))
+        return _queries.list_definitions(source, subject_id=subject_id, **kw)
 
     def export_subject(self, *, subject_id: str, **kw) -> dict[str, Any]:
         """把一个人的全部数据导出来（「把我的数据给我」那条法定请求）。

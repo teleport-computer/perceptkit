@@ -31,6 +31,7 @@ from __future__ import annotations
 from . import contracts, manifest, ports, processing, rules
 from .algorithms.attribution import attribute_episode, attribute_instant, split_across_midnight
 from .catalog import CAPABILITIES, SIGNALS
+from .ports.definitions import DefinitionProviderPort, StaticDefinitions
 from .contracts import IngestContext, Observation, PerceptionEvent, ReportEnvelope, WakeReceipt
 from .kit import PerceptionKit
 from .processing.source_sync import (
@@ -66,6 +67,8 @@ __all__ = [
     "split_across_midnight",
     "CAPABILITIES",
     "SIGNALS",
+    "DefinitionProviderPort",
+    "StaticDefinitions",
     "AGENT_PERCEPTION_SIGNALS",
     "project_signal",
     "build_perception_glance",

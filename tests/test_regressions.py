@@ -1080,3 +1080,119 @@ def test_no_signal_declares_a_counter_that_cannot_count():
         for f in sig.fields
     ))
     assert any("恒等于 1" in p for p in check(broken))
+
+
+# ---------------------------------------------------------------------------
+# EventDefinition 动态装配（外部复核 P0：「核心产品能力，不能只补说明文档」）
+#
+# kit 不拥有宿主的配置存储 —— 规则存哪张表、谁能改，是宿主的事。但"宿主自己
+# 看着办"的实际后果是每家发明一套接法，而其中几件事做错了**不报错**：
+# 按 subject 漏筛、改规则不换版本、删了之后历史事件无从追溯。
+# 所以定一个窄接口，下面逐条钉住它。
+# ---------------------------------------------------------------------------
+
+class _HostProvider:
+    """一个最朴素的宿主实现：规则存在 dict 里，可以随时改。"""
+
+    def __init__(self):
+        self.live: dict[str, list] = {}
+        self.archive: dict[tuple[str, int], object] = {}
+
+    def put(self, subject_id, definition):
+        self.live.setdefault(subject_id, []).append(definition)
+        self.archive[(definition.definition_id, definition.version)] = definition
+
+    def retire(self, subject_id, definition_id):
+        """用户删掉一条规则：不再生效，但历史仍要解释得清。"""
+        self.live[subject_id] = [d for d in self.live.get(subject_id, [])
+                                 if d.definition_id != definition_id]
+
+    def definitions_for(self, subject_id):
+        return tuple(self.live.get(subject_id, ()))
+
+    def definition_at(self, definition_id, version):
+        return self.archive.get((definition_id, version))
+
+
+def _goal(did, version, threshold, subject=None):
+    return EventDefinition.parse({
+        "id": did, "version": version, "subject_id": subject,
+        "source": {"signal": "steps", "field": "step_count"},
+        "condition": {"type": "threshold_crossing", "operator": "gte",
+                      "value": threshold},
+        "event": {"type": "activity.goal"},
+    })
+
+
+def test_a_host_provider_is_asked_per_subject():
+    """provider 那条路：kit 按人问，宿主自己决定给谁哪些。"""
+    host = _HostProvider()
+    host.put("u1", _goal("u1_goal", 1, 2000))
+    host.put("u2", _goal("u2_goal", 1, 9000))
+    kit = PerceptionKit(storage=InMemoryStorage(), definitions=host)
+    assert [d.definition_id for d in kit.definitions_for("u1")] == ["u1_goal"]
+    assert [d.definition_id for d in kit.definitions_for("u2")] == ["u2_goal"]
+
+
+def test_a_plain_list_is_still_filtered_by_subject_inside_the_kit():
+    """⚠️ 上面那条**证不了 kit 自己**：它用的是宿主的 provider，宿主自己做了
+    筛选。把 kit 里的筛选整个拿掉，那条照样绿（第一次注入就是这么漏的）。
+
+    传普通列表时，按 subject 筛是**kit 的责任** —— 漏了就是把别人的规则用在
+    这个人身上，而它不报错。
+    """
+    kit = PerceptionKit(storage=InMemoryStorage(), definitions=[
+        _goal("host_wide", 1, 5000),              # subject_id=None → 所有人
+        _goal("only_u1", 1, 2000, subject="u1"),
+        _goal("only_u2", 1, 9000, subject="u2"),
+    ])
+    assert sorted(d.definition_id for d in kit.definitions_for("u1")) == \
+        ["host_wide", "only_u1"]
+    assert sorted(d.definition_id for d in kit.definitions_for("u2")) == \
+        ["host_wide", "only_u2"]
+
+
+def test_a_rule_added_at_runtime_takes_effect_without_rebuilding_the_kit():
+    """用户刚配完规则要等进程重启才生效，等于没配。"""
+    host = _HostProvider()
+    kit = PerceptionKit(storage=InMemoryStorage(), definitions=host)
+    assert not kit.ingest(steps(3000, "09:00", "r1"), context=ctx("09:00")).events
+    host.put("u1", _goal("later", 1, 2000))        # 用户现在才配上
+    # threshold_crossing 要有前值才谈得上"跨过"，所以先落一条低的再落高的。
+    kit.ingest(steps(100, "10:00", "r2", sample="b"), context=ctx("10:00"))
+    out = kit.ingest(steps(3100, "11:00", "r3", sample="c"), context=ctx("11:00"))
+    assert out.events, "运行时新增的规则没有生效"
+
+
+def test_a_deleted_rule_can_still_explain_the_events_it_produced():
+    """事件只记 definition_id + version。规则删掉之后若回看不出来，
+    那些历史事件就变成一串无从追溯的 id —— 用户问「这条为什么叫醒我」
+    再也答不了。"""
+    host = _HostProvider()
+    host.put("u1", _goal("goal", 1, 2000))
+    kit = PerceptionKit(storage=InMemoryStorage(), definitions=host)
+    kit.ingest(steps(100, "09:00", "r1"), context=ctx("09:00"))
+    out = kit.ingest(steps(3000, "10:00", "r2", sample="b"), context=ctx("10:00"))
+    assert out.events
+    ev = out.events[0]
+
+    host.retire("u1", "goal")                      # 用户删掉了这条规则
+    assert kit.definitions_for("u1") == ()         # 不再生效
+    back = kit.definition_at(ev.definition_id, ev.definition_version)
+    assert back is not None and back.definition_id == "goal", \
+        "删掉之后就解释不了它产出过的事件了"
+
+
+def test_a_host_that_really_hard_deleted_gets_an_honest_none():
+    """查不到就返回 None。**编一条出来比答不出来更糟** ——
+    那会让用户看到一条从没存在过的规则。"""
+    host = _HostProvider()
+    kit = PerceptionKit(storage=InMemoryStorage(), definitions=host)
+    assert kit.definition_at("never_existed", 1) is None
+
+
+def test_passing_a_plain_list_still_works_exactly_as_before():
+    """静态规则的宿主什么都不用改 —— 这是这层接口的前提条件。"""
+    kit = PerceptionKit(storage=InMemoryStorage(), definitions=[_goal("g", 1, 2000)])
+    assert [d.definition_id for d in kit.definitions_for("anyone")] == ["g"]
+    assert kit.definition_at("g", 1) is not None
