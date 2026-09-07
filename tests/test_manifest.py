@@ -536,3 +536,31 @@ def test_the_four_legacy_tables_agree_with_each_other():
     from perceptkit.algorithms import attribution, history
     assert set(retention.RETENTION_DAYS) == set(history.SHAPE)
     assert set(attribution.ATTRIBUTION) == set(history.SHAPE)
+
+
+# ---------------------------------------------------------------------------
+# presence_recovery 的证据（外部复核 §3.2）
+#
+# 这条不是"补个字段"，是**防一句编出来的话**：app 回到前台只说明 app 回到了
+# 前台，手机可能一直没锁过。没有 evidence，下游拿到的只有"回来了"，
+# 而实际发生过的是有人把它讲成"用户刚解锁了手机"。
+# ---------------------------------------------------------------------------
+
+def test_presence_recovery_always_says_what_the_evidence_was():
+    from perceptkit.manifest import MINIMAL_SIGNALS
+    ev = MINIMAL_SIGNALS["presence_recovery"].field_map()["evidence"]
+    assert ev.nullable is False, "证据可空 = 允许出现一条说不清凭什么的复出"
+    assert set(ev.enum) >= {"app_entered_foreground", "app_became_active",
+                            "protected_data_became_available"}
+
+
+def test_no_evidence_value_claims_the_device_was_unlocked():
+    """三种证据没有一种能证明解锁 —— 连 protected_data 也不能（设备可能被
+    解开后立刻交给了别人）。真出现解锁 producer 时它该是**独立信号**，
+    不是往这里塞第四个值。"""
+    from perceptkit.manifest import MINIMAL_SIGNALS
+    ev = MINIMAL_SIGNALS["presence_recovery"].field_map()["evidence"]
+    assert not any("unlock" in v for v in ev.enum), \
+        f"证据枚举里出现了 unlock 语义：{ev.enum}"
+    assert "device_unlock" not in MINIMAL_SIGNALS, \
+        "真有解锁 producer 了？那要单独建模，并回来改这条测试"

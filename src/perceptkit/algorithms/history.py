@@ -36,6 +36,22 @@ DURATION_BY_STATE = "duration_by_state"  # minutes spent in each categorical sta
 #: 载荷里三条观测的时刻完全相同，差值为 0，桶会被写成 `{"core": 0.0}` ——
 #: 比空的更糟，它看起来像数据。
 DURATION_SUM_BY_STATE = "duration_sum_by_state"
+#: 当天**每条事件各贡献一份、直接相加**。
+#:
+#: 和 CUMULATIVE 的区别是关键的一条：CUMULATIVE 服务的是**同一个计数器**
+#: 的反复上报（步数从 3000 涨到 5000，当天总数是 5000，不是 8000），所以它
+#: 取最新/最大；而运动是**离散事件**，跑了 30 分钟又跑 45 分钟，今天就是
+#: 75 分钟。
+#:
+#: 用 CUMULATIVE 表达运动时长的后果是「今天运动多久」答 45 —— 一个错的
+#: 数字，不报错。
+#:
+#: ⚠️ **重复只在生产方给了身份时才被挡住。** 同一条事实带着同一个
+#: `source_event_id` 重传，会在落库那一层去重、根本走不到这里；但不带身份时
+#: 退回的确定性摘要含 occurred_at，同一次运动换个时刻重报就是两条不同的事实，
+#: **会被加两遍**。这不是这个策略的缺陷，是"没有身份就没有去重"的既有后果 ——
+#: 生产方该发 `<组名>_sample_id`。
+DAILY_SUM = "daily_sum"
 EVENT_LIST = "event_list"            # discrete items, deduped by id/key
 SUBJECTIVE = "subjective"            # append each self-report entry
 PLACE_DWELL = "place_dwell"          # minutes spent at each place label
@@ -144,14 +160,112 @@ def _merge_numeric_dist(doc: dict, values: Mapping, **_) -> dict:
     return out
 
 
-def _merge_cumulative(doc: dict, values: Mapping, **_) -> dict:
+def _merge_cumulative(doc: dict, values: Mapping, *, ts: float | None = None,
+                     revision: Any = None, counter_epoch: str | None = None,
+                     **_) -> dict:
+    """当天的累计量（步数、活动能量……）。
+
+    **来源可以把当天的数往下改。** 同一天重新查一次 HealthKit 得到更小的值，
+    那更小的才是权威结果 —— 一味取 max 的后果是「永远保留已知错误的最大值」。
+
+    三条规则（外部复核 §2.7）：
+
+        同一纪元 + 更新的版本/时刻   替换，**即使变小**
+        同一纪元 + 更旧的迟到观测     忽略，不覆盖较新的权威结果
+        换了纪元（计数器重置）        从新值重新开始，不和旧纪元比大小
+                                     —— 重置不是修订，混在一起会让「重置到 0」
+                                        看起来像「数据错了」而被 max 吃掉
+
+    **来源什么都不带时退回取 max**：那是单调计数器唯一安全的猜法。
+    带了才有得判，所以这不是保守，是没有依据时不乱动。
+    """
     out = dict(doc)
     for field, raw in values.items():
         n = _numeric(raw)
         if n is None:
             continue
         prev = out.get(field)
-        out[field] = {"total": n if prev is None else max(prev.get("total", n), n)}
+        if not isinstance(prev, Mapping):
+            out[field] = _cumulative_cell(n, ts, revision, counter_epoch)
+            continue
+        prev_epoch = prev.get("_epoch")
+        if counter_epoch is not None and prev_epoch != counter_epoch:
+            # 计数器重置：新纪元从头算，不比大小。
+            out[field] = _cumulative_cell(n, ts, revision, counter_epoch)
+            continue
+        if _is_newer(prev, ts, revision):
+            out[field] = _cumulative_cell(n, ts, revision, counter_epoch)
+        elif _is_older(prev, ts, revision):
+            # 明确是更旧的迟到观测：丢掉，不覆盖较新的权威结果。
+            continue
+        else:
+            # 两边都说不清先后 —— 退回单调假设。
+            out[field] = _cumulative_cell(
+                max(prev.get("total", n), n), ts, revision, counter_epoch)
+    return out
+
+
+def _cumulative_cell(total: float, ts, revision, epoch) -> dict:
+    """带上这个值的来历，下一条才判得了先后。字段名下划线开头 =
+    内部记账，和声明出来的字段区分开。"""
+    cell: dict[str, Any] = {"total": total}
+    if ts is not None:
+        cell["_at"] = ts
+    if revision is not None:
+        cell["_rev"] = revision
+    if epoch is not None:
+        cell["_epoch"] = epoch
+    return cell
+
+
+def _is_older(prev: Mapping, ts, revision) -> bool:
+    """这一条**确实比已存的旧**吗。
+
+    ⚠️ 「不比它新」不等于「比它旧」—— 相等就是相等。判成旧的话，同一时刻
+    到达的第二条观测会被静默丢掉（两次运动报同一个 occurred_at 时真会发生）。
+    """
+    prev_rev, prev_at = prev.get("_rev"), prev.get("_at")
+    if revision is not None and prev_rev is not None:
+        try:
+            return float(revision) < float(prev_rev)
+        except (TypeError, ValueError):
+            return str(revision) < str(prev_rev)
+    if ts is not None and prev_at is not None:
+        return float(ts) < float(prev_at)
+    return False
+
+
+def _is_newer(prev: Mapping, ts, revision) -> bool:
+    """这一条比已存的那条新吗。
+
+    **版本优先于时刻**：同一条事实的修订带的是更高的 revision，而它的
+    occurred_at 通常原样不变（改的是内容，不是发生时间）。先比时刻的话
+    修订会被自己的旧时间戳挡掉。
+    """
+    prev_rev, prev_at = prev.get("_rev"), prev.get("_at")
+    if revision is not None and prev_rev is not None:
+        try:
+            return float(revision) > float(prev_rev)
+        except (TypeError, ValueError):
+            return str(revision) > str(prev_rev)
+    if ts is not None and prev_at is not None:
+        return float(ts) > float(prev_at)
+    return False
+
+
+def _merge_daily_sum(doc: dict, values: Mapping, **_) -> dict:
+    """当天各条事件的和。见 DAILY_SUM 的说明。"""
+    out = dict(doc)
+    for field, raw in values.items():
+        n = _numeric(raw)
+        if n is None:
+            continue
+        prev = out.get(field)
+        base = prev.get("total", 0.0) if isinstance(prev, Mapping) else 0.0
+        count = (prev.get("count", 0) if isinstance(prev, Mapping) else 0) + 1
+        # count 一起记：知道"今天 75 分钟"和知道"分两次"是两件事，
+        # 后者是"你今天跑了两趟"这句话的依据。
+        out[field] = {"total": round(base + n, 3), "count": count}
     return out
 
 
@@ -344,6 +458,7 @@ _MERGERS = {
     MAIN_OF_DAY: _merge_main_of_day,
     DURATION_BY_STATE: _merge_duration_by_state,
     DURATION_SUM_BY_STATE: _merge_duration_sum_by_state,
+    DAILY_SUM: _merge_daily_sum,
     PLACE_DWELL: _merge_place_dwell,
     EVENT_LIST: _merge_event_list,
     SUBJECTIVE: _merge_subjective,
@@ -373,6 +488,8 @@ def apply_shape(
     state_field: str | None = None,
     duration_field: str | None = None,
     ts: float | None = None,
+    revision: Any = None,
+    counter_epoch: str | None = None,
 ) -> dict:
     """按 shape 名字直接折叠一条观测，不经过 signal -> shape 的查表。
 
@@ -387,7 +504,8 @@ def apply_shape(
     if not isinstance(values, Mapping):
         return dict(prev_doc or {})
     return merge(dict(prev_doc or {}), values, signal=signal,
-                 state_field=state_field, duration_field=duration_field, ts=ts)
+                 state_field=state_field, duration_field=duration_field, ts=ts,
+                 revision=revision, counter_epoch=counter_epoch)
 
 
 # --- read side: trend / baseline -------------------------------------------
@@ -410,6 +528,9 @@ def _series_value(doc: Mapping, shape: str, field: str | None) -> float | None:
         return _numeric(v)
     if shape == TALLY:                          # e.g. field=total_minutes
         return _numeric(doc.get(field)) if field else None
+    if shape == DAILY_SUM:
+        cell = doc.get(field) if field else None
+        return cell.get("total") if isinstance(cell, Mapping) else None
     if shape == DURATION_SUM_BY_STATE:
         # 时长字段自己就带着当天的总数（各桶之和）。
         cell = doc.get(field) if field else None

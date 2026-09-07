@@ -535,7 +535,11 @@ def test_two_reports_in_one_day_do_not_crash_a_mixed_strategy_signal():
     doc = storage.get_aggregate(subject_id="u", signal="health_workout",
                                 start_date=base.date(), end_date=base.date()
                                 )[0].typed_aggregate
-    assert doc["duration_minutes"]["total"] == 30           # 累计还在
+    # 两条上报的 occurred_at 不同，而 fixture 不发 source_event_id ——
+    # 身份退回含时刻的摘要，所以这是**两次**运动，30+30。
+    # （同一次运动重传会被加两遍，正是生产方必须发 sample_id 的理由，
+    #  见下一条测试。）
+    assert doc["duration_minutes"]["total"] == 60           # 聚合还在
     # event_list 写的键是 events，不是字段名 —— 两种算法各写各的形状，
     # 而这正是它们互相踩的原因。
     assert doc["events"], "事件列表被另一种算法覆盖了"
@@ -1196,3 +1200,31 @@ def test_passing_a_plain_list_still_works_exactly_as_before():
     kit = PerceptionKit(storage=InMemoryStorage(), definitions=[_goal("g", 1, 2000)])
     assert [d.definition_id for d in kit.definitions_for("anyone")] == ["g"]
     assert kit.definition_at("g", 1) is not None
+
+
+def test_the_same_workout_reported_twice_is_not_counted_twice():
+    """带上游身份时，重传在落库那一层就被去重了 —— 求和不会翻倍。
+
+    这条和上面那条是一对：上面那条不发 sample_id，两次上报被当成两次运动；
+    这条发了，同一次运动重传多少遍都只算一次。**差别全在生产方发不发身份。**
+    """
+    storage = InMemoryStorage()
+    kit = PerceptionKit(storage=storage, signals=MINIMAL_SIGNALS)
+    base = datetime(2026, 8, 31, 9, 0, tzinfo=timezone.utc)
+    for minute in (0, 5):                      # 同一次运动，报了两遍
+        at = base + timedelta(minutes=minute)
+        kit.ingest({
+            "schema_version": 1, "report_id": f"r{minute}", "producer": "ios",
+            "observations": [{
+                "signal": "health_workout", "signal_schema_version": 1,
+                "occurred_at": base.isoformat(), "availability": "observed",
+                "timezone": "Asia/Shanghai",
+                "source_event_id": "hk-workout-1",     # ← 唯一的区别
+                "value": {"workout_type": "running", "duration_minutes": 30},
+            }],
+        }, context=IngestContext("u", at))
+    doc = storage.get_aggregate(subject_id="u", signal="health_workout",
+                                start_date=base.date(), end_date=base.date()
+                                )[0].typed_aggregate
+    assert doc["duration_minutes"]["total"] == 30, "同一次运动被加了两遍"
+    assert doc["duration_minutes"]["count"] == 1

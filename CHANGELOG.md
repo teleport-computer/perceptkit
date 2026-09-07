@@ -21,6 +21,44 @@ kit **仍然不拥有宿主的配置存储** —— 规则存哪张表、谁能�
 `StaticDefinitions`，和 provider 走同一条代码路径。按 subject 的筛选
 （`subject_id=None` 是宿主级、带 id 的只给那个人）现在由 kit 负责。
 
+### 另外三条（外部复核标"另行排期"，这次一并做掉）
+
+**presence_recovery 现在必须说清凭什么。** 新增 `evidence` 字段
+（`app_entered_foreground` / `app_became_active` /
+`protected_data_became_available` / `unknown`，必填）。
+
+这不是"补个字段"，是**防一句编出来的话**：app 回到前台只说明 app 回到了
+前台，手机可能一直没锁过。没有这一格，下游只有"回来了"可说，而实际发生过的
+是有人把它讲成"用户刚刚解锁了手机"。三种证据没有一种能证明解锁 —— 真出现
+解锁 producer 时它该是**独立信号**，不是往这里塞第四个值。认不出的证据一律
+`unknown`，**不往强了猜**。
+
+**Workout 三投影。** `duration_minutes` / `active_energy_kcal` / `distance_m`
+改用新的 `daily_sum`：
+
+    之前  duration_minutes 是 daily_total（取 max）→ 跑 30 分钟又跑 45 分钟，
+          「今天运动多久」答 45。消耗和距离压根不聚合，当日总量答不出来
+    之后  75 分钟 / 520 千卡 / 13 公里，外加 count=2（"分两趟"是另一件事）
+
+`daily_sum` 和 `daily_total` 的区别是关键：后者服务**同一个计数器**的反复
+上报（步数 3000→5000，当天是 5000 不是 8000），前者服务**各自独立的事件**。
+
+⚠️ 求和的去重完全依赖生产方发身份：带 `source_event_id` 的重传在落库那层
+就被挡掉；不带时身份退回含 occurred_at 的摘要，同一次运动换个时刻重报**会被
+加两遍**。这不是策略缺陷，是"没有身份就没有去重"的既有后果。
+
+**累计型允许向下修订 + 计数器纪元。**
+
+    同一纪元 + 更新的版本/时刻   替换，**即使变小** ——「同一天重新查一次
+                                 HealthKit 得到更小的数」那个才是权威结果
+    同一纪元 + 更旧的迟到观测     忽略，不覆盖较新的权威结果
+    换了纪元（counter_epoch_id）  从新值重来 ——**重置不是修订**，混在一起
+                                 「重置到 0」会被单调假设当成错值吃掉
+    什么都不带                    退回取 max（单调计数器唯一安全的猜法，
+                                 所以老生产方零行为变化）
+
+`counter_epoch_id` 是 `steps` / `health_activity` 上新增的可空字段。
+
 ### 新增
 
 - `perceptkit.DefinitionProviderPort` / `perceptkit.StaticDefinitions`

@@ -122,6 +122,30 @@ PRESENCE_RECOVERY = SignalDefinition(
             nullable=False,
             query_visibility="always",
         ),
+        FieldDefinition(
+            # 🔴 **凭什么说这个人回来了。**
+            #
+            # `presence_recovery` ≠ `device_unlock`：app 回到前台只说明 app
+            # 回到了前台，手机可能一直没锁过。没有这一格的话，下游唯一能
+            # 说的只有「回来了」，而实际发生的是有人把它讲成了「刚解锁手机」
+            # —— 那是一句**编出来的**事实。
+            #
+            # 三种证据的强度依次递增，但**没有一种能证明解锁**：
+            #     app_entered_foreground          从后台切回来
+            #     app_became_active               拿到了焦点（可能只是关掉了通知）
+            #     protected_data_became_available  数据保护解除 —— 最接近解锁，
+            #                                      但设备也可能是被 Face ID 解开后
+            #                                      立刻又交给了别人
+            # 真正的解锁 producer 出现时，它该是一个**独立信号**
+            # （`device_unlock`），而不是往这里塞第四个值。
+            key="evidence",
+            value_type="enum",
+            privacy_class="public",
+            enum=("app_entered_foreground", "app_became_active",
+                  "protected_data_became_available", "unknown"),
+            nullable=False,
+            query_visibility="always",
+        ),
     ),
 )
 
@@ -158,6 +182,17 @@ STEPS = SignalDefinition(
             # 每天的步数围绕一个"平时水平"上下浮动,偏离才是信号 ——
             # 不是单调漂移(那是体重),也不是看间隔(那是经期)。
             trend_model="fluctuating",
+        ),
+        FieldDefinition(
+            # 来源的计数器重置时换一个值（HealthKit 换设备、用户重装…）。
+            # **重置不是修订**：把「重置到 0」当成修订，它会被"取 max"的
+            # 单调假设吃掉，当天的数永远停在重置前的最大值。
+            # 生产方不给时按单调计数器处理（退回取 max），所以老客户端不受影响。
+            key="counter_epoch_id",
+            value_type="string",
+            privacy_class="public",
+            aggregation_strategy="none",
+            query_visibility="never",
         ),
     ),
 )
@@ -734,19 +769,29 @@ HEALTH_WORKOUT = SignalDefinition(
         FieldDefinition(
             key="duration_minutes", value_type="number", unit="minutes",
             privacy_class="sensitive", valid_range=(0.0, 1440.0),
-            aggregation_strategy="daily_total", trend_model="fluctuating",
+            aggregation_strategy="daily_sum", trend_model="fluctuating",
             query_visibility="on_demand",
         ),
         FieldDefinition(
             key="active_energy_kcal", value_type="number", unit="kcal",
             accepted_units=("kj",), privacy_class="sensitive",
             valid_range=(0.0, 20000.0), query_visibility="on_demand",
-        ),
+            # 每次运动各贡献一份，当天求和。此前完全不聚合 ——
+            # 「今天一共消耗多少/跑了多远」压根答不出来。
+            aggregation_strategy="daily_sum",
+            # 当天总量天天不同，比的是"比平时多还是少" —— 和睡眠时长同一档。
+            trend_model="fluctuating",
+                ),
         FieldDefinition(
             key="distance_m", value_type="number", unit="m",
             accepted_units=("km", "mi"), privacy_class="sensitive",
             valid_range=(0.0, 500000.0), query_visibility="on_demand",
-        ),
+            # 每次运动各贡献一份，当天求和。此前完全不聚合 ——
+            # 「今天一共消耗多少/跑了多远」压根答不出来。
+            aggregation_strategy="daily_sum",
+            # 当天总量天天不同，比的是"比平时多还是少" —— 和睡眠时长同一档。
+            trend_model="fluctuating",
+                ),
         FieldDefinition(key="start_at", value_type="timestamp",
                         privacy_class="sensitive", query_visibility="on_demand"),
         FieldDefinition(key="end_at", value_type="timestamp",
@@ -842,6 +887,17 @@ HEALTH_ACTIVITY = SignalDefinition(
             privacy_class="sensitive", valid_range=(0.0, 1440.0),
             aggregation_strategy="daily_total", trend_model="fluctuating",
             query_visibility="on_demand",
+        ),
+        FieldDefinition(
+            # 来源的计数器重置时换一个值（HealthKit 换设备、用户重装…）。
+            # **重置不是修订**：把「重置到 0」当成修订，它会被"取 max"的
+            # 单调假设吃掉，当天的数永远停在重置前的最大值。
+            # 生产方不给时按单调计数器处理（退回取 max），所以老客户端不受影响。
+            key="counter_epoch_id",
+            value_type="string",
+            privacy_class="public",
+            aggregation_strategy="none",
+            query_visibility="never",
         ),
     ),
 )
