@@ -675,6 +675,11 @@ HEALTH_SLEEP = SignalDefinition(
     storage_mode="current_timeline_aggregate",
     current_ttl_sec=86400.0,
     identity_strategy="source_event_id",
+    # 一个阶段就是一条并列的事实，不是"最新的那条睡眠"。不分维度的话
+    # 三条阶段观测会落到同一个 dimension_key 上互相覆盖，当前值只剩最后
+    # 进来的那个阶段 —— 现在没人读它，但那是给下一个使用者埋的雷。
+    # 聚合层也用这一格当分桶键（见 aggregate.fold_into_day）。
+    dimension_fields=("stage",),
     # 整段归【结束】那天：8月27日 23:40 睡、28日 07:20 醒 → 全算 28 日。
     # 和人说话的方式一致 —— 28 号早上你说"我昨晚睡了七个半小时"。
     attribution_strategy="episode_end",
@@ -684,13 +689,24 @@ HEALTH_SLEEP = SignalDefinition(
         FieldDefinition(
             key="stage", value_type="enum", privacy_class="sensitive", nullable=False,
             enum=("awake", "core", "deep", "rem", "asleep", "unknown"),
-            aggregation_strategy="duration_by_state",
+            # 阶段自己**不聚合**，它是分桶的键。求和挂在 duration_minutes 上
+            # （真正被加总的是分钟）。
+            #
+            # 曾经声明成 duration_by_state —— 那是**驻留**算法，靠相邻观测的
+            # 时间差反推时长。而来源直接把"这个阶段 250 分钟"告诉我们了，
+            # 一次上报里几条阶段观测的时刻完全相同，差值为 0，桶被写成
+            # {"core": 0.0}：比空的更糟，它看起来像数据。
+            aggregation_strategy="none",
             comparison_strategy="state_change", query_visibility="on_demand",
         ),
         FieldDefinition(
             key="duration_minutes", value_type="number", unit="minutes",
             privacy_class="sensitive", valid_range=(0.0, 1440.0),
-            aggregation_strategy="daily_total", trend_model="fluctuating",
+            # 🔴 **不能是 daily_total**：那个走 CUMULATIVE，当天代表值取
+            # **max** 而不是求和。core 250 / deep 70 / rem 110 会被答成
+            # "昨晚睡了 250 分钟"，而不是 430 —— 一个错的数字，不报错。
+            aggregation_strategy="duration_sum_by_state",
+            trend_model="fluctuating",
             comparison_strategy="threshold_crossing",
             max_relative_jump=None,   # 睡眠时长天天不同，跳变检查没有意义
             wake_eligible=True, query_visibility="on_demand",

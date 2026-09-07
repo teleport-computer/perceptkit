@@ -44,7 +44,12 @@ from .normalize import NormalizedObservation, _canonical, normalize_observations
 
 #: 聚合算法的版本。改了口径就加这个数并重算，**不原地改写旧统计的语义** ——
 #: 否则同一张表里一半是老口径一半是新口径，而且看不出来。
-AGGREGATION_VERSION = 1
+#: 聚合文档的语义版本。**语义变了就必须升**，否则新旧口径的行会混在一起
+#: 被读出来，而两边看起来都是合法的 JSON。
+#:
+#: 2 = 2026-09-07：睡眠改用 duration_sum_by_state。此前 health_sleep 的
+#: 聚合文档里 minutes 恒为空、duration_minutes.total 是各阶段的 max 而非和。
+AGGREGATION_VERSION = 2
 
 
 @dataclass

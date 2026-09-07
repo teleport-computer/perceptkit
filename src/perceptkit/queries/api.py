@@ -267,7 +267,12 @@ def get_trend(
         result = _trend.read_cycles([d["date"] for d in docs],
                                     today=end_date.isoformat())
     elif model == "fluctuating":
-        result = _history.read_trend(docs, signal, field)
+        # 按**字段**声明的聚合方式读，不要回落到 history.SHAPE ——
+        # 那张表是按 iOS 上报键建索引的老表，和 manifest 是两套词表。
+        from ..processing.aggregate import _STRATEGY_TO_SHAPE
+        result = _history.read_trend(
+            docs, signal, field,
+            shape=_STRATEGY_TO_SHAPE.get(fd.aggregation_strategy))
     else:
         return {"model": "none", "reason": "这个字段没有声明趋势模型", **coverage}
 
