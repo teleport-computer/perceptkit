@@ -23,6 +23,9 @@ _STRATEGY_TO_SHAPE: dict[str, str] = {
     "numeric_dist": history.NUMERIC_DIST,
     "main_of_day": history.MAIN_OF_DAY,
     "duration_by_state": history.DURATION_BY_STATE,
+    # 时长由观测直接给出、按状态分桶求和（睡眠）。挂在**时长字段**上，
+    # 不是挂在状态字段上 —— 真正被加总的是分钟，状态只是桶的键。
+    "duration_sum_by_state": history.DURATION_SUM_BY_STATE,
     "event_list": history.EVENT_LIST,
     "tally": history.TALLY,
 }
@@ -54,8 +57,24 @@ def fold_into_day(
     观测的时间差累计时长 —— **没有 ts 就只能记状态、算不出时长**。
     """
     doc = dict(prev_doc or {})
+    # 跨字段的策略需要状态标签那一格。manifest 里状态字段自己不声明聚合，
+    # 所以从 dimension_fields 取 —— 「按什么分桶」和「当前值按什么并列」
+    # 本来就该是同一个答案，分成两处声明迟早漂开。
+    bucket_field = sig.dimension_fields[0] if sig.dimension_fields else None
     for field_key, shape in aggregating_fields(sig):
         if field_key not in values:
+            continue
+        if shape == history.DURATION_SUM_BY_STATE:
+            # **唯一的跨字段策略**：状态标签和时长分在两个字段里，这条必须
+            # 同时看到两格。下面那条「一次只喂一个字段」的纪律仍然管着其余
+            # 所有策略 —— 这里是显式开的一个口子，不是把纪律取消了。
+            doc = history.apply_shape(
+                shape, doc,
+                {bucket_field: values.get(bucket_field),
+                 field_key: values[field_key]},
+                signal=sig.key, state_field=bucket_field,
+                duration_field=field_key, ts=ts,
+            )
             continue
         doc = history.apply_shape(
             # **只喂这一个字段。** merger 会把收到的 mapping 里的每个字段都

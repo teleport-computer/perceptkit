@@ -62,7 +62,10 @@ def _daily_value(doc: Mapping[str, Any], field_key: str, strategy: str) -> float
         return float(cell)
     if not isinstance(cell, Mapping):
         return None
-    if strategy in ("daily_total", "cumulative"):
+    if strategy in ("daily_total", "cumulative", "duration_sum_by_state"):
+        # duration_sum_by_state 的时长字段也是 {"total": 各桶之和}。
+        # 漏掉它的话「连续三晚睡不足六小时」这类规则会一条都不触发 ——
+        # 取到 None 就当那天没数据，静默不响。
         raw = cell.get("total")
     elif strategy == "numeric_dist":
         # 用平均值当代表：min/max 太容易被单次异常读数带偏。

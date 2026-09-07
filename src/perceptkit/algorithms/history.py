@@ -28,6 +28,14 @@ NUMERIC_DIST = "numeric_dist"        # per numeric field: min/max/sum/count -> a
 CUMULATIVE = "cumulative"            # per numeric field: running max (= daily total)
 MAIN_OF_DAY = "main_of_day"          # latest non-null point values (replace)
 DURATION_BY_STATE = "duration_by_state"  # minutes spent in each categorical state
+#: 时长**由观测直接给出**，按状态分桶求和。和 DURATION_BY_STATE 的区别是
+#: 它不从相邻观测的时间差反推 —— 来源已经告诉我们"这个阶段 250 分钟"了。
+#:
+#: 为什么不能复用 DURATION_BY_STATE：那个是**驻留**算法，服务连续状态流
+#: （motion / focus / audio_route），靠 `(ts - last_ts)/60` 累计。睡眠这类
+#: 载荷里三条观测的时刻完全相同，差值为 0，桶会被写成 `{"core": 0.0}` ——
+#: 比空的更糟，它看起来像数据。
+DURATION_SUM_BY_STATE = "duration_sum_by_state"
 EVENT_LIST = "event_list"            # discrete items, deduped by id/key
 SUBJECTIVE = "subjective"            # append each self-report entry
 PLACE_DWELL = "place_dwell"          # minutes spent at each place label
@@ -179,6 +187,38 @@ def _merge_duration_by_state(doc: dict, values: Mapping, *, signal: str = "",
     return out
 
 
+def _merge_duration_sum_by_state(doc: dict, values: Mapping, *,
+                                 state_field: str | None = None,
+                                 duration_field: str | None = None, **_) -> dict:
+    """`{stage: "core", duration_minutes: 250}` -> `minutes["core"] += 250`。
+
+    **同时维护 `duration_minutes.total = 各桶之和`。** 那一格不是冗余：
+    「昨晚睡了多久」读的就是它，而按 `daily_total` 声明的话它实际走
+    CUMULATIVE、当天代表值取 **max** —— core 250 / deep 70 / rem 110 会被
+    答成 250 分钟而不是 430，一个错的数字，不报错。
+
+    跨两个字段（状态标签 + 时长），所以两个字段名都必须由调用方显式给出。
+    聚合层默认只把单个字段喂给 merger（整条 payload 递进去出过真事故，
+    见 aggregate.fold_into_day 的注释），这个策略是那条规则的显式例外。
+    """
+    out = dict(doc)
+    if not state_field or not duration_field:
+        return out
+    state = _flatten_state(values.get(state_field))
+    minutes = _numeric(values.get(duration_field))
+    if state is None or minutes is None:
+        return out
+    buckets = dict(out.get("minutes") or {})
+    buckets[state] = round((buckets.get(state) or 0.0) + minutes, 2)
+    out["minutes"] = buckets
+    # 总数由桶重算，而不是累加 —— 同一条观测重放时桶那边是幂等的
+    # （按状态覆盖式相加会出问题，所以桶用的是 +=；总数从桶算就不会
+    # 因为重算路径少加一次而漂）。
+    out[duration_field] = {"total": round(sum(
+        v for v in buckets.values() if isinstance(v, (int, float))), 2)}
+    return out
+
+
 def _merge_place_dwell(doc: dict, values: Mapping, *, ts: float | None = None, **_) -> dict:
     out = dict(doc)
     buckets = dict(out.get("minutes") or {})
@@ -303,6 +343,7 @@ _MERGERS = {
     CUMULATIVE: _merge_cumulative,
     MAIN_OF_DAY: _merge_main_of_day,
     DURATION_BY_STATE: _merge_duration_by_state,
+    DURATION_SUM_BY_STATE: _merge_duration_sum_by_state,
     PLACE_DWELL: _merge_place_dwell,
     EVENT_LIST: _merge_event_list,
     SUBJECTIVE: _merge_subjective,
@@ -330,6 +371,7 @@ def apply_shape(
     *,
     signal: str = "",
     state_field: str | None = None,
+    duration_field: str | None = None,
     ts: float | None = None,
 ) -> dict:
     """按 shape 名字直接折叠一条观测，不经过 signal -> shape 的查表。
@@ -344,8 +386,8 @@ def apply_shape(
         raise ValueError(f"unknown aggregation shape {shape!r}; known: {sorted(_MERGERS)}")
     if not isinstance(values, Mapping):
         return dict(prev_doc or {})
-    return merge(dict(prev_doc or {}), values,
-                 signal=signal, state_field=state_field, ts=ts)
+    return merge(dict(prev_doc or {}), values, signal=signal,
+                 state_field=state_field, duration_field=duration_field, ts=ts)
 
 
 # --- read side: trend / baseline -------------------------------------------
@@ -368,6 +410,10 @@ def _series_value(doc: Mapping, shape: str, field: str | None) -> float | None:
         return _numeric(v)
     if shape == TALLY:                          # e.g. field=total_minutes
         return _numeric(doc.get(field)) if field else None
+    if shape == DURATION_SUM_BY_STATE:
+        # 时长字段自己就带着当天的总数（各桶之和）。
+        cell = doc.get(field) if field else None
+        return cell.get("total") if isinstance(cell, Mapping) else None
     return None
 
 
@@ -388,10 +434,18 @@ def _percentile(xs: list[float], p: float) -> float | None:
     return s[idx]
 
 
-def read_trend(rows: list[Mapping], signal: str, field: str | None = None) -> dict:
+def read_trend(rows: list[Mapping], signal: str, field: str | None = None,
+               *, shape: str | None = None) -> dict:
     """rows: [{date, doc}] ascending by date. Returns daily series + rolling
-    baseline (median/p25/p75) + current + delta vs baseline + direction."""
-    shape = SHAPE.get(signal)
+    baseline (median/p25/p75) + current + delta vs baseline + direction.
+
+    ``shape`` 显式给出时不查 ``SHAPE`` 表。**manifest 驱动的调用方必须给**：
+    ``SHAPE`` 是按 iOS 上报键建索引的老表（宿主 legacy 路径在用），
+    manifest 那边是按字段声明聚合方式的。不给的话就会拿老表的答案去读
+    新形状的文档，读出来是空的 —— 而且不报错，趋势只是"没有数据"。
+    """
+    if shape is None:
+        shape = SHAPE.get(signal)
     daily = []
     for r in rows:
         v = _series_value(r.get("doc") or {}, shape, field) if shape else None

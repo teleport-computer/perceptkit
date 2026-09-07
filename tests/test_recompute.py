@@ -83,15 +83,21 @@ def test_a_rebuilt_aggregate_says_it_was_rebuilt():
 
 
 def test_a_new_version_lands_beside_the_old_one_rather_than_erasing_it():
-    """旧口径的文档要留着（供对照和回滚），不能被新口径原地改写。"""
+    """旧口径的文档要留着（供对照和回滚），不能被新口径原地改写。
+
+    版本号从 AGGREGATION_VERSION 推出来，不写死 —— 写死的话每次升版本
+    这条测试都会红，而它想验的事情和具体数字无关。
+    """
+    from perceptkit.processing.pipeline import AGGREGATION_VERSION
     kit, s = build()
+    nxt = AGGREGATION_VERSION + 1
     kit.recompute_aggregates(subject_id="u1", signal="steps",
                              start=date(2026, 8, 26), end=date(2026, 8, 26),
-                             now=NOW, version=2)
+                             now=NOW, version=nxt)
     rows = s.get_aggregate(subject_id="u1", signal="steps",
                            start_date=date(2026, 8, 26), end_date=date(2026, 8, 26),
                            aggregation_kind="daily")
-    assert {r.aggregation_version for r in rows} == {1, 2}
+    assert {r.aggregation_version for r in rows} == {AGGREGATION_VERSION, nxt}
 
 
 def test_recomputing_twice_changes_nothing_the_second_time():

@@ -48,6 +48,9 @@ STORAGE_MODES: frozenset[str] = frozenset({
 AGGREGATION_STRATEGIES: frozenset[str] = frozenset({
     "none", "daily_total", "occurrence_count", "numeric_dist",
     "duration_by_state", "event_list", "tally", "main_of_day", "cumulative",
+    # 时长由观测直接给出、按状态分桶求和（睡眠）。和 duration_by_state 的
+    # 区别是不从相邻观测的时间差反推 —— 详见 algorithms.history。
+    "duration_sum_by_state",
 })
 
 #: 怎么判"这个字段该触发了"。事件规则和 wake 判断都读它。
