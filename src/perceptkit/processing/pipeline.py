@@ -431,8 +431,15 @@ def _update_aggregate(
         if a.aggregation_version == AGGREGATION_VERSION
     ]
     prev = existing[0].typed_aggregate if existing else None
+    # 计数器纪元由生产方在载荷里给（来源重置了计数就换一个）。它是 manifest
+    # 声明的普通字段，这里只是把它当上下文取出来 —— 累计型靠它区分
+    # 「重置」和「修订」，混了的话「重置到 0」会被当成错值吃掉。
+    typed = stored.typed_value or {}
+    epoch = typed.get("counter_epoch_id")
     doc = _aggregate.fold_into_day(
-        prev, sig, stored.typed_value or {}, ts=_epoch(stored.occurred_at),
+        prev, sig, typed, ts=_epoch(stored.occurred_at),
+        revision=stored.source_revision,
+        counter_epoch=str(epoch) if epoch is not None else None,
     )
     coverage = dict((existing[0].source_coverage if existing else {}) or {})
     coverage["observations"] = int(coverage.get("observations", 0)) + 1

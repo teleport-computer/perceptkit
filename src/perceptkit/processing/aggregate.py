@@ -26,6 +26,7 @@ _STRATEGY_TO_SHAPE: dict[str, str] = {
     # 时长由观测直接给出、按状态分桶求和（睡眠）。挂在**时长字段**上，
     # 不是挂在状态字段上 —— 真正被加总的是分钟，状态只是桶的键。
     "duration_sum_by_state": history.DURATION_SUM_BY_STATE,
+    "daily_sum": history.DAILY_SUM,
     "event_list": history.EVENT_LIST,
     "tally": history.TALLY,
 }
@@ -47,6 +48,8 @@ def fold_into_day(
     values: Mapping[str, Any],
     *,
     ts: float | None = None,
+    revision: Any = None,
+    counter_epoch: str | None = None,
 ) -> dict[str, Any]:
     """把一条观测折进它那天的聚合文档。
 
@@ -95,6 +98,10 @@ def fold_into_day(
             # 声明,所以这里能直接给出来,不用像旧路径那样按信号查表。
             state_field=field_key if shape == history.DURATION_BY_STATE else None,
             ts=ts,
+            # 累计型要判「这次是修订、迟到、还是计数器重置」，光有值判不了。
+            # 这两格是**上下文**（和 ts 同一性质），不是被聚合的字段 ——
+            # 「一次只喂一个字段」那条纪律没被破。
+            revision=revision, counter_epoch=counter_epoch,
         )
     return doc
 

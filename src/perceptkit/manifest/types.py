@@ -51,6 +51,10 @@ AGGREGATION_STRATEGIES: frozenset[str] = frozenset({
     # 时长由观测直接给出、按状态分桶求和（睡眠）。和 duration_by_state 的
     # 区别是不从相邻观测的时间差反推 —— 详见 algorithms.history。
     "duration_sum_by_state",
+    # 离散事件当天求和（运动时长/消耗/距离）。和 daily_total 的区别：
+    # 那个服务同一个计数器的反复上报（取最新），这个服务各自独立的
+    # 事件（相加）。用错的表现是「今天运动多久」答成最长的那一次。
+    "daily_sum",
 })
 
 #: 怎么判"这个字段该触发了"。事件规则和 wake 判断都读它。
