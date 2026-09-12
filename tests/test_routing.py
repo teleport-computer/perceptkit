@@ -156,9 +156,16 @@ def test_health_signals_fields_py_exposes_are_all_reachable():
 # ---------------------------------------------------------------------------
 
 def _example_split():
-    from examples.ios_adapter import SPLIT_OFF
+    # 按路径加载 —— examples/ 不是安装出去的包，CI 上装的是 wheel，
+    # `import examples.ios_adapter` 只在"恰好从仓库根目录跑"时才成立。
+    import importlib.util
+    import pathlib
 
-    return {(k, f): v for k, m in SPLIT_OFF.items() for f, v in m.items()}
+    path = pathlib.Path(__file__).resolve().parent.parent / "examples" / "ios_adapter.py"
+    spec = importlib.util.spec_from_file_location("_ios_adapter_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return {(k, f): v for k, m in module.SPLIT_OFF.items() for f, v in m.items()}
 
 
 def _routed_split():
