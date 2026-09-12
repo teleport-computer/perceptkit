@@ -149,3 +149,55 @@ def test_health_signals_fields_py_exposes_are_all_reachable():
         "fields.py 说 agent 能看到这些信号，但它们一个可达字段都没有：\n"
         + "\n".join(unreachable)
     )
+
+
+# ---------------------------------------------------------------------------
+# 参考适配器的拆包表不许和路由图各说各话
+# ---------------------------------------------------------------------------
+
+def _example_split():
+    from examples.ios_adapter import SPLIT_OFF
+
+    return {(k, f): v for k, m in SPLIT_OFF.items() for f, v in m.items()}
+
+
+def _routed_split():
+    return {
+        (r.report_key, r.storage_field): (r.storage_signal, r.storage_field)
+        for r in routing.ROUTES.values()
+        if r.is_split_off
+    }
+
+
+def test_the_reference_adapter_never_contradicts_the_route_graph():
+    """参考适配器拆到哪儿，必须和路由图说的一致。
+
+    它此前是一张独立手抄表 —— 路由图改了它不会红，而"拆到别处去了"
+    这种错落库之后看不出来（值合法、位置错）。
+    """
+    example, routed = _example_split(), _routed_split()
+    disagree = [
+        (k, example[k], routed[k]) for k in set(example) & set(routed) if example[k] != routed[k]
+    ]
+    assert not disagree, f"适配器和路由图对落点的说法不一致：{disagree}"
+    invented = sorted(set(example) - set(routed))
+    assert not invented, f"适配器拆了路由图里没有的字段：{invented}"
+
+
+def test_the_three_metrics_that_stay_in_the_pack_are_pinned_on_purpose():
+    """体重 / 血糖 / 静息心率目前**留在整包信号里**，没有真拆出去。
+
+    这是已知缺口，不是这次要改的东西 —— 改它等于改数据落点，要迁移。
+    manifest 给这三个各声明了独立信号（体重要永久留、静息心率是一次测量），
+    而适配器仍把它们留在 health_body / health_metabolic / health_vitals 里，
+    于是它们跟着整包的保留期和身份策略走。
+
+    钉在这里是为了：① 缺口可见，不会被当成"已经拆好了"；
+    ② 哪天真拆了，这条会红，提醒同步迁移。
+    """
+    stay_behind = sorted(set(_routed_split()) - set(_example_split()))
+    assert stay_behind == [
+        ("health_body", "weight_kg"),
+        ("health_metabolic", "blood_glucose_mmol_l"),
+        ("health_vitals", "resting_heart_rate"),
+    ], f"留在整包里的指标变了：{stay_behind}"
