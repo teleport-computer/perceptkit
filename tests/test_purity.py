@@ -105,13 +105,14 @@ def test_the_algorithms_layer_does_not_reach_into_the_rest_of_the_package():
 
 
 def test_nothing_that_stayed_at_the_top_level_is_actually_an_algorithm():
-    """留在顶层的四个是声明表和待定项，不是算法。
+    """留在顶层的五个是声明表和待定项，不是算法。
 
     写成测试是为了防"顺手也搬进去" —— 把声明表塞进 algorithms/，
     这个词就不再有意义，下一个人也就不知道该往哪放东西了。
     """
     top = {p.stem for p in SRC.glob("*.py")}
-    assert top == {"__init__", "kit", "catalog", "fields", "retention", "prompts"}
+    assert top == {"__init__", "kit", "catalog", "fields", "retention", "prompts",
+                   "routing"}
 
 
 def test_every_algorithm_module_is_reachable_from_the_package():

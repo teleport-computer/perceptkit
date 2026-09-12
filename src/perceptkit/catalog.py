@@ -39,7 +39,7 @@ class Capability:
 class Signal:
     """One field the client may report, mapped to its capability + processing."""
     input: str                       # key inside report `signals`
-    capability: str                  # permission key gating it
+    capability: str                  # permission key gating REPORTING it
     outputs: tuple[str, ...]         # state field name(s) produced
     resolver: str | None = None      # name in resolve.RESOLVERS, or None (store as-is)
     ttl_sec: float = 600.0           # snapshot freshness; older -> null
@@ -89,9 +89,17 @@ CAPABILITIES: dict[str, Capability] = {c.key: c for c in [
     #            按拆完的指标各占一行。
     # 拆分只发生在第二种上。把第一种一并拆掉的后果是上报键在 SIGNALS 里
     # 查不到 → 整包体征被判 unknown_signal 退回，而客户端不会报错。
+    #
+    # ⚠️ 这三条**没有 query_tool**，是刻意的 —— 它们只管"这一包能不能上报"。
+    # 「这个字段能不能被查询」由下面的单指标查询档回答，对应关系在
+    # ``perceptkit.routing``（唯一一张路由图）。**接线层不许自己拼这条规则**：
+    # 2026-09-06 拆分之后，「查信号的能力、看它 query_tool」这条老规则就错了，
+    # 照它拼会把整包体征字段静默挡在 agent 之外（数据照收照存、接口 200、
+    # 测试全绿，六天没人发现）。用 routing.snapshot_fields()。
     Capability("health_vitals", "身体趋势", 2),
     Capability("health_body", "身体测量（体重/BMI/体脂/身高）", 2),
     Capability("health_metabolic", "代谢点值（血糖/血压）", 2),
+    Capability("health_steps", "步数", 2, query_tool=True),
     Capability("health_resting_hr", "静息心率", 2, query_tool=True),
     Capability("health_current_hr", "实时心率", 2, query_tool=True),
     Capability("health_hrv", "心率变异性", 2, query_tool=True),
