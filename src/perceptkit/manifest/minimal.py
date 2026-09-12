@@ -158,7 +158,9 @@ STEPS = SignalDefinition(
     key="steps",
     label="步数",
     schema_version=1,
-    capability="health_vitals",
+    # 查询档：agent 问"我今天走了多少步"走这个能力。上报仍然装在体征包里
+    # （catalog.SIGNALS["health_vitals"]），两者不是一回事。
+    capability="health_steps",
     storage_mode="current_timeline_aggregate",
     current_ttl_sec=3600.0,
     identity_strategy="source_event_id",
@@ -902,6 +904,16 @@ HEALTH_ACTIVITY = SignalDefinition(
     ),
 )
 
+#: 谁从谁身上拆出去的：``{(母信号, 归一后的字段名): 子信号}``。
+#:
+#: 由 ``_split_off`` 自己登记，不手写。routing 靠它判断一个字段该落到哪个
+#: 信号 —— **不能靠"哪个信号声明了同名字段"去猜**：active_energy_kcal 同时
+#: 属于 health_activity（全天活动能量）和 health_workout（单次运动消耗），
+#: 同名不同义，猜就会把全天活动量路由到运动那个能力上去（第一版真这么错过，
+#: 是守卫抓出来的）。
+SPLIT_SOURCES: dict[tuple[str, str], str] = {}
+
+
 def _split_off(base: SignalDefinition, *, key: str, label: str,
                fields: tuple[str, ...], note: str = "",
                **over: object) -> SignalDefinition:
@@ -921,6 +933,8 @@ def _split_off(base: SignalDefinition, *, key: str, label: str,
     missing = set(fields) - {f.key for f in picked}
     if missing:
         raise ValueError(f"{key}: 源信号里没有这些字段 {sorted(missing)}")
+    for f in picked:
+        SPLIT_SOURCES[(base.key, f.key)] = key
     return replace(base, key=key, label=label, fields=picked,
                    note=note or base.note, **over)
 
@@ -1379,22 +1393,22 @@ APP_USAGE = SignalDefinition(
 # ---------------------------------------------------------------------------
 
 HEALTH_WEIGHT = _split_off(
-    HEALTH_BODY, key="health_weight", label="体重", fields=("weight_kg",),
+    HEALTH_BODY, key="health_weight", capability="health_weight", label="体重", fields=("weight_kg",),
     note=("「用户改数据」最常发生的地方（录错、手动补录）——修订和撤回主要"
           "为它服务。也是单位最容易标错的：70 kg 被标成 lb，换算完 31.8 kg "
           "值域完全合法，只有「一次掉 55%」能看出不对。"),
 )
 HEALTH_BMI = _split_off(
-    HEALTH_BODY, key="health_bmi", label="BMI", fields=("bmi",),
+    HEALTH_BODY, key="health_bmi", capability="health_bmi", label="BMI", fields=("bmi",),
     note=("通常由 app 从体重和身高算出来，不一定有独立的来源样本 —— "
           "所以它可能拿不到稳定身份，撤回也就落不到它头上。"),
 )
 HEALTH_BODY_FAT = _split_off(
-    HEALTH_BODY, key="health_body_fat", label="体脂率",
+    HEALTH_BODY, key="health_body_fat", capability="health_body_fat", label="体脂率",
     fields=("body_fat_ratio",),
 )
 HEALTH_HEIGHT = _split_off(
-    HEALTH_BODY, key="health_height", label="身高", fields=("height_cm",),
+    HEALTH_BODY, key="health_height", capability="health_height", label="身高", fields=("height_cm",),
     storage_mode="current_only", history_retention_days=0,
     note=("几年才变一次，**不存历史**。挤在 health_body 里时它跟着存了明细，"
           "而它自己的字段没有聚合策略 —— 那些明细没有任何东西读得到，"
@@ -1402,18 +1416,18 @@ HEALTH_HEIGHT = _split_off(
 )
 
 HEALTH_RESTING_HR = _split_off(
-    HEALTH_VITALS, key="health_resting_hr", label="静息心率",
+    HEALTH_VITALS, key="health_resting_hr", capability="health_resting_hr", label="静息心率",
     fields=("resting_heart_rate",),
     note=("一天测一次，是「一次测量」不是「当日代表值」—— 用户能指着某一次说"
           "「删掉它」。⚠️ 当前值有效期沿用了 health_vitals 的 1 小时，"
           "对一天一次的量偏短；改它是独立的产品决定，本次不动。"),
 )
 HEALTH_HRV = _split_off(
-    HEALTH_VITALS, key="health_hrv", label="心率变异性",
+    HEALTH_VITALS, key="health_hrv", capability="health_hrv", label="心率变异性",
     fields=("hrv_sdnn_ms",),
 )
 HEALTH_RESPIRATORY = _split_off(
-    HEALTH_VITALS, key="health_respiratory", label="呼吸率",
+    HEALTH_VITALS, key="health_respiratory", capability="health_respiratory", label="呼吸率",
     fields=("respiratory_rate",),
     note=("⚠️ 拆分暴露的旧账：它在趋势表里声明了 fluctuating，但字段没有聚合策略，"
           "而趋势是从日聚合读的 —— 于是「最近呼吸率怎么样」永远读到空。"
@@ -1424,7 +1438,7 @@ HEALTH_RESPIRATORY = replace(HEALTH_RESPIRATORY, fields=(
             trend_model="fluctuating"),
 ))
 HEALTH_OXYGEN = _split_off(
-    HEALTH_VITALS, key="health_oxygen", label="血氧",
+    HEALTH_VITALS, key="health_oxygen", capability="health_oxygen", label="血氧",
     fields=("oxygen_saturation_pct",),
     note="同 health_respiratory：声明了趋势却没有聚合，趋势永远读到空。",
 )
@@ -1433,11 +1447,11 @@ HEALTH_OXYGEN = replace(HEALTH_OXYGEN, fields=(
             trend_model="fluctuating"),
 ))
 HEALTH_VO2MAX = _split_off(
-    HEALTH_VITALS, key="health_vo2max", label="最大摄氧量",
+    HEALTH_VITALS, key="health_vo2max", capability="health_vo2max", label="最大摄氧量",
     fields=("vo2_max",),
 )
 HEALTH_CURRENT_HR = _split_off(
-    HEALTH_VITALS, key="health_current_hr", label="实时心率",
+    HEALTH_VITALS, key="health_current_hr", capability="health_current_hr", label="实时心率",
     fields=("current_heart_rate",), storage_mode="current_only",
     history_retention_days=0,
     note=("**这一个不走逐条样本。** 运动时每几秒一条，而它的语义就是"
@@ -1446,17 +1460,22 @@ HEALTH_CURRENT_HR = _split_off(
 )
 
 HEALTH_GLUCOSE = _split_off(
-    HEALTH_METABOLIC, key="health_glucose", label="血糖",
+    HEALTH_METABOLIC, key="health_glucose", capability="health_glucose", label="血糖",
     fields=("blood_glucose_mmol_l",),
     note=("波动本来就大（餐前餐后能差一倍），所以不设跳变阈值 —— 设了会天天误报。"),
 )
 HEALTH_BLOOD_PRESSURE = _split_off(
-    HEALTH_METABOLIC, key="health_blood_pressure", label="血压",
+    HEALTH_METABOLIC, key="health_blood_pressure", capability="health_blood_pressure", label="血压",
     fields=("blood_pressure_systolic_mmhg", "blood_pressure_diastolic_mmhg"),
     note=("🔴 收缩压和舒张压**留在同一个信号里**，因为来源侧它们是一次读数"
           "（HealthKit 建模成 correlation）。拆成两个信号就丢了「这是同一次量的」"
           "这个事实 —— 撤回时两条各自被删，中间任何一步失败就留下半条读数。"),
 )
+
+# 步数是手写的独立信号（不走 _split_off），但它同样是从体征包里拆出来的
+# 一条 —— 客户端仍然把 step_count 装在 health_vitals 里报上来。不登记的
+# 后果是 routing 找不到它的去向，步数就再也到不了 agent。
+SPLIT_SOURCES[("health_vitals", "step_count")] = "steps"
 
 MINIMAL_SIGNALS: dict[str, SignalDefinition] = {
     s.key: s for s in (
