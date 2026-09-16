@@ -37,7 +37,7 @@ def test_a_correct_adapter_passes_everything():
 
 
 def test_the_suite_covers_every_guarantee():
-    assert len(GUARANTEES) == 13
+    assert len(GUARANTEES) == 14
 
 
 # ---------------------------------------------------------------------------
@@ -209,3 +209,36 @@ def test_catches_an_adapter_that_lists_completed_reminders_by_default():
         return [v for k, v in self.reminders.items() if k[0] == subject_id][:limit]
     problems = run_storage_conformance(broken(list_reminders=list_reminders))
     assert hits(problems, "⑪")
+
+
+def test_catches_an_outbox_that_dedupes_on_the_transition_instead_of_the_event_id():
+    """宿主自己拼去重键：(规则, 前值, 现值) 撞了就不入队。
+
+    看起来很合理 —— "同一个跳变别叫两遍"。但第二天的"家 -> 公司"就是
+    另一件事，这样写会把它静默吞掉，和 kit 0.6.0 的身份缺陷是同一个错。
+    """
+    def enqueue_event(self, entry):
+        snap = entry.fact_snapshot or {}
+        key = (entry.subject_id, entry.definition_id,
+               repr(snap.get("previous")), repr(snap.get("current")))
+        seen = getattr(self, "_transition_keys", set())
+        if entry.event_id in self.outbox or key in seen:
+            return False
+        seen.add(key)
+        self._transition_keys = seen
+        self.outbox[entry.event_id] = entry
+        return True
+    problems = run_storage_conformance(broken(enqueue_event=enqueue_event))
+    assert hits(problems, "⑭")
+
+
+def test_catches_an_outbox_that_accepts_the_same_event_id_twice():
+    """反方向：发件箱不按 event_id 去重，崩溃重放就是第二次提醒。"""
+    def enqueue_event(self, entry):
+        from dataclasses import replace
+        n = sum(1 for k in self.outbox if k.startswith(entry.event_id))
+        key = entry.event_id if n == 0 else f"{entry.event_id}#{n}"
+        self.outbox[key] = replace(entry, event_id=key)
+        return True
+    problems = run_storage_conformance(broken(enqueue_event=enqueue_event))
+    assert hits(problems, "⑭")

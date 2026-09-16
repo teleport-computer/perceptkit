@@ -88,7 +88,7 @@ def _entry(**over: Any) -> EventOutboxEntry:
 
 
 # ---------------------------------------------------------------------------
-# 十三条保证
+# 十四条保证
 # ---------------------------------------------------------------------------
 
 def _g1_report_and_observation_idempotency(new: StorageFactory) -> list[str]:
@@ -572,6 +572,111 @@ def _g13_deletes_hit_exactly_their_own_scope(new: StorageFactory) -> list[str]:
     return problems
 
 
+def _g14_a_repeated_transition_is_a_new_event_a_replay_is_not(
+    new: StorageFactory,
+) -> list[str]:
+    """⑭ 同一个跳变再发生一次是新事件；同一条观测重放一次不是。
+
+    这一条**走的是整条 kit 管线**，不是单个端口 —— 事件 id 由 kit 算、由
+    宿主的发件箱按 id 去重，缺陷只在两者合起来时才出现：
+
+        0.6.0 及以前   值变化型规则的 id 只看"旧值->新值"。第二天
+                       "家 -> 公司"和第一天同 id，宿主的
+                       ``ON CONFLICT (event_id) DO NOTHING`` 把它静默吞掉
+        宿主自己犯     发件箱不按 event_id、而按 (规则, 前值, 现值) 之类
+                       自己拼的键去重，是同一个错
+
+    反过来也要守住：同一条观测从同一个规则状态再求值一遍（崩溃重放、
+    非原子的 adapter），必须还是同一个 id、被发件箱挡下。
+    """
+    from ..contracts.context import IngestContext
+    from ..contracts.report import ReportEnvelope
+    from ..manifest.minimal import MINIMAL_SIGNALS
+    from ..processing.dispatch import evaluate_and_enqueue
+    from ..processing.normalize import normalize_observations
+    from ..processing.pipeline import ingest_report
+    from ..rules.types import EventDefinition, Lifecycle
+
+    problems: list[str] = []
+    event_type = "conformance.arrived_at_anchor"
+    rule = EventDefinition(
+        definition_id="conformance.anchor_changed", version=1,
+        signal="proximity_anchor", condition_type="changed",
+        field_name="anchor_id", event_type=event_type,
+        lifecycle=Lifecycle(scope="forever", fire="every", rearm="never"),
+    )
+
+    def report(anchor_id: str, at: datetime, rid: str) -> ReportEnvelope:
+        return ReportEnvelope.parse({
+            "schema_version": 1, "report_id": rid, "producer": "ios",
+            "observations": [{
+                "signal": "proximity_anchor", "signal_schema_version": 1,
+                "occurred_at": at.isoformat(), "availability": "observed",
+                "value": {"anchor_id": anchor_id, "anchor_type": "wifi",
+                          "is_connected": True},
+            }],
+        })
+
+    def ingest(storage: Any, env: ReportEnvelope, at: datetime) -> Any:
+        return ingest_report(
+            env, context=IngestContext(subject_id="u1", received_at=at),
+            storage=storage, signals=MINIMAL_SIGNALS, definitions=[rule],
+        )
+
+    def arrivals(storage: Any) -> int:
+        return len(storage.list_events(subject_id="u1", event_type=event_type,
+                                       limit=50))
+
+    # 家 -> 公司 -> 家 -> 公司（第二天）。第二次"家 -> 公司"是一次新的到达。
+    s = new()
+    commute = [("home", T0), ("office", T0 + timedelta(hours=1)),
+               ("home", T0 + timedelta(hours=9)),
+               ("office", T0 + timedelta(days=1, hours=1))]
+    for i, (where, at) in enumerate(commute):
+        ingest(s, report(where, at, f"commute-{i}"), at)
+    got = arrivals(s)
+    if got != 3:
+        problems.append(
+            f"⑭: 家->公司->家->公司 应该在发件箱里留下 3 个事件，实际 {got} —— "
+            "第二次「家->公司」被当成了第一次的重复（事件 id 或发件箱的去重键"
+            "只看了跳变的前后值，没看是哪一条观测触发的）"
+        )
+
+    # 客户端换个 report_id 重传最后那条观测：不是新事件。
+    last_where, last_at = commute[-1]
+    ingest(s, report(last_where, last_at, "commute-retry"),
+           last_at + timedelta(minutes=1))
+    if arrivals(s) != got:
+        problems.append("⑭: 同一条观测重传一次，发件箱多出了一个事件")
+
+    # 同一条观测从同一个规则状态再求值一遍：同一个 id，被发件箱挡下。
+    s2 = new()
+    ingest(s2, report("home", T0, "replay-0"), T0)
+    scope = "forever@v1"
+    before = s2.get_rule_state(subject_id="u1", definition_id=rule.definition_id,
+                               scope_key=scope)
+    at = T0 + timedelta(hours=1)
+    ctx = IngestContext(subject_id="u1", received_at=at)
+    item = normalize_observations(
+        report("office", at, "replay-1").observations, context=ctx,
+        signals=MINIMAL_SIGNALS, source="ios",
+    ).normalized[0]
+    ids = []
+    for _ in range(2):
+        with s2.transaction():
+            s2.put_rule_state(subject_id="u1", definition_id=rule.definition_id,
+                              scope_key=scope, state=dict(before or {}))
+            out = evaluate_and_enqueue(item, context=ctx, storage=s2,
+                                       definitions=[rule])
+        ids += [e.event_id for e in out.events]
+    if arrivals(s2) != 1 or len(ids) != 1:
+        problems.append(
+            f"⑭: 同一条观测从同一个状态重放，发件箱里有 {arrivals(s2)} 个事件、"
+            f"入队成功 {len(ids)} 次，应该都是 1 —— 崩溃重放会让用户被提醒两次"
+        )
+    return problems
+
+
 GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
     "①上报与观测幂等": _g1_report_and_observation_idempotency,
     "②旧数据不覆盖新当前值": _g2_old_does_not_overwrite_new,
@@ -586,6 +691,7 @@ GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
     "⑪两个来源镜像都能往返": _g11_both_source_mirrors_round_trip,
     "⑫终态可查与翻页下推": _g12_terminal_events_and_offsets_are_queryable,
     "⑬删除只命中自己的范围": _g13_deletes_hit_exactly_their_own_scope,
+    "⑭同一跳变再发生是新事件": _g14_a_repeated_transition_is_a_new_event_a_replay_is_not,
 }
 
 #: 这几条在内存实现上**永远是绿的**，因为内存天然原子、天然无并发。
@@ -594,7 +700,7 @@ NOT_PROVABLE_IN_MEMORY: frozenset[str] = frozenset({"⑤提供原子边界"})
 
 
 def run_storage_conformance(factory: StorageFactory) -> list[str]:
-    """跑全部十三条，返回问题清单（空 = 通过）。
+    """跑全部十四条，返回问题清单（空 = 通过）。
 
     返回列表而不是抛异常：一次看到全部缺口，比逐个修再重跑快得多。
     """
