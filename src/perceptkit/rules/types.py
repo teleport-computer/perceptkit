@@ -198,7 +198,11 @@ _WHEN_SCALARS = (str, int, float, bool, type(None))
 
 
 def _checked_when(raw: Any, condition_type: str) -> dict[str, Any]:
-    """前置条件的形状检查。**配得出来但永远不生效的，在构造时就拒掉。**"""
+    """前置条件的形状检查。**配得出来但永远不生效的，在构造时就拒掉。**
+
+    ``None`` / JSON ``null`` = 没有前置条件，和不写一样 —— YAML 里写了
+    ``when:`` 却没给值，解析出来就是它；这和 ``lifecycle`` 缺省的处理一致。
+    """
     if raw is None:
         return {}
     if not isinstance(raw, Mapping):

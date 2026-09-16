@@ -289,6 +289,18 @@ def test_the_precondition_is_part_of_the_dict_rule_language():
 
 def test_a_rule_without_a_precondition_has_an_empty_one():
     assert dict(ANCHOR_CHANGED.when) == {}
+    # null 和不写是一回事（YAML 里 `when:` 没给值解析出来就是 None）
+    explicit_none = EventDefinition(
+        definition_id="r", version=1, signal="s", condition_type="changed",
+        event_type="t", field_name="x", when=None,
+    )
+    assert dict(explicit_none.when) == {}
+    parsed = EventDefinition.parse({
+        "id": "r", "version": 1,
+        "source": {"signal": "s", "field": "x", "when": None},
+        "condition": {"type": "changed"}, "event": {"type": "t"},
+    })
+    assert dict(parsed.when) == {}
 
 
 def test_a_precondition_is_compared_strictly_not_by_python_truthiness():
