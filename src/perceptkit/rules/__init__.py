@@ -9,11 +9,11 @@
 """
 from __future__ import annotations
 
-from .engine import evaluate, scope_key
+from .engine import evaluate, precondition_met, scope_key
 from .evaluators import BUILTIN, RuleEvaluator
 from .types import EventDefinition, Lifecycle, RuleResult, RuleState
 
 __all__ = [
     "EventDefinition", "Lifecycle", "RuleState", "RuleResult",
-    "RuleEvaluator", "BUILTIN", "evaluate", "scope_key",
+    "RuleEvaluator", "BUILTIN", "evaluate", "scope_key", "precondition_met",
 ]

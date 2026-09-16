@@ -64,7 +64,7 @@ ports/        StoragePort / WakePort —— 你要实现的两个接口
 processing/   校验 → 标准化 → 去重 → 落库 → 当前值 → 聚合 → 求值 → 发件箱
 rules/        九种内置规则 + 生命周期 + 自定义 evaluator 接口
 queries/      读取侧八个函数(带 TTL 判定、趋势模型选择、缺数据显式化、隐私投影)
-conformance/  十条一致性保证的检查套件 + 内存版存储(测试工具)
+conformance/  十四条一致性保证的检查套件 + 内存版存储(测试工具)
 algorithms    归属日期 / 连续天数 / 趋势模型 / 日聚合 / 去重键 …(原有纯函数)
 ```
 

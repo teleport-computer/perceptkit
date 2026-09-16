@@ -15,6 +15,16 @@
 确定性地导出 —— 同一次触发无论重算多少遍都是同一个 id，runtime 靠它幂等。
 用随机 id 的话，一次重放就是一个新事件，用户被提醒两次。
 （另外：这个包不读时钟也不生成随机数，那会让重放和测试都做不了。）
+
+**"触发依据"是【哪一条观测】触发的，不是【从什么变成什么】。**
+这两件事要分清：
+
+    同一次投递重放   同一条观测 → 同一个 id → 发件箱挡下         ← 要的
+    同一个跳变再发生 另一条观测 → 另一个 id → 又是一件事         ← 也要的
+
+0.6.0 及以前值变化型规则用的是 ``"旧值->新值"`` 这段文字，把第二种也当成了
+第一种：第二天"家 -> 公司"和第一天算出同一个 id，被 ``ON CONFLICT DO NOTHING``
+静默丢掉，而引擎明明说了 fired。
 """
 from __future__ import annotations
 
@@ -29,7 +39,7 @@ from ..contracts.records import EventOutboxEntry
 from ..contracts.receipt import WakeReceipt
 from ..ports.storage import StoragePort
 from ..ports.wake import WakePort
-from ..rules.engine import evaluate, scope_key
+from ..rules.engine import evaluate, precondition_met, scope_key
 from ..rules.types import EventDefinition, RuleResult, RuleState
 from .normalize import NormalizedObservation, _digest
 
@@ -48,6 +58,34 @@ def event_id_for(
     return "evt_" + _digest(
         subject_id, definition.definition_id, str(definition.version), scope, trigger,
     )[:32]
+
+
+def _trigger_for(
+    definition: EventDefinition, item: NormalizedObservation, ctx: Mapping[str, Any],
+) -> str:
+    """事件 id 里的"触发依据"：**是哪一条观测让这条规则触发的**。
+
+        occurrence   上游事件 id（没有时退回投递身份）—— 和以前逐字节相同，
+                     它从来就是按观测算的，没有这个缺陷
+        其余全部     这条观测的投递身份 ``identity_digest``
+
+    投递身份正是第 ③ 步拿来挡重传的那个值（事实 + 时刻 + 版本 + 内容），
+    所以两条性质是同一件事的两面：
+
+        客户端重传同一份上报   投递身份相同 → 在 ③ 就被挡下；就算走到这里
+                               （非原子 adapter、崩溃重放）也是同一个 id
+        真的又发生了一次       另一条观测 → 另一个投递身份 → 另一个 id
+
+    **不再把** ``"旧值->新值"`` **拼进去**：一条观测对一条规则在一个范围里
+    最多就是一件事。把前值也算进身份的话，同一条观测在并发重试里读到不同
+    的前值，就会变成两个事件。
+
+    时钟驱动的 streak / absence 拿到的是调度器造的载体，它的投递身份是
+    ``scheduled:<signal>:<日期>`` —— 同一天重跑是同一个 id，换一天是新的。
+    """
+    if definition.condition_type == "occurrence":
+        return str(ctx["source_event_id"])
+    return item.identity_digest
 
 
 @dataclass
@@ -109,6 +147,15 @@ def evaluate_and_enqueue(
 
     values = stored.typed_value or {}
     for definition in relevant:
+        # 前置条件不满足：这条观测对这条规则【不存在】。
+        # 🔴 必须在读写规则状态【之前】跳过 —— 下面那句"状态每次都要写回"
+        #    会把前值推进成这条观测的值，一条迟到的"家里断开"就把之后真正
+        #    的"到家"吞成了"没变"。
+        met, why_not = precondition_met(definition, values)
+        if not met:
+            outcome.misses.append((definition.definition_id, why_not))
+            continue
+
         # 状态键带上定义版本：当天把阈值规则从 v1 改成 v2,v1 的
         # "今天已经触发过"不该继续压制 v2 —— 用户改了规则却不生效,
         # 而且没有任何地方报错。
@@ -151,8 +198,7 @@ def evaluate_and_enqueue(
             outcome.misses.append((definition.definition_id, result.reason))
             continue
 
-        trigger = ctx["source_event_id"] if definition.condition_type == "occurrence" \
-            else f"{result.previous!r}->{result.current!r}"
+        trigger = _trigger_for(definition, item, ctx)
         event = PerceptionEvent(
             event_id=event_id_for(
                 subject_id=context.subject_id, definition=definition,

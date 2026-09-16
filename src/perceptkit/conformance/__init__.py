@@ -1,7 +1,7 @@
 """一致性测试工具。
 
     memory  内存版 StoragePort —— **只是测试工具,不是生产实现**
-    suite   storage adapter：十条一致性保证
+    suite   storage adapter：十四条一致性保证
     wake    wake adapter：回执形状与幂等
     report  report adapter：producer 产出的信封本身对不对
 

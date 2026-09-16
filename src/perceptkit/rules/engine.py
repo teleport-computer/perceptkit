@@ -26,6 +26,39 @@ def scope_key(definition: EventDefinition, *, local_date: date) -> str:
     return "forever"
 
 
+_MISSING = object()
+
+
+def _same(expected: Any, actual: Any) -> bool:
+    """严格相等。``1 == True`` 在 Python 里成立，前置条件要的是"就是这个值"。"""
+    if isinstance(expected, bool) or isinstance(actual, bool):
+        return type(expected) is type(actual) and expected == actual
+    return expected == actual
+
+
+def precondition_met(
+    definition: EventDefinition, values: Mapping[str, Any] | None,
+) -> tuple[bool, str | None]:
+    """这条观测满不满足规则的前置条件（``definition.when``）。
+
+    **由手里有整条观测的调用方来问，不在 :func:`evaluate` 里问** ——
+    ``evaluate`` 只拿到被盯的那一个字段。不满足时调用方必须**跳过整条规则**：
+    不求值、不写回状态。写回的话前值被推进，见 ``EventDefinition.when``。
+
+    观测里没有那个字段 = 不满足。宁可漏一次，不拿缺失去冒充"等于"。
+    """
+    if not definition.when:
+        return True, None
+    got = values or {}
+    for key, expected in definition.when.items():
+        actual = got.get(key, _MISSING)
+        if actual is _MISSING:
+            return False, f"前置条件不满足：观测里没有 {key}"
+        if not _same(expected, actual):
+            return False, f"前置条件不满足：{key}={actual!r}（要求 {expected!r}）"
+    return True, None
+
+
 def _cooled_down(state: RuleState, *, now: datetime, cooldown: float) -> bool:
     if cooldown <= 0 or not state.last_fired_at:
         return True
@@ -113,4 +146,4 @@ def evaluate(
                       outcome.reason)
 
 
-__all__ = ["evaluate", "scope_key"]
+__all__ = ["evaluate", "scope_key", "precondition_met"]

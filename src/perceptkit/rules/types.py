@@ -107,12 +107,22 @@ class EventDefinition:
     #: ``streak`` 用 ``{"periods": 3}``（连续几个周期）—— 它的 ``operator`` /
     #: ``value`` 已经被"每天的条件"占用了（比如"睡眠 < 360 分钟"）。
     params: Mapping[str, Any] = field(default_factory=dict)
+    #: 前置条件：同一条观测里**别的字段**必须等于什么，这条规则才看这条观测。
+    #: ``{"is_connected": True}`` = 只有连着的锚点上报才算数。
+    #:
+    #: 不满足时这条观测对这条规则**不存在** —— 不求值、**不推进前值**。
+    #: 推进了的话，一条迟到的"家里 Wi-Fi 断开"会把前值改成 home，之后真正
+    #: 回到家那一次就成了"没变"，该叫的那一次反而被吞掉。
+    #:
+    #: 只做"字段 == 标量"的合取，不做表达式 —— 理由同模块开头的"不做 DSL"。
+    when: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.lifecycle is None:
             object.__setattr__(
                 self, "lifecycle", default_lifecycle_for(self.condition_type)
             )
+        object.__setattr__(self, "when", _checked_when(self.when, self.condition_type))
 
     @classmethod
     def parse(cls, payload: Mapping[str, Any]) -> "EventDefinition":
@@ -176,7 +186,44 @@ class EventDefinition:
             subject_id=payload.get("subject_id"),
             dedupe_field=(payload.get("deduplication") or {}).get("key", "source_event_id"),
             params=dict(condition.get("params") or {}),
+            # 放在 source 下：它说的是"这个信号的哪些观测算数"，不是条件本身。
+            when=source.get("when") if source.get("when") is not None else {},
         )
+
+
+#: 由时钟驱动、没有"这条观测"可看的规则。给它们配前置条件永远不满足。
+CLOCK_DRIVEN_CONDITIONS: frozenset[str] = frozenset({"streak", "absence"})
+
+_WHEN_SCALARS = (str, int, float, bool, type(None))
+
+
+def _checked_when(raw: Any, condition_type: str) -> dict[str, Any]:
+    """前置条件的形状检查。**配得出来但永远不生效的，在构造时就拒掉。**
+
+    ``None`` / JSON ``null`` = 没有前置条件，和不写一样 —— YAML 里写了
+    ``when:`` 却没给值，解析出来就是它；这和 ``lifecycle`` 缺省的处理一致。
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise ContractError(["source.when: 必须是 {字段: 值} 对象"])
+    problems: list[str] = []
+    for key, value in raw.items():
+        if not isinstance(key, str) or not key.strip():
+            problems.append("source.when: 字段名必须是非空字符串")
+        elif not isinstance(value, _WHEN_SCALARS):
+            problems.append(
+                f"source.when.{key}: 只能比较标量（字符串/数字/布尔/null），"
+                f"收到 {type(value).__name__} —— 这不是表达式语言"
+            )
+    if raw and condition_type in CLOCK_DRIVEN_CONDITIONS:
+        problems.append(
+            f"source.when: {condition_type} 由时钟驱动，没有一条观测可以看，"
+            "配上前置条件就永远不会触发"
+        )
+    if problems:
+        raise ContractError(problems)
+    return dict(raw)
 
 
 @dataclass(frozen=True)
@@ -230,7 +277,7 @@ class RuleResult:
 
 
 __all__ = [
-    "SCOPES", "FIRE_MODES", "REARM_MODES", "MAX_SEEN_KEYS",
+    "SCOPES", "FIRE_MODES", "REARM_MODES", "MAX_SEEN_KEYS", "CLOCK_DRIVEN_CONDITIONS",
     "Lifecycle", "default_lifecycle_for",
     "EventDefinition", "RuleState", "RuleResult",
 ]
