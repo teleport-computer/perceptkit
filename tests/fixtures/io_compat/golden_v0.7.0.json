@@ -1856,6 +1856,142 @@
   {
    "applied": [
     {
+     "content_digest": "c22570a5a2b1d6a6beb500941a46bcdbc90a5414a4795c411b70be5be9e0a900",
+     "day_slices": [],
+     "fact_key": "0713e87dba6acc3cbad4113add6714f36c9311b5bb67ef01f0d3fec23222cc08",
+     "identity_digest": "1957ea11cac90db5849ba9ab7a0adb59e63458b616714db5f5cfa6afa2ffec6c",
+     "stored": {
+      "availability": "observed",
+      "created_at": null,
+      "effective_local_date": "2026-09-01",
+      "observation_id": "1957ea11cac90db5849ba9ab7a0adb59e63458b616714db5f5cfa6afa2ffec6c",
+      "occurred_at": "2026-09-01T00:42:00+00:00",
+      "received_at": "2026-09-01T08:42:05+08:00",
+      "signal": "screen_change",
+      "signal_schema_version": 1,
+      "source": "ios_device_event",
+      "source_event_id": null,
+      "source_revision": null,
+      "subject_id": "u-compat",
+      "timezone": "Asia/Shanghai",
+      "typed_value": {
+       "changed": true
+      }
+     }
+    }
+   ],
+   "conflicts": [],
+   "duplicates": [],
+   "events": [
+    {
+     "condition": {
+      "operator": null,
+      "type": "occurrence",
+      "value": null
+     },
+     "context": {
+      "reason": "发生了（source_event_id=1957ea11cac90db5849ba9ab7a0adb59e63458b616714db5f5cfa6afa2ffec6c）",
+      "scope": "forever@v1"
+     },
+     "current": null,
+     "definition_id": "host.scene_changed",
+     "definition_version": 1,
+     "event_id": "evt_ebc1dd85e62be6870cd8752ae381a7b1",
+     "field_name": null,
+     "occurred_at": "2026-09-01T00:42:00+00:00",
+     "previous": null,
+     "received_at": "2026-09-01T08:42:05+08:00",
+     "schema_version": 1,
+     "signal": "screen_change",
+     "subject_id": "u-compat",
+     "type": "scene_change"
+    }
+   ],
+   "receipt": {
+    "error_code": null,
+    "observations_applied": 1,
+    "payload_digest": "37b32ce78e7deda48963412a3ef2952f49cbaeeb418b34ae47079edd4ff5df94",
+    "producer": "ios_device_event",
+    "received_at": "2026-09-01T08:42:05+08:00",
+    "report_id": "devevt-a579c31c4409cda6",
+    "status": "accepted",
+    "subject_id": "u-compat"
+   },
+   "rejected": [],
+   "rule_misses": [],
+   "warnings": []
+  },
+  {
+   "applied": [
+    {
+     "content_digest": "c22570a5a2b1d6a6beb500941a46bcdbc90a5414a4795c411b70be5be9e0a900",
+     "day_slices": [],
+     "fact_key": "0713e87dba6acc3cbad4113add6714f36c9311b5bb67ef01f0d3fec23222cc08",
+     "identity_digest": "4367f14baedab763aac72c5fdd8ab9794992682c317d4e77ac399e069bbd7a99",
+     "stored": {
+      "availability": "observed",
+      "created_at": null,
+      "effective_local_date": "2026-09-01",
+      "observation_id": "4367f14baedab763aac72c5fdd8ab9794992682c317d4e77ac399e069bbd7a99",
+      "occurred_at": "2026-09-01T00:43:00+00:00",
+      "received_at": "2026-09-01T08:43:05+08:00",
+      "signal": "screen_change",
+      "signal_schema_version": 1,
+      "source": "ios_device_event",
+      "source_event_id": null,
+      "source_revision": null,
+      "subject_id": "u-compat",
+      "timezone": "Asia/Shanghai",
+      "typed_value": {
+       "changed": true
+      }
+     }
+    }
+   ],
+   "conflicts": [],
+   "duplicates": [],
+   "events": [
+    {
+     "condition": {
+      "operator": null,
+      "type": "occurrence",
+      "value": null
+     },
+     "context": {
+      "reason": "发生了（source_event_id=4367f14baedab763aac72c5fdd8ab9794992682c317d4e77ac399e069bbd7a99）",
+      "scope": "forever@v1"
+     },
+     "current": null,
+     "definition_id": "host.scene_changed",
+     "definition_version": 1,
+     "event_id": "evt_8451d59bc0094e34ff65ab1346bde3e2",
+     "field_name": null,
+     "occurred_at": "2026-09-01T00:43:00+00:00",
+     "previous": null,
+     "received_at": "2026-09-01T08:43:05+08:00",
+     "schema_version": 1,
+     "signal": "screen_change",
+     "subject_id": "u-compat",
+     "type": "scene_change"
+    }
+   ],
+   "receipt": {
+    "error_code": null,
+    "observations_applied": 1,
+    "payload_digest": "f59f6621e31fbe28caf78956f3feae44a2c61af5b8141b008d20ed38bc7b02cf",
+    "producer": "ios_device_event",
+    "received_at": "2026-09-01T08:43:05+08:00",
+    "report_id": "devevt-12b218959aa36036",
+    "status": "accepted",
+    "subject_id": "u-compat"
+   },
+   "rejected": [],
+   "rule_misses": [],
+   "warnings": []
+  },
+  {
+   "applied": [
+    {
      "content_digest": "63fbcc10dc4d7e0efd70ca5ea3ebc308f4f47d1ed1faacd34d537a0ef04f06a9",
      "day_slices": [],
      "fact_key": "9c435a10b658d487987379da2bf4c25f9931e779b5f6d9ebfefab6c3d7218f9e",
@@ -3924,6 +4060,24 @@
     },
     "version": 1
    },
+   "u-compat\u001fscreen_change\u001fscreen_change": {
+    "availability": "observed",
+    "content_digest": "c22570a5a2b1d6a6beb500941a46bcdbc90a5414a4795c411b70be5be9e0a900",
+    "dimension_key": "screen_change",
+    "expires_at": "2026-09-01T00:44:00+00:00",
+    "observed_at": "2026-09-01T00:43:00+00:00",
+    "received_at": "2026-09-01T08:43:05+08:00",
+    "signal": "screen_change",
+    "source": "ios_device_event",
+    "source_event_id": null,
+    "source_observation_id": "4367f14baedab763aac72c5fdd8ab9794992682c317d4e77ac399e069bbd7a99",
+    "source_revision": null,
+    "subject_id": "u-compat",
+    "typed_value": {
+     "changed": true
+    },
+    "version": 1
+   },
    "u-compat\u001fsteps\u001fsteps": {
     "availability": "observed",
     "content_digest": "3d4c5518d1204c8fbe08b604a50cd191bc1663e301463462b1198562d9781a39",
@@ -4370,6 +4524,18 @@
     "proximity_anchor",
     "ios_location",
     "29565d9d68f29010d5c2f45fb918c60e72971a5ee422e8fa299554744e61994c"
+   ],
+   [
+    "u-compat",
+    "screen_change",
+    "ios_device_event",
+    "1957ea11cac90db5849ba9ab7a0adb59e63458b616714db5f5cfa6afa2ffec6c"
+   ],
+   [
+    "u-compat",
+    "screen_change",
+    "ios_device_event",
+    "4367f14baedab763aac72c5fdd8ab9794992682c317d4e77ac399e069bbd7a99"
    ],
    [
     "u-compat",
@@ -5728,6 +5894,45 @@
     "occurred_at": "2026-09-01T08:05:00+08:00",
     "subject_id": "u-compat"
    },
+   "evt_8451d59bc0094e34ff65ab1346bde3e2": {
+    "attempt_count": 0,
+    "budget_reservation_id": null,
+    "claim_token": null,
+    "created_at": "2026-09-01T08:43:05+08:00",
+    "dedupe_key": "evt_8451d59bc0094e34ff65ab1346bde3e2",
+    "definition_id": "host.scene_changed",
+    "definition_version": 1,
+    "delivery_state": "pending",
+    "detected_at": "2026-09-01T08:43:05+08:00",
+    "event_id": "evt_8451d59bc0094e34ff65ab1346bde3e2",
+    "event_type": "scene_change",
+    "fact_snapshot": {
+     "condition": {
+      "type": "occurrence"
+     },
+     "context": {
+      "reason": "发生了（source_event_id=4367f14baedab763aac72c5fdd8ab9794992682c317d4e77ac399e069bbd7a99）",
+      "scope": "forever@v1"
+     },
+     "current": null,
+     "definition_id": "host.scene_changed",
+     "definition_version": 1,
+     "event_id": "evt_8451d59bc0094e34ff65ab1346bde3e2",
+     "field": null,
+     "occurred_at": "2026-09-01T00:43:00+00:00",
+     "previous": null,
+     "received_at": "2026-09-01T08:43:05+08:00",
+     "schema_version": 1,
+     "signal": "screen_change",
+     "subject_id": "u-compat",
+     "type": "scene_change"
+    },
+    "lease_expires_at": null,
+    "lease_owner": null,
+    "next_attempt_at": null,
+    "occurred_at": "2026-09-01T00:43:00+00:00",
+    "subject_id": "u-compat"
+   },
    "evt_95f8c255f38bef95cba2131255a06bde": {
     "attempt_count": 0,
     "budget_reservation_id": null,
@@ -5884,6 +6089,45 @@
     "lease_owner": null,
     "next_attempt_at": null,
     "occurred_at": "2026-09-01T00:31:00+00:00",
+    "subject_id": "u-compat"
+   },
+   "evt_ebc1dd85e62be6870cd8752ae381a7b1": {
+    "attempt_count": 0,
+    "budget_reservation_id": null,
+    "claim_token": null,
+    "created_at": "2026-09-01T08:42:05+08:00",
+    "dedupe_key": "evt_ebc1dd85e62be6870cd8752ae381a7b1",
+    "definition_id": "host.scene_changed",
+    "definition_version": 1,
+    "delivery_state": "pending",
+    "detected_at": "2026-09-01T08:42:05+08:00",
+    "event_id": "evt_ebc1dd85e62be6870cd8752ae381a7b1",
+    "event_type": "scene_change",
+    "fact_snapshot": {
+     "condition": {
+      "type": "occurrence"
+     },
+     "context": {
+      "reason": "发生了（source_event_id=1957ea11cac90db5849ba9ab7a0adb59e63458b616714db5f5cfa6afa2ffec6c）",
+      "scope": "forever@v1"
+     },
+     "current": null,
+     "definition_id": "host.scene_changed",
+     "definition_version": 1,
+     "event_id": "evt_ebc1dd85e62be6870cd8752ae381a7b1",
+     "field": null,
+     "occurred_at": "2026-09-01T00:42:00+00:00",
+     "previous": null,
+     "received_at": "2026-09-01T08:42:05+08:00",
+     "schema_version": 1,
+     "signal": "screen_change",
+     "subject_id": "u-compat",
+     "type": "scene_change"
+    },
+    "lease_expires_at": null,
+    "lease_owner": null,
+    "next_attempt_at": null,
+    "occurred_at": "2026-09-01T00:42:00+00:00",
     "subject_id": "u-compat"
    },
    "evt_efdd6140bcdf4ca6dded513274dfb5ce": {
@@ -6057,6 +6301,16 @@
     "status": "accepted",
     "subject_id": "u-compat"
    },
+   "u-compat\u001fios_device_event\u001fdevevt-12b218959aa36036": {
+    "error_code": null,
+    "observations_applied": 0,
+    "payload_digest": "f59f6621e31fbe28caf78956f3feae44a2c61af5b8141b008d20ed38bc7b02cf",
+    "producer": "ios_device_event",
+    "received_at": "2026-09-01T08:43:05+08:00",
+    "report_id": "devevt-12b218959aa36036",
+    "status": "accepted",
+    "subject_id": "u-compat"
+   },
    "u-compat\u001fios_device_event\u001fdevevt-2d4c93e1a2235e8d": {
     "error_code": null,
     "observations_applied": 0,
@@ -6064,6 +6318,16 @@
     "producer": "ios_device_event",
     "received_at": "2026-09-01T08:40:05+08:00",
     "report_id": "devevt-2d4c93e1a2235e8d",
+    "status": "accepted",
+    "subject_id": "u-compat"
+   },
+   "u-compat\u001fios_device_event\u001fdevevt-a579c31c4409cda6": {
+    "error_code": null,
+    "observations_applied": 0,
+    "payload_digest": "37b32ce78e7deda48963412a3ef2952f49cbaeeb418b34ae47079edd4ff5df94",
+    "producer": "ios_device_event",
+    "received_at": "2026-09-01T08:42:05+08:00",
+    "report_id": "devevt-a579c31c4409cda6",
     "status": "accepted",
     "subject_id": "u-compat"
    },
@@ -6173,6 +6437,15 @@
     "seen_keys": [
      "ev-1",
      "ev-2"
+    ]
+   },
+   "u-compat\u001fhost.scene_changed\u001fforever@v1": {
+    "fired_in_scope": true,
+    "last_fired_at": "2026-09-01T08:43:05+08:00",
+    "previous_value": null,
+    "seen_keys": [
+     "1957ea11cac90db5849ba9ab7a0adb59e63458b616714db5f5cfa6afa2ffec6c",
+     "4367f14baedab763aac72c5fdd8ab9794992682c317d4e77ac399e069bbd7a99"
     ]
    }
   }

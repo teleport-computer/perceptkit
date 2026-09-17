@@ -1254,6 +1254,11 @@ PLACE_ZONE = SignalDefinition(
             # 新信号，没有老 producer：必填，让「不在任何区域里」只有一种说法。
             nullable=False,
             comparison_strategy="state_change",
+            # 驻留时长挂在这一格上，不挂在 zone_label 上：这一格**每条观测都有**。
+            # 挂在 zone_label 上的话，「区域外」那条不带标签、聚合层跳过它，
+            # 上一个区域的驻留就结束不了 —— 家 09:00 → 区域外 09:10 → 公司 09:20
+            # 会把家算成 20 分钟（应为 10）。按区域分的时长留作后续。
+            aggregation_strategy="duration_by_state",
             wake_eligible=True,
             query_visibility="always",
             note=(
@@ -1270,7 +1275,6 @@ PLACE_ZONE = SignalDefinition(
             # state_change 字段。只标 is_inside_known_zone 的话，家 → 公司
             # （两边都是 true）会被当成重复，时间线里就没有「到了公司」这一条。
             comparison_strategy="state_change",
-            aggregation_strategy="duration_by_state",
             wake_eligible=True,
             query_visibility="always",
             note=(

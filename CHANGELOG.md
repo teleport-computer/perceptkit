@@ -43,21 +43,29 @@ TTL 900s、确定性身份、`source_profile="location"`、隐私级别 `persona
 - `broadcast_state` 和 `place_zone` 两个字段标成 `state_change`：发了的话，
   暂停 / 恢复、家 → 公司会各留一条明细；不发的 producer 比较的是 `None == None`，
   明细写入逐字节不变。`broadcast_state` 不挂聚合，时长统计仍只按 `is_active`。
-- 撤回（`apply_retractions`）每条撤回对同一信号的明细**只读一遍**（以前受影响日期
-  和重选当前值各读一遍）。一个宿主实测明细一万条时二十条撤回 2.6 秒，这一改
-  读取量减半；写入竞争重试时仍然重读。**没做完的部分**：仍是每条撤回全量读一次
-  明细。根治要给 `StoragePort` 加一个按 `(source, source_event_id)` 定位观测的
-  可选方法，留作后续（加端口方法要所有存储实现跟上，不适合混在这一版）。
+- `place_zone` 的驻留时长挂在 `is_inside_known_zone` 上（区域里 / 区域外各多少分钟），
+  **不挂在 `zone_label` 上**：区域外那条不带标签，挂在标签上的话上一个区域的驻留
+  结束不了（家 09:00 → 区域外 09:10 → 公司 09:20 会把家算成 20 分钟）。按区域分的
+  时长留作后续。
+
+### 这一版没做的
+
+- **撤回的性能问题**（每条撤回全量重读该信号的明细；一个宿主实测明细一万条时二十条
+  撤回 2.6 秒）。试过「受影响日期和重选当前值共用一次读取」，审查构造出了反例：
+  Postgres 默认 READ COMMITTED 下，读完明细后并发提交一条比被撤回值旧、比其他候选
+  新的迟到观测，它不推进当前值版本，CAS 不会失败，重选就会静默选错。**所以没放进
+  这一版。** 正经修法是给 `StoragePort` 加一个可选的按 `(source, source_event_id)`
+  定位观测的方法，并把「重选时的并发保证」一起定清楚。
 
 ### 怎么证明「只加不改」
 
 - `tests/test_io_compat.py`：拿已上线宿主适配层**原样代码**生成的一整段上报
   （快照、重传、开关屏幕采集、锚点 A→B→A→B、照片、离开后回来、app 开关、
-  今天就会被拒的 `playback_state=unknown`……），跑完把每一步的标准化结果、事件、
-  规则状态、当前值、明细、聚合、发件箱全部序列化，**和 v0.7.0 源码跑同一段序列的
+  屏幕画面变化、今天就会被拒的 `playback_state=unknown`……），跑完把每一步的标准化结果、事件、
+  规则状态、当前值、明细、聚合、发件箱全部序列化（宿主六条唤醒规则都真的触发过），**和 v0.7.0 源码跑同一段序列的
   快照逐字节比对**。已验证它有牙：把新字段改成必填、或收窄已有枚举，都会变红。
 - 同一个文件钉住 `perceptkit.catalog` 的 sha256 = v0.7.0（宿主直接转引里面的常量）。
-- 一致性套件 14 条照旧全过。
+- 一致性套件 14 条照旧全过；撤回路径没有改动。
 
 ### 🔴 宿主升级须知
 
@@ -74,8 +82,11 @@ TTL 900s、确定性身份、`source_profile="location"`、隐私级别 `persona
 3. 适配层**继续丢弃** `media_type` / `duration` / `state`，不产出 `place_zone` →
    **线上行为零变化**。唤醒规则、规则版本都不用动。影子报告的「从没见过的信号」
    里会多出 `place_zone`，这是预期。
-4. 之后分阶段接：放开适配层（`duration` 为 0 时不发；设备事件的 on/off/paused 在
-   适配层翻译）→ 登记为配对进对照 → 对照干净后再把 `now_playing` /
+4. 之后分阶段接：放开适配层 —— 光从丢弃表里删掉不够，**名字也要对上**：
+   快照里的 `duration` → `duration_seconds`（为 0 时不发）、`state` → `broadcast_state`
+   要加进别名表，否则会被当成未声明字段静默丢掉；设备事件里的 on/off/paused 在
+   适配层翻译成 broadcasting/idle/paused；地点标签 `unknown` → `no_data`、
+   `unknown_place` → `is_inside_known_zone=false` → 登记为配对进对照 → 对照干净后再把 `now_playing` /
    `broadcast_state` / 地点标签切到从 kit 读。
 
 **Rokku**（按原始观测格式上报，`value` 透传给 kit）：
@@ -85,7 +96,6 @@ TTL 900s、确定性身份、`source_profile="location"`、隐私级别 `persona
    `broadcast_state` 用 `idle/broadcasting/paused`，地点用 `place_zone`（没定位发
    `no_data`，不在区域里发 `is_inside_known_zone=false`）。`app_presence` 仍然不进 kit。
 3. iOS 端开始发这些字段之前，确认发的值都在词表里 —— 不在表里会整条被拒。
-4. 撤回批量上限（20）可以在重新测过之后放宽。
 
 ### 为什么是 0.8.0 而不是 0.7.1
 

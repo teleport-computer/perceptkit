@@ -147,6 +147,7 @@ def test_the_fixture_really_exercises_what_the_host_depends_on():
     assert event_types.count("arrived_at_anchor") >= 3
     assert event_types.count("photo_added") == 2
     assert event_types.count("unlock_after_absence") == 2
+    assert event_types.count("scene_change") == 2
     assert any(r["rejected"] for r in got["steps"]), "要有一条今天就被拒的观测"
     assert any(r["receipt"]["status"] != "accepted" for r in got["steps"]), "要有一次重传"
 

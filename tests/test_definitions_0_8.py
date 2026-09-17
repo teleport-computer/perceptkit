@@ -296,3 +296,22 @@ def test_place_zone_is_in_the_generated_storage_table_and_retention_plan():
     assert "place_zone" in {r["signal"] for r in reference_mapping(MINIMAL_SIGNALS)}
     plan = plan_retention(MINIMAL_SIGNALS, now=at(0))
     assert "place_zone" in repr(plan)
+
+
+def test_place_zone_dwell_is_closed_by_an_outside_observation():
+    """「区域外」那条不带 zone_label。驻留要是挂在标签上，它结束不了上一个区域：
+    家 09:00 → 区域外 09:10 → 公司 09:20 会把家算成 20 分钟。所以时长挂在
+    每条都有的 is_inside_known_zone 上。"""
+    kit, storage = fresh_kit()
+    for i, (minutes, value) in enumerate([
+        (0, {"is_inside_known_zone": True, "zone_label": "home"}),
+        (10, {"is_inside_known_zone": False}),
+        (20, {"is_inside_known_zone": True, "zone_label": "work"}),
+        (35, {"is_inside_known_zone": False}),
+    ]):
+        assert ingest(kit, f"dw-{i}", minutes, obs("place_zone", value)).rejected == []
+    [agg] = [a for a in storage.aggregates.values() if a.signal == "place_zone"]
+    # 布尔状态的桶名沿用聚合层已有的写法；这里只钉数：在区域里 10+15，区域外 10。
+    assert sorted(agg.typed_aggregate["minutes"].values()) == [10.0, 25.0]
+    fields = MINIMAL_SIGNALS["place_zone"].field_map()
+    assert fields["zone_label"].aggregation_strategy == "none"

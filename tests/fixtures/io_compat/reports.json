@@ -1026,6 +1026,48 @@
     "observations": [
      {
       "availability": "observed",
+      "occurred_at": "2026-09-01T00:42:00+00:00",
+      "signal": "screen_change",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "changed": true
+      }
+     }
+    ],
+    "producer": "ios_device_event",
+    "report_id": "devevt-a579c31c4409cda6",
+    "schema_version": 1
+   },
+   "kind": "device_event",
+   "received_at": "2026-09-01T08:42:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T00:43:00+00:00",
+      "signal": "screen_change",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "changed": true
+      }
+     }
+    ],
+    "producer": "ios_device_event",
+    "report_id": "devevt-12b218959aa36036",
+    "schema_version": 1
+   },
+   "kind": "device_event",
+   "received_at": "2026-09-01T08:43:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
       "occurred_at": "2026-09-01T00:41:00+00:00",
       "signal": "app_usage",
       "signal_schema_version": 1,
