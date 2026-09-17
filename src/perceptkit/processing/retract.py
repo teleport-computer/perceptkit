@@ -82,9 +82,13 @@ def apply_retractions(
                 # 但没法重选 —— 不知道这个信号的当前值长什么样。
                 outcome.unknown_signals.append(r.signal)
                 continue
-            for day in _affected_days(storage, r):
+            # 这条信号的明细只读一遍，受影响日期和第一次重选共用。
+            # 以前两处各自全量读一遍 —— 明细一万条时每条撤回就是两万行，
+            # 一批二十条撤回要读四十万行。撞车重试时仍然重读（那时数据可能真变了）。
+            page = _all_observations(storage, r.subject_id, r.signal)
+            for day in _affected_days(page, r):
                 outcome.affected_days.add((r.subject_id, r.signal, day))
-            state = _reselect_current(storage, r, sig, now=now)
+            state = _reselect_current(storage, r, sig, now=now, first_page=page)
             if state == "reselected":
                 outcome.reselected += 1
             elif state == "contended":
@@ -93,22 +97,23 @@ def apply_retractions(
     return outcome
 
 
-def _affected_days(storage: StoragePort, r: Retraction) -> set[date]:
+def _affected_days(page: Sequence, r: Retraction) -> set[date]:
     """被撤回的那条事实落在哪几天。
 
     一条事实通常只落一天，但跨午夜的睡眠/运动会被切成两天 ——
     只重算一天会留下另一半错的。
 
-    ``current_only`` 的信号没有观测，返回空集：它们本来也没有日聚合。
+    ``current_only`` 的信号没有观测，``page`` 为空，返回空集：
+    它们本来也没有日聚合。
     """
-    if not hasattr(storage, "list_observations"):
-        return set()
-    page = _all_observations(storage, r.subject_id, r.signal)
     return {o.effective_local_date for o in page
             if (o.source, o.source_event_id) == (r.source, r.source_event_id)}
 
 
 def _all_observations(storage: StoragePort, subject_id: str, signal: str) -> list:
+    """这个人这条信号的全部明细。存储不提供明细读取时返回空。"""
+    if not hasattr(storage, "list_observations"):
+        return []
     rows, cursor = storage.list_observations(
         subject_id=subject_id, signal=signal, cursor=None, limit=500)
     page = list(rows)
@@ -120,14 +125,15 @@ def _all_observations(storage: StoragePort, subject_id: str, signal: str) -> lis
 
 
 def _reselect_current(storage: StoragePort, r: Retraction,
-                      sig: SignalDefinition, *, now: datetime) -> str:
+                      sig: SignalDefinition, *, now: datetime,
+                      first_page: list | None = None) -> str:
     """把当前值重选成下一条仍然有效的。返回做了什么。
 
     靠 ``CurrentProjection`` 自己带的 ``(source, source_event_id)`` 定位 ——
     **不反查观测**：``current_only`` 的信号压根不写观测，反查得到空，
     于是撤回记下了、当前值纹丝不动。
     """
-    for _ in range(_MAX_CAS_RETRIES):
+    for attempt in range(_MAX_CAS_RETRIES):
         existing = storage.get_current(
             subject_id=r.subject_id, signals=[r.signal]).get(r.signal) or ()
         hit = [c for c in existing
@@ -135,8 +141,10 @@ def _reselect_current(storage: StoragePort, r: Retraction,
         if not hit:
             return "untouched"              # 被撤回的那条不是当前值
 
-        page = (_all_observations(storage, r.subject_id, r.signal)
-                if hasattr(storage, "list_observations") else [])
+        # 第一次用调用方刚读好的那份；撞车之后重读 —— 有人在我们之后写了，
+        # 候选集可能真的变了。
+        page = (first_page if attempt == 0 and first_page is not None
+                else _all_observations(storage, r.subject_id, r.signal))
         retracted = {(x.source, x.source_event_id)
                      for x in storage.list_retractions(
                          subject_id=r.subject_id, signal=r.signal)}

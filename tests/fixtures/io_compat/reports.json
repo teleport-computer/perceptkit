@@ -1,0 +1,1355 @@
+{
+ "generated_from": "io feedling-mcp origin/test 992c978 backend/perception/perceptkit_adapter/{ios_report,events}.py",
+ "steps": [
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "time_context",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "locale": "zh_CN",
+       "time_zone_id": "Asia/Shanghai"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "battery",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "is_charging": false,
+       "is_low_power_mode_enabled": true,
+       "level_ratio": 0.62
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "motion_state",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "state": "stationary"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "focus_state",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "is_active": true
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "audio_route",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "device_label": "AirPods",
+       "is_bluetooth": true,
+       "output_type": "bluetooth_a2dp"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "weather",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "apparent_temperature_c": 29.1,
+       "condition": "cloudy",
+       "humidity_ratio": 0.71,
+       "is_daylight": true,
+       "precipitation_probability": 0.2,
+       "temperature_c": 27.4,
+       "uv_index": 4
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_resting_hr",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "resting_heart_rate": 58
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "steps",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "step_count": 4211
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_current_hr",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "current_heart_rate": 72
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_hrv",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "hrv_sdnn_ms": 42.5
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_oxygen",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "oxygen_saturation_pct": 97
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_weight",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "weight_kg": 68.2
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_bmi",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "bmi": 22.1
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_body_fat",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "body_fat_ratio": 0.184
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_height",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "height_cm": 175
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_blood_pressure",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "blood_pressure_diastolic_mmhg": 76,
+       "blood_pressure_systolic_mmhg": 118
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_sleep",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "duration_minutes": 250,
+       "stage": "core"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_sleep",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "duration_minutes": 70,
+       "stage": "deep"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_sleep",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "duration_minutes": 110,
+       "stage": "rem"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_activity",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "active_energy_kcal": 320,
+       "exercise_minutes": 22,
+       "local_date": "2026-09-01",
+       "stand_minutes": 300
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_workout",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "duration_minutes": 31,
+       "workout_type": "running"
+      }
+     },
+     {
+      "availability": "no_data",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_mood",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai"
+     },
+     {
+      "availability": "unavailable",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_cycle",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai"
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "broadcast",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "is_active": false
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "music_playback",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "album": "Album",
+       "artist": "Artist",
+       "edge_quality": "measured",
+       "playback_state": "playing",
+       "title": "Song A",
+       "track_key": "d1df67420ce4218c"
+      }
+     }
+    ],
+    "producer": "ios",
+    "report_id": "ios-c8ca2459087b977d",
+    "schema_version": 1
+   },
+   "kind": "snapshot",
+   "received_at": "2026-09-01T08:00:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "time_context",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "locale": "zh_CN",
+       "time_zone_id": "Asia/Shanghai"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "battery",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "is_charging": false,
+       "is_low_power_mode_enabled": true,
+       "level_ratio": 0.62
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "motion_state",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "state": "stationary"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "focus_state",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "is_active": true
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "audio_route",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "device_label": "AirPods",
+       "is_bluetooth": true,
+       "output_type": "bluetooth_a2dp"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "weather",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "apparent_temperature_c": 29.1,
+       "condition": "cloudy",
+       "humidity_ratio": 0.71,
+       "is_daylight": true,
+       "precipitation_probability": 0.2,
+       "temperature_c": 27.4,
+       "uv_index": 4
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_resting_hr",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "resting_heart_rate": 58
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "steps",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "step_count": 4211
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_current_hr",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "current_heart_rate": 72
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_hrv",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "hrv_sdnn_ms": 42.5
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_oxygen",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "oxygen_saturation_pct": 97
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_weight",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "weight_kg": 68.2
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_bmi",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "bmi": 22.1
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_body_fat",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "body_fat_ratio": 0.184
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_height",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "height_cm": 175
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_blood_pressure",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "blood_pressure_diastolic_mmhg": 76,
+       "blood_pressure_systolic_mmhg": 118
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_sleep",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "duration_minutes": 250,
+       "stage": "core"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_sleep",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "duration_minutes": 70,
+       "stage": "deep"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_sleep",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "duration_minutes": 110,
+       "stage": "rem"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_activity",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "active_energy_kcal": 320,
+       "exercise_minutes": 22,
+       "local_date": "2026-09-01",
+       "stand_minutes": 300
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_workout",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "duration_minutes": 31,
+       "workout_type": "running"
+      }
+     },
+     {
+      "availability": "no_data",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_mood",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai"
+     },
+     {
+      "availability": "unavailable",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "health_cycle",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai"
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "broadcast",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "is_active": false
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:00:00+08:00",
+      "signal": "music_playback",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "album": "Album",
+       "artist": "Artist",
+       "edge_quality": "measured",
+       "playback_state": "playing",
+       "title": "Song A",
+       "track_key": "d1df67420ce4218c"
+      }
+     }
+    ],
+    "producer": "ios",
+    "report_id": "ios-c8ca2459087b977d",
+    "schema_version": 1
+   },
+   "kind": "snapshot_retransmit",
+   "received_at": "2026-09-01T08:00:40+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:02:00+08:00",
+      "signal": "time_context",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "locale": "zh_CN",
+       "time_zone_id": "Asia/Shanghai"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:02:00+08:00",
+      "signal": "broadcast",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "is_active": true
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:02:00+08:00",
+      "signal": "music_playback",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "album": "Album",
+       "artist": "Artist",
+       "edge_quality": "estimated",
+       "playback_state": "paused",
+       "title": "Ep 1",
+       "track_key": "527c17b4c107627f"
+      }
+     }
+    ],
+    "producer": "ios",
+    "report_id": "ios-fe7a107e6d387959",
+    "schema_version": 1
+   },
+   "kind": "snapshot",
+   "received_at": "2026-09-01T08:02:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:03:00+08:00",
+      "signal": "time_context",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "locale": "zh_CN",
+       "time_zone_id": "Asia/Shanghai"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:03:00+08:00",
+      "signal": "broadcast",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "is_active": true
+      }
+     }
+    ],
+    "producer": "ios",
+    "report_id": "ios-72211f4d6df0e322",
+    "schema_version": 1
+   },
+   "kind": "snapshot",
+   "received_at": "2026-09-01T08:03:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:05:00+08:00",
+      "signal": "time_context",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "locale": "zh_CN",
+       "time_zone_id": "Asia/Shanghai"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:05:00+08:00",
+      "signal": "broadcast",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "is_active": false
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:05:00+08:00",
+      "signal": "music_playback",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "edge_quality": "estimated",
+       "playback_state": "stopped"
+      }
+     }
+    ],
+    "producer": "ios",
+    "report_id": "ios-f3ba4d0e54f1ad67",
+    "schema_version": 1
+   },
+   "kind": "snapshot",
+   "received_at": "2026-09-01T08:05:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:08:00+08:00",
+      "signal": "time_context",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "locale": "zh_CN",
+       "time_zone_id": "Asia/Shanghai"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:08:00+08:00",
+      "signal": "broadcast",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "is_active": true
+      }
+     }
+    ],
+    "producer": "ios",
+    "report_id": "ios-1c58ae8e96d1f974",
+    "schema_version": 1
+   },
+   "kind": "snapshot",
+   "received_at": "2026-09-01T08:08:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:09:00+08:00",
+      "signal": "time_context",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "locale": "zh_CN",
+       "time_zone_id": "Asia/Shanghai"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T08:09:00+08:00",
+      "signal": "music_playback",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "album": "Album",
+       "artist": "Artist",
+       "edge_quality": "estimated",
+       "playback_state": "unknown",
+       "title": "Song A",
+       "track_key": "d1df67420ce4218c"
+      }
+     }
+    ],
+    "producer": "ios",
+    "report_id": "ios-64dfacde99da00fd",
+    "schema_version": 1
+   },
+   "kind": "snapshot",
+   "received_at": "2026-09-01T08:09:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T00:10:00+00:00",
+      "signal": "location_city",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "accuracy_m": null,
+       "country_code": "CN",
+       "locality": "Shanghai",
+       "placemark_source": "ios_device_resolver",
+       "region": null
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T00:10:00+00:00",
+      "signal": "proximity_anchor",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "anchor_id": "a-home",
+       "anchor_type": "wifi",
+       "is_connected": true,
+       "label": "home_wifi"
+      }
+     }
+    ],
+    "producer": "ios_location",
+    "report_id": "loc-4bd794f38bf2c4b8",
+    "schema_version": 1
+   },
+   "kind": "location",
+   "received_at": "2026-09-01T08:10:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T00:15:00+00:00",
+      "signal": "location_city",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "accuracy_m": null,
+       "country_code": "CN",
+       "locality": "Shanghai",
+       "placemark_source": "ios_device_resolver",
+       "region": null
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T00:15:00+00:00",
+      "signal": "proximity_anchor",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "anchor_id": "a-office",
+       "anchor_type": "wifi",
+       "is_connected": true,
+       "label": "work_wifi"
+      }
+     }
+    ],
+    "producer": "ios_location",
+    "report_id": "loc-db846a649bfec0b1",
+    "schema_version": 1
+   },
+   "kind": "location",
+   "received_at": "2026-09-01T08:15:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T00:20:00+00:00",
+      "signal": "location_city",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "accuracy_m": null,
+       "country_code": "CN",
+       "locality": "Shanghai",
+       "placemark_source": "ios_device_resolver",
+       "region": null
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T00:20:00+00:00",
+      "signal": "proximity_anchor",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "anchor_id": "a-home",
+       "anchor_type": "wifi",
+       "is_connected": true,
+       "label": "home_wifi"
+      }
+     }
+    ],
+    "producer": "ios_location",
+    "report_id": "loc-875efc2136eb36be",
+    "schema_version": 1
+   },
+   "kind": "location",
+   "received_at": "2026-09-01T08:20:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T00:25:00+00:00",
+      "signal": "location_city",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "accuracy_m": null,
+       "country_code": "CN",
+       "locality": "Shanghai",
+       "placemark_source": "ios_device_resolver",
+       "region": null
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T00:25:00+00:00",
+      "signal": "proximity_anchor",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "anchor_id": "a-office",
+       "anchor_type": "wifi",
+       "is_connected": true,
+       "label": "work_wifi"
+      }
+     }
+    ],
+    "producer": "ios_location",
+    "report_id": "loc-df80a149f0b1e3da",
+    "schema_version": 1
+   },
+   "kind": "location",
+   "received_at": "2026-09-01T08:25:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T00:31:00+00:00",
+      "signal": "photo_library_added",
+      "signal_schema_version": 1,
+      "source_event_id": "ph-1",
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "added_at": "2026-09-01T00:31:00+00:00",
+       "count": 1
+      }
+     }
+    ],
+    "producer": "ios_photo",
+    "report_id": "photo-d4a5ec13fa721d9c",
+    "schema_version": 1
+   },
+   "kind": "photo",
+   "received_at": "2026-09-01T08:31:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T00:31:00+00:00",
+      "signal": "photo_library_added",
+      "signal_schema_version": 1,
+      "source_event_id": "ph-1",
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "added_at": "2026-09-01T00:31:00+00:00",
+       "count": 1
+      }
+     }
+    ],
+    "producer": "ios_photo",
+    "report_id": "photo-d4a5ec13fa721d9c",
+    "schema_version": 1
+   },
+   "kind": "photo",
+   "received_at": "2026-09-01T08:32:30+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T00:32:00+00:00",
+      "signal": "photo_library_added",
+      "signal_schema_version": 1,
+      "source_event_id": "ph-2",
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "added_at": "2026-09-01T00:32:00+00:00",
+       "count": 1
+      }
+     }
+    ],
+    "producer": "ios_photo",
+    "report_id": "photo-c446cfa8eb2dfb82",
+    "schema_version": 1
+   },
+   "kind": "photo",
+   "received_at": "2026-09-01T08:32:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T00:33:00+00:00",
+      "signal": "presence_recovery",
+      "signal_schema_version": 1,
+      "source_event_id": "ev-1",
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "absence_quality": "estimated",
+       "absence_seconds": null,
+       "evidence": "unknown",
+       "recovered_at": "2026-09-01T00:33:00+00:00"
+      }
+     }
+    ],
+    "producer": "ios_device_event",
+    "report_id": "devevt-cce90ea297b1cb88",
+    "schema_version": 1
+   },
+   "kind": "device_event",
+   "received_at": "2026-09-01T08:33:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T00:40:00+00:00",
+      "signal": "presence_recovery",
+      "signal_schema_version": 1,
+      "source_event_id": "ev-2",
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "absence_quality": "measured",
+       "absence_seconds": 2400.0,
+       "evidence": "unknown",
+       "recovered_at": "2026-09-01T00:40:00+00:00"
+      }
+     }
+    ],
+    "producer": "ios_device_event",
+    "report_id": "devevt-2d4c93e1a2235e8d",
+    "schema_version": 1
+   },
+   "kind": "device_event",
+   "received_at": "2026-09-01T08:40:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T00:41:00+00:00",
+      "signal": "app_usage",
+      "signal_schema_version": 1,
+      "source_event_id": "app-9634a97b3ed19ac4",
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "action": "open",
+       "app_id": "WeChat",
+       "app_name": "WeChat",
+       "category": "social",
+       "open_count": 1
+      }
+     }
+    ],
+    "producer": "ios_app_shortcut",
+    "report_id": "app-9634a97b3ed19ac4",
+    "schema_version": 1
+   },
+   "kind": "app",
+   "received_at": "2026-09-01T08:41:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-01T00:45:00+00:00",
+      "signal": "app_usage",
+      "signal_schema_version": 1,
+      "source_event_id": "app-b1b10513da3b3383",
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "action": "close",
+       "app_id": "WeChat",
+       "app_name": "WeChat",
+       "category": "social"
+      }
+     }
+    ],
+    "producer": "ios_app_shortcut",
+    "report_id": "app-b1b10513da3b3383",
+    "schema_version": 1
+   },
+   "kind": "app",
+   "received_at": "2026-09-01T08:45:05+08:00"
+  },
+  {
+   "envelope": {
+    "observations": [
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "time_context",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "locale": "zh_CN",
+       "time_zone_id": "Asia/Shanghai"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "battery",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "is_charging": false,
+       "is_low_power_mode_enabled": true,
+       "level_ratio": 0.62
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "motion_state",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "state": "stationary"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "focus_state",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "is_active": true
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "audio_route",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "device_label": "AirPods",
+       "is_bluetooth": true,
+       "output_type": "bluetooth_a2dp"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "weather",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "apparent_temperature_c": 29.1,
+       "condition": "cloudy",
+       "humidity_ratio": 0.71,
+       "is_daylight": true,
+       "precipitation_probability": 0.2,
+       "temperature_c": 27.4,
+       "uv_index": 4
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "health_resting_hr",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "resting_heart_rate": 58
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "steps",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "step_count": 4211
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "health_current_hr",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "current_heart_rate": 72
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "health_hrv",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "hrv_sdnn_ms": 42.5
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "health_oxygen",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "oxygen_saturation_pct": 97
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "health_weight",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "weight_kg": 68.2
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "health_bmi",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "bmi": 22.1
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "health_body_fat",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "body_fat_ratio": 0.184
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "health_height",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "height_cm": 175
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "health_blood_pressure",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "blood_pressure_diastolic_mmhg": 76,
+       "blood_pressure_systolic_mmhg": 118
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "health_sleep",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "duration_minutes": 250,
+       "stage": "core"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "health_sleep",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "duration_minutes": 70,
+       "stage": "deep"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "health_sleep",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "duration_minutes": 110,
+       "stage": "rem"
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "health_activity",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "active_energy_kcal": 320,
+       "exercise_minutes": 22,
+       "local_date": "2026-09-01",
+       "stand_minutes": 300
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "health_workout",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "duration_minutes": 31,
+       "workout_type": "running"
+      }
+     },
+     {
+      "availability": "no_data",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "health_mood",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai"
+     },
+     {
+      "availability": "unavailable",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "health_cycle",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai"
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "broadcast",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "is_active": false
+      }
+     },
+     {
+      "availability": "observed",
+      "occurred_at": "2026-09-02T08:00:00+08:00",
+      "signal": "music_playback",
+      "signal_schema_version": 1,
+      "timezone": "Asia/Shanghai",
+      "value": {
+       "album": "Album",
+       "artist": "Artist",
+       "edge_quality": "estimated",
+       "playback_state": "playing",
+       "title": "Song B",
+       "track_key": "5429eb46623abac5"
+      }
+     }
+    ],
+    "producer": "ios",
+    "report_id": "ios-5f8593e36f2e5536",
+    "schema_version": 1
+   },
+   "kind": "snapshot",
+   "received_at": "2026-09-02T08:00:05+08:00"
+  }
+ ]
+}

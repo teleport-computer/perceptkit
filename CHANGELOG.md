@@ -1,5 +1,99 @@
 # 变更记录
 
+## 0.8.0 — 2026-09-17
+
+**补三块宿主真正在用、kit 却没有定义的感知：播放类型和时长、屏幕采集的「暂停」、
+用户命名的地点。只加不改 —— 已上线宿主今天的上报，跑出来的结果和 0.7.0 逐字节一样。**
+
+    之前  用户在听播客 → kit 只知道「在放东西」，播客还是音乐、多长，发了也被丢掉
+          屏幕采集暂停了 → kit 只有 is_active=true，看不出和「正在采集」的区别
+          用户到了自己设的「公司」围栏 → kit 没地方放，只能塞进城市或丢掉
+    之后  三件都有字段可以放；不发这些字段的宿主，行为一个字节都不变
+
+### 新增的定义
+
+| 位置 | 字段 | 类型 | 说明 |
+|---|---|---|---|
+| `music_playback` | `media_type` | 枚举，可空 | `music` `podcast` `audio_book` `audio_itunes_u` `audio` `movie` `tv_show` `music_video` `video_podcast` `video_itunes_u` `home_video` `video` `unknown`（iOS `MPMediaType` 的 12 档 + `unknown`） |
+| `music_playback` | `duration_seconds` | 数值 ≥ 0，秒，可空 | **曲目总长**，不是播放进度（那是 `position_seconds`）。客户端用 0 表示「没在放 / 不知道」时，适配层应**不发**而不是发 0 |
+| `broadcast` | `broadcast_state` | 枚举，可空 | `idle` / `broadcasting` / `paused`。`is_active` 语义不变（暂停仍是 `true`），已有开/关规则不受影响 |
+| 新信号 `place_zone` | `is_inside_known_zone` | 布尔，必填 | 有定位时是否落在用户配置的某个区域里 |
+| 新信号 `place_zone` | `zone_label` | 文本，可空 | 区域名（home / work…），只在上一格为 `true` 时有值 |
+
+`place_zone`：`capability="location"`、当前 + 7 天明细（同 `proximity_anchor`）、
+TTL 900s、确定性身份、`source_profile="location"`、隐私级别 `personal`。
+**「没定位」不是一个标签**，用 `availability=no_data` 表达 —— 它不会覆盖最后一次
+可靠的位置；`unknown` / `unknown_place` 这类占位词不许当地点名存。细粒度地点
+不进 `location_city`（那个信号永久保留，等于把「家在哪」永久存下来）。
+
+`DECLINED_SIGNALS` 新增 `app_presence`：**App 前后台 / 当前 tab / 聊天页开没开不进 kit。**
+那是宿主自己 app 的界面状态，不是对人的感知，tab 词表每家不同，没有任何感知规则
+需要它。要它的宿主放在自己的设备会话里。
+
+### 几个决定和理由
+
+- **不升 `signal_schema_version`**（`music_playback` / `broadcast` 仍是 1）。加可空
+  字段不破坏任何已有 payload；升了只会让每个老 producer 每次上报都刷一条
+  「版本不一致」警告（版本不一致本来就只警告不拒收）。
+- **枚举严格，不悄悄收下认不出的值。** `media_type` 自带 `unknown`，宿主把平台
+  新出的类型先落到 `unknown`，kit 再加值（加值是放宽，安全）。代价：发了不在表里
+  的值，**整条观测被拒**（同批其他观测不受影响）—— 所以宿主的词表翻译必须在
+  适配层做，比如某客户端设备事件里的 `on` / `off` / `paused` 要译成
+  `broadcasting` / `idle` / `paused`。
+- `broadcast_state` 和 `place_zone` 两个字段标成 `state_change`：发了的话，
+  暂停 / 恢复、家 → 公司会各留一条明细；不发的 producer 比较的是 `None == None`，
+  明细写入逐字节不变。`broadcast_state` 不挂聚合，时长统计仍只按 `is_active`。
+- 撤回（`apply_retractions`）每条撤回对同一信号的明细**只读一遍**（以前受影响日期
+  和重选当前值各读一遍）。一个宿主实测明细一万条时二十条撤回 2.6 秒，这一改
+  读取量减半；写入竞争重试时仍然重读。**没做完的部分**：仍是每条撤回全量读一次
+  明细。根治要给 `StoragePort` 加一个按 `(source, source_event_id)` 定位观测的
+  可选方法，留作后续（加端口方法要所有存储实现跟上，不适合混在这一版）。
+
+### 怎么证明「只加不改」
+
+- `tests/test_io_compat.py`：拿已上线宿主适配层**原样代码**生成的一整段上报
+  （快照、重传、开关屏幕采集、锚点 A→B→A→B、照片、离开后回来、app 开关、
+  今天就会被拒的 `playback_state=unknown`……），跑完把每一步的标准化结果、事件、
+  规则状态、当前值、明细、聚合、发件箱全部序列化，**和 v0.7.0 源码跑同一段序列的
+  快照逐字节比对**。已验证它有牙：把新字段改成必填、或收窄已有枚举，都会变红。
+- 同一个文件钉住 `perceptkit.catalog` 的 sha256 = v0.7.0（宿主直接转引里面的常量）。
+- 一致性套件 14 条照旧全过。
+
+### 🔴 宿主升级须知
+
+**io**（pin 在 wheel URL + `requirements.lock`）：
+
+1. 同一个 PR 里：改 pin 到 0.8.0，**并**把 5 个新字段登记进
+   `compare.KIT_ONLY`（`test_perceptkit_compare.py` 要求 manifest 每个字段都有交代，
+   不登记 CI 必红）：
+   `("music_playback","media_type")`、`("music_playback","duration_seconds")`、
+   `("broadcast","broadcast_state")`、`("place_zone","is_inside_known_zone")`、
+   `("place_zone","zone_label")`。`place_zone` 会落进覆盖报告的「只观测不比对」那一桶，
+   `NOT_SHADOWED` 保持为空。
+2. 按 `requirements.lock` 文件头的命令重新生成锁文件（CI 装的是 lock 不是 txt）。
+3. 适配层**继续丢弃** `media_type` / `duration` / `state`，不产出 `place_zone` →
+   **线上行为零变化**。唤醒规则、规则版本都不用动。影子报告的「从没见过的信号」
+   里会多出 `place_zone`，这是预期。
+4. 之后分阶段接：放开适配层（`duration` 为 0 时不发；设备事件的 on/off/paused 在
+   适配层翻译）→ 登记为配对进对照 → 对照干净后再把 `now_playing` /
+   `broadcast_state` / 地点标签切到从 kit 读。
+
+**Rokku**（按原始观测格式上报，`value` 透传给 kit）：
+
+1. 升级 pin；上报契约不用改（`value` 本来就是透传）。
+2. 接入文档里「暂不支持」那几行改成已支持，注明词表：`media_type` 用上面 13 个值，
+   `broadcast_state` 用 `idle/broadcasting/paused`，地点用 `place_zone`（没定位发
+   `no_data`，不在区域里发 `is_inside_known_zone=false`）。`app_presence` 仍然不进 kit。
+3. iOS 端开始发这些字段之前，确认发的值都在词表里 —— 不在表里会整条被拒。
+4. 撤回批量上限（20）可以在重新测过之后放宽。
+
+### 为什么是 0.8.0 而不是 0.7.1
+
+新增了公开定义（一个新信号、三个新字段、`MEDIA_TYPES`），而且对**已经在发同名
+字段**的 producer 是可观察的变化：以前这几个名字是未声明字段、静默丢弃，现在要过
+校验，值不对会被拒。io 和 Rokku 的现有 producer 都不发这些名字（已核对），但按
+`~=0.7.0` 锁版本的宿主不该在补丁升级里悄悄拿到它。
+
 ## 0.7.0 — 2026-09-16
 
 **同一个跳变第二次发生，被当成重复静默丢掉；规则只能看一个字段。两件一起修。**
