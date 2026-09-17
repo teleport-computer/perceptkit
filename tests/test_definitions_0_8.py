@@ -295,7 +295,10 @@ def test_place_zone_is_in_the_generated_storage_table_and_retention_plan():
     from perceptkit.retention import plan_retention
     assert "place_zone" in {r["signal"] for r in reference_mapping(MINIMAL_SIGNALS)}
     plan = plan_retention(MINIMAL_SIGNALS, now=at(0))
-    assert "place_zone" in repr(plan)
+    mine = sorted((a.kind, a.before.isoformat()) for a in plan.actions
+                  if a.signal == "place_zone")
+    # 明细 7 天；聚合没单独声明，跟明细一样 7 天。
+    assert mine == [("aggregates", "2026-08-25"), ("observations", "2026-08-25")]
 
 
 def test_place_zone_dwell_is_closed_by_an_outside_observation():
