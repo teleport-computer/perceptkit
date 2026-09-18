@@ -1,4 +1,4 @@
-"""默认 manifest —— 32 个信号。
+"""默认 manifest —— 33 个信号。
 
 **它是怎么长到 23 个的。** 一开始只有五个：管线的正确性（幂等、乱序、TTL、
 聚合重算、规则求值、投递可靠性）和信号数量无关，所以先用五个把管线跑通，
@@ -411,6 +411,34 @@ BROADCAST = SignalDefinition(
             aggregation_strategy="duration_by_state",
             wake_eligible=True,
             query_visibility="always",
+            note=(
+                "采集会话存在没有：进行中和暂停都是 True，idle 是 False。"
+                "0.8.0 加了 broadcast_state 之后**这一格的语义不变** —— "
+                "已有的开/关规则盯的就是它。"
+            ),
+        ),
+        FieldDefinition(
+            # 0.8.0 新增，**可空、非必填**：老 producer 不发它，整条观测照收。
+            key="broadcast_state",
+            value_type="enum",
+            privacy_class="personal",
+            enum=("idle", "broadcasting", "paused"),
+            # state_change：「同状态重复上报不写明细」的判定会多看这一格，
+            # 于是暂停 / 恢复会各留一条明细。**对不发它的 producer 逐字节不变**
+            # —— 两边都没有这一格时比较的是 None == None。
+            # 不挂聚合：时长统计仍然只按 is_active 算，老数据的日聚合形状不动。
+            comparison_strategy="state_change",
+            wake_eligible=True,
+            query_visibility="always",
+            note=(
+                "比 is_active 细一档：能分出「开着但暂停了」。\n"
+                "词表是 kit 的，**不是任何一家客户端的**。宿主各自翻译："
+                "比如某客户端的设备事件用 on / off / paused，就在宿主适配层译成 "
+                "broadcasting / idle / paused，不要把 on/off 发进来 —— "
+                "不在枚举里的值会让**整条观测**被拒，连带 is_active 一起丢。\n"
+                "和 is_active 的对应：idle ↔ False；broadcasting / paused ↔ True。"
+                "两格矛盾时 kit 不替你裁决，原样存。"
+            ),
         ),
     ),
 )
@@ -1178,8 +1206,98 @@ PROXIMITY_ANCHOR = SignalDefinition(
 
 
 # ---------------------------------------------------------------------------
+# place_zone —— 「此刻在不在某个用户命名过的地方」（0.8.0 新增）
+# ---------------------------------------------------------------------------
+
+PLACE_ZONE = SignalDefinition(
+    key="place_zone",
+    label="所在地点（用户命名的区域）",
+    schema_version=1,
+    capability="location",
+    # 和 proximity_anchor 同一档：同一类「在哪个地方」的事实，产品规范对
+    # 连接性锚点给的是「当前 + 短期时间线」，这里不自己外推出永久聚合。
+    storage_mode="current_short_timeline",
+    # 同 location_city / proximity_anchor：跟着整份快照走，前台 30s /
+    # 后台保活 5min / 被挂起后不可控。
+    current_ttl_sec=900.0,
+    identity_strategy="deterministic_digest",
+    attribution_strategy="instant",
+    history_retention_days=7,
+    source_profile="location",
+    note=(
+        "端上把定位和用户配的区域（家 / 公司 / 健身房……）比对完，只报**结果**："
+        "在哪个区域里，或者不在任何一个里。坐标不出设备，也不进这个信号。\n"
+        "🔴 **三种情况，两个地方表达，不许用标签去编码后两种**：\n"
+        "    在某个区域里          availability=observed, is_inside_known_zone=true,"
+        "  zone_label=\"home\"\n"
+        "    有定位、不在任何区域里  availability=observed, is_inside_known_zone=false,"
+        " zone_label 不发\n"
+        "    这一轮拿不到定位        availability=no_data（没权限则 unavailable），"
+        "不发 value\n"
+        "客户端常见的写法是拿 \"unknown\" 表示没定位、\"unknown_place\" 表示"
+        "不在区域里 —— **这两个词不能当地点名存**：存进去之后「用户去过哪些地方」"
+        "会多出两个叫 unknown 的地方，而「没定位」会覆盖掉最后一次可靠的位置"
+        "（no_data 不会覆盖，这正是它和 observed 的区别）。\n"
+        "为什么是新信号而不是 location_city 的一个字段：城市回答「在哪座城」，"
+        "这个回答「在哪个地方」，两者粗细不同、保留期也不同 —— 细粒度地点"
+        "混进 location_city（永久保留）就等于把「家在哪」永久存了下来。"
+        "和 proximity_anchor 也不是一回事：那个是「连着哪个网络」，"
+        "一个人可以在家却没连家里的 Wi-Fi。\n"
+        "区域靠用户自己起的名字认。改名 = 新名字，历史不会跟着改；"
+        "需要稳定身份的宿主等 producer 能给区域 id 时再加字段（加字段是放宽，安全）。"
+    ),
+    fields=(
+        FieldDefinition(
+            key="is_inside_known_zone",
+            value_type="boolean",
+            privacy_class="personal",
+            # 新信号，没有老 producer：必填，让「不在任何区域里」只有一种说法。
+            nullable=False,
+            comparison_strategy="state_change",
+            # 驻留时长挂在这一格上，不挂在 zone_label 上：这一格**每条观测都有**。
+            # 挂在 zone_label 上的话，「区域外」那条不带标签、聚合层跳过它，
+            # 上一个区域的驻留就结束不了 —— 家 09:00 → 区域外 09:10 → 公司 09:20
+            # 会把家算成 20 分钟（应为 10）。按区域分的时长留作后续。
+            aggregation_strategy="duration_by_state",
+            wake_eligible=True,
+            query_visibility="always",
+            note=(
+                "有定位时，是否落在用户配置的某个区域里。false 表示「有定位、"
+                "但不在任何已命名的地方」—— **不等于在户外**，也不等于「没定位」"
+                "（没定位用 availability=no_data）。"
+            ),
+        ),
+        FieldDefinition(
+            key="zone_label",
+            value_type="string",
+            privacy_class="personal",
+            # state_change 而不是 exact：「同状态重复上报不写明细」看的是全部
+            # state_change 字段。只标 is_inside_known_zone 的话，家 → 公司
+            # （两边都是 true）会被当成重复，时间线里就没有「到了公司」这一条。
+            comparison_strategy="state_change",
+            wake_eligible=True,
+            query_visibility="always",
+            note=(
+                "用户给这个区域起的名字（home / work / gym……）。只在 "
+                "is_inside_known_zone=true 时有值。**不许填 unknown / unknown_place "
+                "这类占位词** —— 见信号级 note。kit 不做跨字段校验，这条靠 producer 守。"
+            ),
+        ),
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
 # music_playback —— 在听什么
 # ---------------------------------------------------------------------------
+
+#: ``music_playback.media_type`` 的取值。前 12 个与 iOS ``MPMediaType`` 的
+#: 判断顺序一一对应，最后的 ``unknown`` 兜住「平台有、我们没列」的类型。
+MEDIA_TYPES: tuple[str, ...] = (
+    "music", "podcast", "audio_book", "audio_itunes_u", "audio",
+    "movie", "tv_show", "music_video", "video_podcast", "video_itunes_u",
+    "home_video", "video", "unknown",
+)
 
 MUSIC_PLAYBACK = SignalDefinition(
     key="music_playback",
@@ -1287,6 +1405,40 @@ MUSIC_PLAYBACK = SignalDefinition(
                 "第三方播放器只能靠快照采到，标 estimated。\n"
                 "**把这个写进数据本身**，是因为读到值的人不一定读过文档 —— "
                 "同一个信号两种精度并存，不说出来就会被当成一样准。"
+            ),
+        ),
+        FieldDefinition(
+            # 0.8.0 新增，可空。
+            key="media_type",
+            value_type="enum",
+            privacy_class="sensitive",
+            enum=MEDIA_TYPES,
+            comparison_strategy="none",
+            query_visibility="on_demand",
+            note=(
+                "在放的是什么类型：音乐、播客、有声书还是视频。「在听歌」和"
+                "「在听播客」对 agent 是两句不同的话。\n"
+                "取值照 iOS MPMediaType 的 12 档加 unknown。**认不出的一律发 "
+                "unknown，不要发原词**：枚举是严格校验的，一个不在表里的值会让"
+                "**整条播放观测**被拒（连 playback_state 一起丢）。平台以后多出"
+                "新类型时，宿主适配层先落到 unknown，kit 再加值 —— 加值是放宽，"
+                "对已有 producer 安全；反过来收窄不安全。"
+            ),
+        ),
+        FieldDefinition(
+            # 0.8.0 新增，可空。
+            key="duration_seconds",
+            value_type="number",
+            unit="seconds",
+            privacy_class="sensitive",
+            valid_range=(0, None),
+            comparison_strategy="none",
+            query_visibility="on_demand",
+            note=(
+                "**整首曲目的总长度**，不是播放到哪了（那是 position_seconds）。\n"
+                "有的客户端在没在放 / 拿不到时长时填 0。0 在这里是合法数值、"
+                "会被当成「这首长 0 秒」存下来 —— 所以适配层遇到 0 应当**不发**"
+                "这个字段，而不是原样发 0。"
             ),
         ),
     ),
@@ -1485,6 +1637,8 @@ MINIMAL_SIGNALS: dict[str, SignalDefinition] = {
         TIME_CONTEXT, BROADCAST, SCREEN_CHANGE, AUDIO_ROUTE, WEATHER,
         # §5.2 位置与连接性锚点
         PROXIMITY_ANCHOR,
+        # 0.8.0：用户命名的区域（家 / 公司），和城市、锚点并列
+        PLACE_ZONE,
         # §5.3 行为、应用与媒体
         MOTION_STATE, PHOTO_LIBRARY_ADDED, MUSIC_PLAYBACK, APP_USAGE,
         # §5.5 健康与长期趋势
@@ -1507,13 +1661,21 @@ DECLINED_SIGNALS: dict[str, str] = {
         "必然是「有网」那一刻发出的 —— 「没网」那段永远传不到服务端，"
         "这个信号自证不了自己。（hx 2026-08-28）"
     ),
+    "app_presence": (
+        "不做（0.8.0 决定）。app 在前台还是后台、停在哪个 tab、聊天页开没开 —— "
+        "这是**宿主自己 app 的界面状态**，不是对人的感知：tab 词表每家都不一样，"
+        "用它的是推送抑制、会话管理这类宿主逻辑。放进 kit 会变成一份各家"
+        "互相迁就的词表，而且没有任何一条感知规则需要它。"
+        "要它的宿主放在自己的设备会话里。"
+        "「人离开很久之后回来了」这件对人的事实已经有 presence_recovery。"
+    ),
 }
 
 
 __all__ = [
     "BATTERY", "PRESENCE_RECOVERY", "STEPS", "LOCATION_CITY", "FOCUS_STATE",
     "TIME_CONTEXT", "BROADCAST", "SCREEN_CHANGE", "AUDIO_ROUTE", "WEATHER",
-    "PROXIMITY_ANCHOR",
+    "PROXIMITY_ANCHOR", "PLACE_ZONE", "MEDIA_TYPES",
     "MOTION_STATE", "PHOTO_LIBRARY_ADDED", "MUSIC_PLAYBACK", "APP_USAGE",
     "HEALTH_SLEEP", "HEALTH_WORKOUT", "HEALTH_VITALS", "HEALTH_ACTIVITY",
     "HEALTH_BODY", "HEALTH_METABOLIC", "HEALTH_CYCLE", "HEALTH_MOOD",

@@ -34,6 +34,7 @@
 | `motion_state` | CurrentProjection + StoredObservation + DailyAggregate | 900s | 365 天 | 永久 | deterministic_digest | instant |
 | `music_playback` | CurrentProjection + StoredObservation + DailyAggregate | 600s | 365 天 | 永久 | deterministic_digest | instant |
 | `photo_library_added` | CurrentProjection + StoredObservation + DailyAggregate | — | 7 天 | 永久 | source_event_id | instant |
+| `place_zone` | CurrentProjection + StoredObservation | 900s | 7 天 | 同明细 | deterministic_digest | instant |
 | `presence_recovery` | CurrentProjection | — | 不存 | 不适用 | source_event_id | instant |
 | `proximity_anchor` | CurrentProjection + StoredObservation | 900s | 7 天 | 同明细 | deterministic_digest | instant |
 | `screen_change` | CurrentProjection | 60s | 不存 | 不适用 | singleton | instant |
@@ -146,6 +147,17 @@ iOS 拿不到前台 app（`frontmost_app` 恒为 null），数据全靠用户在
 🔴 删照片【不回减】过去某日的数量：它记的是「那天发生过什么」，不是「现在还剩几张」。
 身份必须由设备给一个稳定值：内容信封 id 是每次上传新生成的，用它的话同一张照片重传就是两张，去重表再完美也挡不住。iOS 送的是SHA256(固定 namespace + PHAsset.localIdentifier)——固定 namespace 而不是wifi_anchor_id 那种设备本地随机密钥：照片 id 是本机相册的高熵 UUID，别的设备上不存在，固定 namespace 就够不可逆；而且重装后仍然稳定，正好让重扫相册时认出「这些都数过了」。
 去重指纹的保留期：规范建议永久；我们查下来当前实现【找不到超过 7 天的重放路径】，所以按「覆盖明细保留期 + 富余」取 30 天更实在。规范自己也是条件句：「若 producer 可以在超过 7 天后重放，才必须永久保留」。
+
+### `place_zone`
+
+端上把定位和用户配的区域（家 / 公司 / 健身房……）比对完，只报**结果**：在哪个区域里，或者不在任何一个里。坐标不出设备，也不进这个信号。
+🔴 **三种情况，两个地方表达，不许用标签去编码后两种**：
+    在某个区域里          availability=observed, is_inside_known_zone=true,  zone_label="home"
+    有定位、不在任何区域里  availability=observed, is_inside_known_zone=false, zone_label 不发
+    这一轮拿不到定位        availability=no_data（没权限则 unavailable），不发 value
+客户端常见的写法是拿 "unknown" 表示没定位、"unknown_place" 表示不在区域里 —— **这两个词不能当地点名存**：存进去之后「用户去过哪些地方」会多出两个叫 unknown 的地方，而「没定位」会覆盖掉最后一次可靠的位置（no_data 不会覆盖，这正是它和 observed 的区别）。
+为什么是新信号而不是 location_city 的一个字段：城市回答「在哪座城」，这个回答「在哪个地方」，两者粗细不同、保留期也不同 —— 细粒度地点混进 location_city（永久保留）就等于把「家在哪」永久存了下来。和 proximity_anchor 也不是一回事：那个是「连着哪个网络」，一个人可以在家却没连家里的 Wi-Fi。
+区域靠用户自己起的名字认。改名 = 新名字，历史不会跟着改；需要稳定身份的宿主等 producer 能给区域 id 时再加字段（加字段是放宽，安全）。
 
 ### `presence_recovery`
 
