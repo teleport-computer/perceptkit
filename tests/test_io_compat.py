@@ -153,6 +153,13 @@ def test_the_fixture_really_exercises_what_the_host_depends_on():
 
 
 def test_host_reports_produce_byte_identical_results_to_v070():
+    """基线是 v0.7.0 的**行为**。
+
+    2026-09-22 唯一一次允许的改动：``IngestOutcome`` 多了一栏空的
+    ``retracted``（来源撤回过的事实被挡在入口外时放这里）。21 处全是
+    ``"retracted": []``，其余逐字节不变 —— 纯新增字段，没有行为变化。
+    再有 diff 一律当成回归，别顺手重新生成 golden。
+    """
     golden = (FIXTURES / "golden_v0.7.0.json").read_text()
     now = _canonical_json(run_sequence()) + "\n"
     if now != golden:

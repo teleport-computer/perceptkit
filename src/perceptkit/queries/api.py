@@ -30,6 +30,7 @@ from ..algorithms import history as _history
 from ..algorithms import trend_models as _trend
 from ..manifest.types import SignalDefinition
 from ..ports.storage import StoragePort
+from ..processing.retract import drop_retracted
 from ..processing import recurrence as _recurrence
 
 #: 所有 list 查询的默认与硬上限。agent 问一句"我这个月都去过哪"，
@@ -186,15 +187,29 @@ def list_timeline(
         subject_id=subject_id, signal=signal, start=start, end=end,
         cursor=cursor, limit=_clamp(limit),
     )
-    out = [
-        {
+    # 被来源撤回的那些：**行留着、数值不给**。
+    #
+    # 用户在健康 app 里删掉一条体重，要的是"它没了"，不是"它还在历史里
+    # 躺着"。但整行抹掉的话，"这天为什么少一块"就再也答不出来 —— 所以
+    # 留一条没有数值的记录，并明确标成 retracted（外部审查 F2）。
+    #
+    # availability 用既有的 `unavailable`，不新造状态值：老读者看到的是
+    # "这个数据拿不到"，行为本来就对；新读者看 `retracted` 知道为什么。
+    kept = set(id(o) for o in drop_retracted(
+        storage, list(rows), subject_id=subject_id, signal=signal))
+    out = []
+    for o in rows:
+        gone = id(o) not in kept
+        row = {
             "occurred_at": o.occurred_at.isoformat(),
-            "availability": o.availability,
-            "value": project(sig, o.typed_value, on_demand=on_demand) if sig else None,
+            "availability": "unavailable" if gone else o.availability,
+            "value": None if gone else (
+                project(sig, o.typed_value, on_demand=on_demand) if sig else None),
             "local_date": o.effective_local_date.isoformat(),
         }
-        for o in rows
-    ]
+        if gone:
+            row["retracted"] = True
+        out.append(row)
     return out, nxt
 
 

@@ -181,3 +181,51 @@ def _reselect_current(storage: StoragePort, r: Retraction,
 
 
 __all__ = ["apply_retractions", "RetractionOutcome"]
+
+
+def drop_retracted(storage: StoragePort, rows: list, *,
+                    subject_id: str, signal: str) -> list:
+    """去掉来源已经撤回的那些观测。
+
+    **不是把观测删掉，是折聚合时不算它。** 观测留着，"那天曾经有条记录、
+    后来被来源删了"才答得出来；抹掉的话那天只是凭空少一块，没人说得清为什么。
+
+    宿主没实现撤回端口时原样返回 —— 那等于"从不撤回"，是安全的那一边：
+    宁可多留一条已经被删的旧数据，也不要因为端口缺失把好数据当成撤回删掉。
+    """
+    ids = {o.source_event_id for o in rows if o.source_event_id}
+    if not ids:
+        return rows
+    lookup = getattr(storage, "list_retractions", None)
+    if lookup is None:
+        return rows
+    # 🔴 (source, id) 成对比，不能只比 id。同一个 subject 下 iOS 和 Google
+    # 完全可能用同一个 source_event_id —— 只比 id 的话，撤回 iOS 那条会
+    # 把 Google 那条一起从聚合里踢掉。
+    retracted = {(r.source, r.source_event_id) for r in lookup(
+        subject_id=subject_id, signal=signal, source_event_ids=sorted(ids))}
+    if not retracted:
+        return rows
+    return [o for o in rows
+            if (o.source, o.source_event_id) not in retracted]
+
+
+def is_retracted(storage: StoragePort, *, subject_id: str, signal: str,
+                 source: str, source_event_id: str | None) -> bool:
+    """这条事实是不是已经被来源撤回过了。
+
+    用在**收数据的入口**：撤回先到、原样本后到是常态（重传、乱序、补传）。
+    不查的话这条后到的样本会被当成一条新事实，当前值和日聚合又变回那个
+    已经被用户删掉的数 —— 用户在健康 app 里删了，过一会儿它自己回来了
+    （外部审查 F2）。
+    """
+    if not source_event_id:
+        return False
+    lookup = getattr(storage, "list_retractions", None)
+    if lookup is None:
+        return False
+    return any(
+        x.source == source and x.source_event_id == source_event_id
+        for x in lookup(subject_id=subject_id, signal=signal,
+                        source_event_ids=[source_event_id])
+    )
