@@ -7,6 +7,7 @@
      "day_slices": [],
      "fact_key": "057e07acea0a36cf9d648180dc0c11646990ae25937e41e70d561f95e3669117",
      "identity_digest": "7e1197c9dcc31617edadb2b87f148417ec3bf77809f2d526958f3c950e6dc67c",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -32,6 +33,7 @@
      "day_slices": [],
      "fact_key": "3d2f8b4bf298ac0f22073d29b5ac77be59ae80e032021983625b639fe7248392",
      "identity_digest": "c800837ec4493ce12dd8f954599057c30339c0af993a75686392767a69118389",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -58,6 +60,7 @@
      "day_slices": [],
      "fact_key": "20a63bce9488c65ee9099af3a9bfcbef08f0c64d69d81692c6996bceef49be9c",
      "identity_digest": "b6333413402e53592e408957a28547f151ababd140de02c1b1fb31218e2704e4",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -82,6 +85,7 @@
      "day_slices": [],
      "fact_key": "0b68391ba09c8973fa4223428873bed5c126421302f58a6142db0b768a9dc6e3",
      "identity_digest": "848bbd74b3fbd1c8de9842e34bb98bab2a34bfbe6c0f2f1a6e36488e0223d0ed",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -106,6 +110,7 @@
      "day_slices": [],
      "fact_key": "d069c51d969f525dbb5d15692e017f972f850bb492ed2956e8683235ef4beb5a",
      "identity_digest": "60f4453f695903d8d4fb30837d0af85cdea0a23b86742fff98ffb14cbecffb0c",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -132,6 +137,7 @@
      "day_slices": [],
      "fact_key": "a74aef5c20eb4c2ba67460cd145d210c3bf7ac7cfc58b465f27b3e8717df99bf",
      "identity_digest": "797d650cc94ada27ba49b4e46fd235ffa1272235548c1df38189c5a4fb740c37",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -162,6 +168,7 @@
      "day_slices": [],
      "fact_key": "4356f77a3b5c426966c339478ef5343c3631f64860b61576df8d5523183135e0",
      "identity_digest": "9598e9b0917f0d27211721583abfdd6d3a8b10ce6b898ea20c3039f429f3e759",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -186,6 +193,7 @@
      "day_slices": [],
      "fact_key": "3836e22bee7f5e55dabe6d842944d29c4fc894017c00eaea9383fac7f924c5c3",
      "identity_digest": "e36e2076125c8055da5595cdafe98c56383b3dd7cb88dd3b68ccc3a2f87824fd",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -210,6 +218,7 @@
      "day_slices": [],
      "fact_key": "0f28fb176d437e432a61267810a8ff64139fcfe4e91cab372e5a3b401617f6f3",
      "identity_digest": "5a980404bfef3938ea105b9b28c8fc5b4d9fdd4c7a551c195eeec92c5160205c",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -234,6 +243,7 @@
      "day_slices": [],
      "fact_key": "e4072c53a0e4a21f3168891be6b63681d9a1330226451b5af4dc8498618f0ec8",
      "identity_digest": "1041b3af683857a49f1f3f5feacadf1d3021c9795b9ec46fdd2a7851f056dfca",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -258,6 +268,7 @@
      "day_slices": [],
      "fact_key": "7d4cc7ff0fe0b6260f89021dc6195ad9d19337975c56b56d6bbfff1b233f5850",
      "identity_digest": "c43823d6c972d6008dde31d9c50a4982b503e3c0cdac87094cda537902fdf7f2",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -282,6 +293,7 @@
      "day_slices": [],
      "fact_key": "ed1cfb8f3046343e4957ad2d185f308aadb7e65885bd4a06784a7bf214a15d17",
      "identity_digest": "d155955cf3465bca6de6a5e1851489e0af8211cf52c244b73edc7d749a55032d",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -306,6 +318,7 @@
      "day_slices": [],
      "fact_key": "65cd10e43237f2462d15d553f149b9b79059da195f15ce61ce041a8d7cec6291",
      "identity_digest": "3d9071b888a5df4077df3c6ccd50636058ece33c6da930e3e2dec9135487045d",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -330,6 +343,7 @@
      "day_slices": [],
      "fact_key": "542be5f4e3b36d06591e80ffd14a8db8618748d1876587c36ea5672492972064",
      "identity_digest": "d1e6ed75e291367b948fe71599dde29cde958b3c59f3348882f5476fb821771e",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -354,6 +368,7 @@
      "day_slices": [],
      "fact_key": "56b5610463e54029657c8010e94fe07682e19616c53d2eb999291d02eea567b8",
      "identity_digest": "d0c2b506be32fd082b268b875c4f30badb44e7e3229f797a28163baa9ca7e721",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -378,6 +393,7 @@
      "day_slices": [],
      "fact_key": "7450c58855ed7c7a24766b53ca8bb1bb3f379db0d6b27af819d3370e43e60952",
      "identity_digest": "765a5a8916890186aa05dd208e07921b547f44712699bca8ebbf809ebe96ef20",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -403,6 +419,7 @@
      "day_slices": [],
      "fact_key": "39a53beff6e23c36b6111e4ff76c0d3e1f3fdca04d99a56be192f072986fc261",
      "identity_digest": "0a823b6b2d3c628e38c60c45b710d451aab6a0feb171c70ad8bcb5c87b9d88e5",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -428,6 +445,7 @@
      "day_slices": [],
      "fact_key": "39a53beff6e23c36b6111e4ff76c0d3e1f3fdca04d99a56be192f072986fc261",
      "identity_digest": "a463ac9d69bdfb81a3cdb6a51a0824b989c410d5559c9969e908898203d36399",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -453,6 +471,7 @@
      "day_slices": [],
      "fact_key": "39a53beff6e23c36b6111e4ff76c0d3e1f3fdca04d99a56be192f072986fc261",
      "identity_digest": "fe72a2f5f01806fff581268a318868059eedb9d3e7e6e36df8a61bc4c11a582d",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -478,6 +497,7 @@
      "day_slices": [],
      "fact_key": "dd973dddbd430f9257948b264b8ad070cc7cc9f93c22743e82f29523dc0ef509",
      "identity_digest": "917f78aaae4fc379c4844e639adafafbc2b141ee09bbc79285a0af61f8df2f4f",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -504,6 +524,7 @@
      "day_slices": [],
      "fact_key": "172095694a14681ac18089de8ebe52c10dd611b4dc6428b7bbe690164ab2bb25",
      "identity_digest": "ecbbf003334130ef40cc872f926c02e96ffc2220899c9d14731e6979943a0ca6",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -529,6 +550,7 @@
      "day_slices": [],
      "fact_key": "7e81ac48b2559d6d8700e140c60e172d77a218368446176c7b251891a695e194",
      "identity_digest": "04b319cec267445355a4057f3db54e525395a1637aa6d81fea302db733367405",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "no_data",
       "created_at": null,
@@ -551,6 +573,7 @@
      "day_slices": [],
      "fact_key": "23227ec573783aa3a1fdea3712ddb0b8981a6b0923f8064055e144e876cd3746",
      "identity_digest": "c59b791c383619a3e89c0e0f0fdbff47e439eb27b75718fac5709611fef0d140",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "unavailable",
       "created_at": null,
@@ -573,6 +596,7 @@
      "day_slices": [],
      "fact_key": "61c2f23f2e52a5379744656ea865cee951ee267292fe0a681ab9d4117c3b240c",
      "identity_digest": "30969e2c974c7617b078eca79a73fba533f3d30049bc76a337fd203edb55b999",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -597,6 +621,7 @@
      "day_slices": [],
      "fact_key": "60b92e684aa098926785c05aa8ee48308d5838143ada10040e103a133863c1d3",
      "identity_digest": "7a38b206f41e4842139c4b31ceb7ec469923ddcd8bc0a0f6d6ec0de225067c2c",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -708,6 +733,7 @@
      "day_slices": [],
      "fact_key": "3033e0938a3ac7cfd58b87fd44da757c0029a6ee55d94f4b579181c2f366db5c",
      "identity_digest": "affe6fab8fb7ba36daa29a3fde2ff561a08e8a75f6d27dd2dca39dd2108ba29f",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -733,6 +759,7 @@
      "day_slices": [],
      "fact_key": "6528de860bce0277e02553ee91e9b141f446e5c2d131f532dcd8dd4001d63338",
      "identity_digest": "6eb808e2038acf43fdc566f35411a77574987853fcf3e1b6ceea80ea44497295",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -757,6 +784,7 @@
      "day_slices": [],
      "fact_key": "0a007e82e495f0fe8d718c5d9c600317c567fb308a82b54da03ffa7a47b579a4",
      "identity_digest": "513a4a0f2a9f3d64434788d9d63b21414ad8aaa591ec8f67c8601f6fa22211eb",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -836,6 +864,7 @@
      "day_slices": [],
      "fact_key": "9895b89475bccd8d4b35379d5746977626303bf8357b94379d4e3dc413450c2b",
      "identity_digest": "1d513e4c49fc31bc01ee0725a6f27614d1cf2ea135a4cba47b1bb90e0b19c280",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -861,6 +890,7 @@
      "day_slices": [],
      "fact_key": "dc2015ef75bafc14b486e3bc2607d3344c816bde65af44995fb53770345ee2b3",
      "identity_digest": "7766e73b26e0c43d3b2383480d4877269316af5b2533ee6e892a055fda88e7a6",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -915,6 +945,7 @@
      "day_slices": [],
      "fact_key": "040e7090f3b899912fab9e1eb2c3050d880b6c52934612c301ef388454a95ee8",
      "identity_digest": "b32f14a97c4a0d2c4b4102d079601d4e4237e9145807d577fdc0b7f3c1cdb5bb",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -940,6 +971,7 @@
      "day_slices": [],
      "fact_key": "4025a0e673413ba41541595eef2fd96f500d47802e6aff536db510bf56d4a8a1",
      "identity_digest": "b39d47a52a0779e2bbc14c53b0b226b39dd3d8a3cb780c4e3cff93751c7d8a81",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -964,6 +996,7 @@
      "day_slices": [],
      "fact_key": "b0948065888448a3f032a48b1fb75acdfb870a666a6c41b0f2a64eac495c9057",
      "identity_digest": "a01599336d28667efac678dec69a9f9e3f6387d36853808aa3a9596dfcce74b6",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -1039,6 +1072,7 @@
      "day_slices": [],
      "fact_key": "0799f218552a2ed43289b6734d27671a30150bc97d9023fca9dbccb9ccd7b790",
      "identity_digest": "8fb3ae6ed56a52ce2c2c3e5768083eb444b134dc63aa327cf4ef3fecfa19f374",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -1064,6 +1098,7 @@
      "day_slices": [],
      "fact_key": "bf5db24804c9c67db19ea53bbfca9888d55ac1d38206fdf36024ffd24a26a1a9",
      "identity_digest": "c99adc42297290210a77b7b3d3627656127e44d714132cd528783d33d585cd5b",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -1138,6 +1173,7 @@
      "day_slices": [],
      "fact_key": "ac6841aa766de2398c9a1866d1186e5b5cf62b5f12212e84043ccf253af1166b",
      "identity_digest": "0aa8488a864df8aa6c69692296e774ae5b505c5693dc30c43709b68f54182dba",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -1191,6 +1227,7 @@
      "day_slices": [],
      "fact_key": "6189accef5d20b68f27ceaf3a8171dfbfbcf7165b7476859e2ac85ea5bf782c8",
      "identity_digest": "d7d56e1d9d6487855e9f78dd463f8e70e37b314ffec47247cd1998d7c82589f7",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -1219,6 +1256,7 @@
      "day_slices": [],
      "fact_key": "35bbb7e727af08bf84009d8ae44f4fee36afde11e7c284272ee217f476ce4fb1",
      "identity_digest": "28a87183e0e307a5cb10eb7578e51069bf5e3de7bf23798da983badf1e34e86f",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -1272,6 +1310,7 @@
      "day_slices": [],
      "fact_key": "bd95c4fe6989a6eb0586d75c482e0a3da4c2464bfd753d6b4bc85f34cc8666bb",
      "identity_digest": "275cf9aacaa7509124d2ec556e28147d875919e9a2c5e79be798a917ed3b4ebd",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -1300,6 +1339,7 @@
      "day_slices": [],
      "fact_key": "9e1dd3dab664a7f766a5d4e410ba31c3e926224ebebaa7b8028b8c7f29f49969",
      "identity_digest": "10365491aade8f21a28b20ef07b06e63e4a3e0655dd09cdda5e408d477678966",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -1372,6 +1412,7 @@
      "day_slices": [],
      "fact_key": "a98a5821b1ecdea37128635133386b2f3ffaf4325b5d472021f737c0641d255a",
      "identity_digest": "e97a9a2d6ded5ec5bfd076b3cfdc2a5f65273a17f5cecd92c7b6b540d7c32f60",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -1400,6 +1441,7 @@
      "day_slices": [],
      "fact_key": "87ba6d61555986b0c4d7b3ef499bc2af0bac5e9b953fb222aabf89367e4e4796",
      "identity_digest": "1cbaa984eabaa39620a27cd6c1c0cdfe5f271184d2196adb9913fea7c83bf09f",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -1472,6 +1514,7 @@
      "day_slices": [],
      "fact_key": "d1eef97281053219382d82110dd11ad7cc8e6e1a674409b46382c8fa67026737",
      "identity_digest": "d24f0daa4e27d3e460b5475f1ae73d2c4643b60c1e4c72d60b25d41a626e9ca6",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -1500,6 +1543,7 @@
      "day_slices": [],
      "fact_key": "2b27f51598c8847060c685e769d64282b817ffd2ef21c8c510e30d752c39c05c",
      "identity_digest": "29565d9d68f29010d5c2f45fb918c60e72971a5ee422e8fa299554744e61994c",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -1571,12 +1615,13 @@
      "content_digest": "48b4f16d86560ef0999e8685261b050e84afe42bb96d48abc241474e1490f055",
      "day_slices": [],
      "fact_key": "81e627adaa906787495bb1b1f4e05a0e07c881df948f5d2974a788351634ace2",
-     "identity_digest": "9c382547597185866a9764d60c8a38d62dea23dd3c68fc3e834c7da092421ebf",
+     "identity_digest": "42ee2a630dbd78af06ecfb18bdf29941257a5ffbdd26758fdbeabb9ecfb846ff",
+     "legacy_identity_digest": "9c382547597185866a9764d60c8a38d62dea23dd3c68fc3e834c7da092421ebf",
      "stored": {
       "availability": "observed",
       "created_at": null,
       "effective_local_date": "2026-09-01",
-      "observation_id": "9c382547597185866a9764d60c8a38d62dea23dd3c68fc3e834c7da092421ebf",
+      "observation_id": "42ee2a630dbd78af06ecfb18bdf29941257a5ffbdd26758fdbeabb9ecfb846ff",
       "occurred_at": "2026-09-01T00:31:00+00:00",
       "received_at": "2026-09-01T08:31:05+08:00",
       "signal": "photo_library_added",
@@ -1661,12 +1706,13 @@
      "content_digest": "bc8b6960eb4509847b7d3da7c4abbdcc22f8e66ae2372fe62ac240ff2df58ea7",
      "day_slices": [],
      "fact_key": "ce26d4db31a77a1ca2e2f256fc191eaa79fd4ddd592b3e6da2e893d8a039625c",
-     "identity_digest": "2df963b8e0d32d4a7a98f4fdc2c686fd2f7f69ca47ee24e65044516925033114",
+     "identity_digest": "e7bc216410f20dc185ffac222aff2ce0834b42623425afd8861b83ed8f1e2c48",
+     "legacy_identity_digest": "2df963b8e0d32d4a7a98f4fdc2c686fd2f7f69ca47ee24e65044516925033114",
      "stored": {
       "availability": "observed",
       "created_at": null,
       "effective_local_date": "2026-09-01",
-      "observation_id": "2df963b8e0d32d4a7a98f4fdc2c686fd2f7f69ca47ee24e65044516925033114",
+      "observation_id": "e7bc216410f20dc185ffac222aff2ce0834b42623425afd8861b83ed8f1e2c48",
       "occurred_at": "2026-09-01T00:32:00+00:00",
       "received_at": "2026-09-01T08:32:05+08:00",
       "signal": "photo_library_added",
@@ -1731,12 +1777,13 @@
      "content_digest": "30dd1796c297c906dba653e35edc1df7e5cf9b38c4fab32e1cf850eb3b284ed6",
      "day_slices": [],
      "fact_key": "49a25d606ba735b01c8707231324ee91bfce87b9c3dcd7ab4de3234dd6c578ae",
-     "identity_digest": "900718d6ad0e93d211fb9e33ec59d80302f0f277568728f62c0178cab92aa63f",
+     "identity_digest": "8c2376165b1183e0e2ebdb2cc16ee200bebae0667bf51da806115c4264417fbf",
+     "legacy_identity_digest": "900718d6ad0e93d211fb9e33ec59d80302f0f277568728f62c0178cab92aa63f",
      "stored": {
       "availability": "observed",
       "created_at": null,
       "effective_local_date": "2026-09-01",
-      "observation_id": "900718d6ad0e93d211fb9e33ec59d80302f0f277568728f62c0178cab92aa63f",
+      "observation_id": "8c2376165b1183e0e2ebdb2cc16ee200bebae0667bf51da806115c4264417fbf",
       "occurred_at": "2026-09-01T00:33:00+00:00",
       "received_at": "2026-09-01T08:33:05+08:00",
       "signal": "presence_recovery",
@@ -1803,12 +1850,13 @@
      "content_digest": "891ce5bd351525db01f058d28d54f568b2e7593b0c59b1d0fd98d31b17e173c2",
      "day_slices": [],
      "fact_key": "32d5dda6e19c2251c14e726d574ae0fff5163cc17e8d308ee796c916885a1510",
-     "identity_digest": "666c1a3dfce18aa89ff30da6eb16b6bc071eb036f80aeffb6ac182457e37886b",
+     "identity_digest": "f4670b5c66d3793f1d0a231b7e512233c48516a2867fc1ff713a60e09891ef2c",
+     "legacy_identity_digest": "666c1a3dfce18aa89ff30da6eb16b6bc071eb036f80aeffb6ac182457e37886b",
      "stored": {
       "availability": "observed",
       "created_at": null,
       "effective_local_date": "2026-09-01",
-      "observation_id": "666c1a3dfce18aa89ff30da6eb16b6bc071eb036f80aeffb6ac182457e37886b",
+      "observation_id": "f4670b5c66d3793f1d0a231b7e512233c48516a2867fc1ff713a60e09891ef2c",
       "occurred_at": "2026-09-01T00:40:00+00:00",
       "received_at": "2026-09-01T08:40:05+08:00",
       "signal": "presence_recovery",
@@ -1876,6 +1924,7 @@
      "day_slices": [],
      "fact_key": "0713e87dba6acc3cbad4113add6714f36c9311b5bb67ef01f0d3fec23222cc08",
      "identity_digest": "1957ea11cac90db5849ba9ab7a0adb59e63458b616714db5f5cfa6afa2ffec6c",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -1945,6 +1994,7 @@
      "day_slices": [],
      "fact_key": "0713e87dba6acc3cbad4113add6714f36c9311b5bb67ef01f0d3fec23222cc08",
      "identity_digest": "4367f14baedab763aac72c5fdd8ab9794992682c317d4e77ac399e069bbd7a99",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2013,12 +2063,13 @@
      "content_digest": "63fbcc10dc4d7e0efd70ca5ea3ebc308f4f47d1ed1faacd34d537a0ef04f06a9",
      "day_slices": [],
      "fact_key": "9c435a10b658d487987379da2bf4c25f9931e779b5f6d9ebfefab6c3d7218f9e",
-     "identity_digest": "0f4bccbcda3c3079050a43b8a1547b592886d5c3bed38a7e670d31a75d824df2",
+     "identity_digest": "b8956fb170e0653c0651466a943347fa7a19537c434655b514f8e041932745d9",
+     "legacy_identity_digest": "0f4bccbcda3c3079050a43b8a1547b592886d5c3bed38a7e670d31a75d824df2",
      "stored": {
       "availability": "observed",
       "created_at": null,
       "effective_local_date": "2026-09-01",
-      "observation_id": "0f4bccbcda3c3079050a43b8a1547b592886d5c3bed38a7e670d31a75d824df2",
+      "observation_id": "b8956fb170e0653c0651466a943347fa7a19537c434655b514f8e041932745d9",
       "occurred_at": "2026-09-01T00:41:00+00:00",
       "received_at": "2026-09-01T08:41:05+08:00",
       "signal": "app_usage",
@@ -2062,12 +2113,13 @@
      "content_digest": "4636719ddfd98b150fdd8f45da2207d742d41529a8eb836961618fbd9081c41f",
      "day_slices": [],
      "fact_key": "cc59aa9d9ef30d9b006b9f8cf08a9f37d8c7222fcaf04256ba9d8aec91f38691",
-     "identity_digest": "b8f9f43a57813fc24f00fdf2e7ae99f32c1c2a3f715ece28607441f8057887a7",
+     "identity_digest": "5e3635e3cf360100e74847d150582d3fa43862187167ba77d4a8bed2b40c808f",
+     "legacy_identity_digest": "b8f9f43a57813fc24f00fdf2e7ae99f32c1c2a3f715ece28607441f8057887a7",
      "stored": {
       "availability": "observed",
       "created_at": null,
       "effective_local_date": "2026-09-01",
-      "observation_id": "b8f9f43a57813fc24f00fdf2e7ae99f32c1c2a3f715ece28607441f8057887a7",
+      "observation_id": "5e3635e3cf360100e74847d150582d3fa43862187167ba77d4a8bed2b40c808f",
       "occurred_at": "2026-09-01T00:45:00+00:00",
       "received_at": "2026-09-01T08:45:05+08:00",
       "signal": "app_usage",
@@ -2111,6 +2163,7 @@
      "day_slices": [],
      "fact_key": "9ca0c78b28a535e5a35ab2083f7baaefcbbe6ebc5408b3ac133503676bf9dd35",
      "identity_digest": "59a6a1f825e1a3aa28bb6a281592cb41ecfe23c413274df9cd0f8251846f3025",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2136,6 +2189,7 @@
      "day_slices": [],
      "fact_key": "3d2f8b4bf298ac0f22073d29b5ac77be59ae80e032021983625b639fe7248392",
      "identity_digest": "cab8654df7d063654205d4aebc3845e6cad1910c8be968709ae283aaeb7aede0",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2162,6 +2216,7 @@
      "day_slices": [],
      "fact_key": "c525100a98b6e79bac6f1a49e49d0604aa38edd4a67e928e9cad39496de69253",
      "identity_digest": "c3553144b8df3b87099e8e29950fe81ac3ed06b5234b500e1c20e7ff2a8bb887",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2186,6 +2241,7 @@
      "day_slices": [],
      "fact_key": "ac9f8e99f74fc1ef2ceea200be24c5fabe85e4fc450b7048aeba58e095005bdf",
      "identity_digest": "bdbc648c9675754509e8dec51310645ddb7d49894c61ab8b20b72f23ed1ce515",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2210,6 +2266,7 @@
      "day_slices": [],
      "fact_key": "79eb9d6c4ef208a3b6ffa18eb0f6d5f6b893618c4342598013ff1927474fce9b",
      "identity_digest": "c279d3314bbd6773134bd49538087650ee35670ebd7fab0cfddf8aeae2e139f3",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2236,6 +2293,7 @@
      "day_slices": [],
      "fact_key": "c1d811e2d7ea200b0ee98d289ab82735e1ad672ef3ff7f23ff0626e9cbb5642c",
      "identity_digest": "bc29b71668df0b76d74d31bacf7afcadebcdf2d3a6dc26803e25ff43993ddb73",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2266,6 +2324,7 @@
      "day_slices": [],
      "fact_key": "cb12b5f3d26c45303f40f5cfcad7d12bd478ef07a8e989cfecf773b66bf7b349",
      "identity_digest": "31f44cb0bbbc3f29ac218cc969cf525aac3b7ff9b24cbdc34013ef9a37009feb",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2290,6 +2349,7 @@
      "day_slices": [],
      "fact_key": "46251ae3ae1805bc0328251e03dcc72abf6e8b13f376b84ba5b27653ad4deefb",
      "identity_digest": "246538c1c9d52f8e6e27ea3e6d7b2d2a0049a25ff72dacae52c6e0a8fc2bba75",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2314,6 +2374,7 @@
      "day_slices": [],
      "fact_key": "4917840854df1a17056be538291b305743d6432644cbbb86adca47b623bbe2ea",
      "identity_digest": "e5d0fc3311df61ca313877151bc7e9b75ae5aa6b825ecf3ef9dd970f6e49cfca",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2338,6 +2399,7 @@
      "day_slices": [],
      "fact_key": "b284de3900552e90958f6ef3df4bb62c4b90eebdda5e014e85f7ae06fca5a30f",
      "identity_digest": "1bd4e42aaa640d470ba40ed6ed5acc9bdf8624b5f95fe6aa0832a1c878748224",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2362,6 +2424,7 @@
      "day_slices": [],
      "fact_key": "935211ebb350e0abb66d60f4f75e85649d98b8bd15f047774a28845fe982369c",
      "identity_digest": "c06fa39fe99cc2d0648cb654580c75c8e9a81ed2a9ac5acad5b3ff28620323df",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2386,6 +2449,7 @@
      "day_slices": [],
      "fact_key": "b0757aa3052e1577eb21add79c87c073e68fbfcb7cf65d9f511b477a65d20f6f",
      "identity_digest": "2cafa80fe5a51c57fbfa90398d9eb75ce371baf91b3d67e1153861ac3bf0b7eb",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2410,6 +2474,7 @@
      "day_slices": [],
      "fact_key": "f5c7f3237d83f1fb73267f7295a1cb36befa8993ed77fd1d84603c72e516ca86",
      "identity_digest": "2ad68d75424c5e2fa6a8b9a17a07239ce7bf28daf33fa45a5827e2b983870f77",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2434,6 +2499,7 @@
      "day_slices": [],
      "fact_key": "f51f0bc1ef4304b6e8c98abbc464667e0585b4b4e37e2708f1d569b91126897f",
      "identity_digest": "a0e1fe1d2308fdd1934ef76efa1e8cadf3694bdb95be61052a1b605ab030c5e7",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2458,6 +2524,7 @@
      "day_slices": [],
      "fact_key": "f2173d194eed82e4cbbcf14b76b639e136177527c54f704b1bd1dc9e37034023",
      "identity_digest": "a0675a4b7e4541fb6e2b4f6aa0420c3aaabf8ebc7a7b89a8c99a4755e91e26c9",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2482,6 +2549,7 @@
      "day_slices": [],
      "fact_key": "e9414fee35ebf4819ad4f9bf0c12e0bb66573b555b385485246b8bd7176c24d1",
      "identity_digest": "528e953846cf28fabccec3e8106989de14b324543257dcfa20bba7bd5898a62c",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2507,6 +2575,7 @@
      "day_slices": [],
      "fact_key": "daadd4806256f6eff579c804fe49b82c3a05fb9643e9718e01915b13e3d32c9e",
      "identity_digest": "9d4c74f0f61c32445c6d743b2bfdccfc0679947a06a8e78cc7059bbd370b337d",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2532,6 +2601,7 @@
      "day_slices": [],
      "fact_key": "daadd4806256f6eff579c804fe49b82c3a05fb9643e9718e01915b13e3d32c9e",
      "identity_digest": "40155aff1b1b37ef4a9ff86c76f58939c85503dcb2b2751d0cb385b4fabd7090",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2557,6 +2627,7 @@
      "day_slices": [],
      "fact_key": "daadd4806256f6eff579c804fe49b82c3a05fb9643e9718e01915b13e3d32c9e",
      "identity_digest": "69ebffec81a6572a9b0319cbbdcc6d4ad078e142bd6a7a9830a16f1c5e888b4e",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2582,6 +2653,7 @@
      "day_slices": [],
      "fact_key": "5cb39605c2256987deec234299378b4e35b345fde1b976887e52f9c4a4e5fcf3",
      "identity_digest": "e1752dbae913e7c2a84a10f8e462a0e399a801e12e8fc5ae5d54659f10fa039c",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2608,6 +2680,7 @@
      "day_slices": [],
      "fact_key": "f8095556cfbf1887a003655318c72119a9077755569abbdab149d3f991332f02",
      "identity_digest": "5d946ac19c4b3e38d1f5470b5dce4aef8740358b0c74cd8d45ffcf7d93fe691a",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2633,6 +2706,7 @@
      "day_slices": [],
      "fact_key": "33e90630b7b852ea21d0979e92f115e56d8c4eb7e4d38bd6831fa5e9f054d5b1",
      "identity_digest": "f664c4893feb4d601a9642d659914abe6f2e914673b96b20cbf23e6551d155c9",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "no_data",
       "created_at": null,
@@ -2655,6 +2729,7 @@
      "day_slices": [],
      "fact_key": "27b46a453be7d358bea179bd5da3652874c14663cd9114418624b6aa3fc8cab3",
      "identity_digest": "b55e23921d0161536a2d33a494f7b760ca479ad099569acbd384daef6c4eb849",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "unavailable",
       "created_at": null,
@@ -2677,6 +2752,7 @@
      "day_slices": [],
      "fact_key": "b18d585141ed46e1b8fb000ded13ea724cec91cceef00d7ea5e45a2718a5ad53",
      "identity_digest": "fb7c3dd088183a6c40fbbfc565e04d98254279a19aa6fd734db888d10ad0bcb0",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -2701,6 +2777,7 @@
      "day_slices": [],
      "fact_key": "1ff57f83c32e1e253d7b80fe49a3fd94dd320a13828ea21f9874d4bfb18ae2d4",
      "identity_digest": "67b89f46f14b386995b8c65a80cac8a22ae36e87a1c4cc2ea8df91b272ebafd0",
+     "legacy_identity_digest": null,
      "stored": {
       "availability": "observed",
       "created_at": null,
@@ -3558,7 +3635,7 @@
     "signal": "app_usage",
     "source": "ios_app_shortcut",
     "source_event_id": "app-b1b10513da3b3383",
-    "source_observation_id": "b8f9f43a57813fc24f00fdf2e7ae99f32c1c2a3f715ece28607441f8057887a7",
+    "source_observation_id": "5e3635e3cf360100e74847d150582d3fa43862187167ba77d4a8bed2b40c808f",
     "source_revision": null,
     "subject_id": "u-compat",
     "typed_value": {
@@ -4009,7 +4086,7 @@
     "signal": "photo_library_added",
     "source": "ios_photo",
     "source_event_id": "ph-2",
-    "source_observation_id": "2df963b8e0d32d4a7a98f4fdc2c686fd2f7f69ca47ee24e65044516925033114",
+    "source_observation_id": "e7bc216410f20dc185ffac222aff2ce0834b42623425afd8861b83ed8f1e2c48",
     "source_revision": null,
     "subject_id": "u-compat",
     "typed_value": {
@@ -4028,7 +4105,7 @@
     "signal": "presence_recovery",
     "source": "ios_device_event",
     "source_event_id": "ev-2",
-    "source_observation_id": "666c1a3dfce18aa89ff30da6eb16b6bc071eb036f80aeffb6ac182457e37886b",
+    "source_observation_id": "f4670b5c66d3793f1d0a231b7e512233c48516a2867fc1ff713a60e09891ef2c",
     "source_revision": null,
     "subject_id": "u-compat",
     "typed_value": {
@@ -4166,13 +4243,13 @@
     "u-compat",
     "app_usage",
     "ios_app_shortcut",
-    "0f4bccbcda3c3079050a43b8a1547b592886d5c3bed38a7e670d31a75d824df2"
+    "5e3635e3cf360100e74847d150582d3fa43862187167ba77d4a8bed2b40c808f"
    ],
    [
     "u-compat",
     "app_usage",
     "ios_app_shortcut",
-    "b8f9f43a57813fc24f00fdf2e7ae99f32c1c2a3f715ece28607441f8057887a7"
+    "b8956fb170e0653c0651466a943347fa7a19537c434655b514f8e041932745d9"
    ],
    [
     "u-compat",
@@ -4502,25 +4579,25 @@
     "u-compat",
     "photo_library_added",
     "ios_photo",
-    "2df963b8e0d32d4a7a98f4fdc2c686fd2f7f69ca47ee24e65044516925033114"
+    "42ee2a630dbd78af06ecfb18bdf29941257a5ffbdd26758fdbeabb9ecfb846ff"
    ],
    [
     "u-compat",
     "photo_library_added",
     "ios_photo",
-    "9c382547597185866a9764d60c8a38d62dea23dd3c68fc3e834c7da092421ebf"
+    "e7bc216410f20dc185ffac222aff2ce0834b42623425afd8861b83ed8f1e2c48"
    ],
    [
     "u-compat",
     "presence_recovery",
     "ios_device_event",
-    "666c1a3dfce18aa89ff30da6eb16b6bc071eb036f80aeffb6ac182457e37886b"
+    "8c2376165b1183e0e2ebdb2cc16ee200bebae0667bf51da806115c4264417fbf"
    ],
    [
     "u-compat",
     "presence_recovery",
     "ios_device_event",
-    "900718d6ad0e93d211fb9e33ec59d80302f0f277568728f62c0178cab92aa63f"
+    "f4670b5c66d3793f1d0a231b7e512233c48516a2867fc1ff713a60e09891ef2c"
    ],
    [
     "u-compat",
@@ -4678,28 +4755,6 @@
     "typed_value": {
      "locale": "zh_CN",
      "time_zone_id": "Asia/Shanghai"
-    }
-   },
-   "0f4bccbcda3c3079050a43b8a1547b592886d5c3bed38a7e670d31a75d824df2": {
-    "availability": "observed",
-    "created_at": null,
-    "effective_local_date": "2026-09-01",
-    "observation_id": "0f4bccbcda3c3079050a43b8a1547b592886d5c3bed38a7e670d31a75d824df2",
-    "occurred_at": "2026-09-01T00:41:00+00:00",
-    "received_at": "2026-09-01T08:41:05+08:00",
-    "signal": "app_usage",
-    "signal_schema_version": 1,
-    "source": "ios_app_shortcut",
-    "source_event_id": "app-9634a97b3ed19ac4",
-    "source_revision": null,
-    "subject_id": "u-compat",
-    "timezone": "Asia/Shanghai",
-    "typed_value": {
-     "action": "open",
-     "app_id": "WeChat",
-     "app_name": "WeChat",
-     "category": "social",
-     "open_count": 1
     }
    },
    "10365491aade8f21a28b20ef07b06e63e4a3e0655dd09cdda5e408d477678966": {
@@ -4875,25 +4930,6 @@
      "weight_kg": 68.2
     }
    },
-   "2df963b8e0d32d4a7a98f4fdc2c686fd2f7f69ca47ee24e65044516925033114": {
-    "availability": "observed",
-    "created_at": null,
-    "effective_local_date": "2026-09-01",
-    "observation_id": "2df963b8e0d32d4a7a98f4fdc2c686fd2f7f69ca47ee24e65044516925033114",
-    "occurred_at": "2026-09-01T00:32:00+00:00",
-    "received_at": "2026-09-01T08:32:05+08:00",
-    "signal": "photo_library_added",
-    "signal_schema_version": 1,
-    "source": "ios_photo",
-    "source_event_id": "ph-2",
-    "source_revision": null,
-    "subject_id": "u-compat",
-    "timezone": "Asia/Shanghai",
-    "typed_value": {
-     "added_at": "2026-09-01T00:32:00+00:00",
-     "count": 1
-    }
-   },
    "30969e2c974c7617b078eca79a73fba533f3d30049bc76a337fd203edb55b999": {
     "availability": "observed",
     "created_at": null,
@@ -4946,6 +4982,44 @@
     "timezone": "Asia/Shanghai",
     "typed_value": {
      "bmi": 22.1
+    }
+   },
+   "40155aff1b1b37ef4a9ff86c76f58939c85503dcb2b2751d0cb385b4fabd7090": {
+    "availability": "observed",
+    "created_at": null,
+    "effective_local_date": "2026-09-02",
+    "observation_id": "40155aff1b1b37ef4a9ff86c76f58939c85503dcb2b2751d0cb385b4fabd7090",
+    "occurred_at": "2026-09-02T08:00:00+08:00",
+    "received_at": "2026-09-02T08:00:05+08:00",
+    "signal": "health_sleep",
+    "signal_schema_version": 1,
+    "source": "ios",
+    "source_event_id": null,
+    "source_revision": null,
+    "subject_id": "u-compat",
+    "timezone": "Asia/Shanghai",
+    "typed_value": {
+     "duration_minutes": 70,
+     "stage": "deep"
+    }
+   },
+   "42ee2a630dbd78af06ecfb18bdf29941257a5ffbdd26758fdbeabb9ecfb846ff": {
+    "availability": "observed",
+    "created_at": null,
+    "effective_local_date": "2026-09-01",
+    "observation_id": "42ee2a630dbd78af06ecfb18bdf29941257a5ffbdd26758fdbeabb9ecfb846ff",
+    "occurred_at": "2026-09-01T00:31:00+00:00",
+    "received_at": "2026-09-01T08:31:05+08:00",
+    "signal": "photo_library_added",
+    "signal_schema_version": 1,
+    "source": "ios_photo",
+    "source_event_id": "ph-1",
+    "source_revision": null,
+    "subject_id": "u-compat",
+    "timezone": "Asia/Shanghai",
+    "typed_value": {
+     "added_at": "2026-09-01T00:31:00+00:00",
+     "count": 1
     }
    },
    "513a4a0f2a9f3d64434788d9d63b21414ad8aaa591ec8f67c8601f6fa22211eb": {
@@ -5028,6 +5102,27 @@
      "workout_type": "running"
     }
    },
+   "5e3635e3cf360100e74847d150582d3fa43862187167ba77d4a8bed2b40c808f": {
+    "availability": "observed",
+    "created_at": null,
+    "effective_local_date": "2026-09-01",
+    "observation_id": "5e3635e3cf360100e74847d150582d3fa43862187167ba77d4a8bed2b40c808f",
+    "occurred_at": "2026-09-01T00:45:00+00:00",
+    "received_at": "2026-09-01T08:45:05+08:00",
+    "signal": "app_usage",
+    "signal_schema_version": 1,
+    "source": "ios_app_shortcut",
+    "source_event_id": "app-b1b10513da3b3383",
+    "source_revision": null,
+    "subject_id": "u-compat",
+    "timezone": "Asia/Shanghai",
+    "typed_value": {
+     "action": "close",
+     "app_id": "WeChat",
+     "app_name": "WeChat",
+     "category": "social"
+    }
+   },
    "60f4453f695903d8d4fb30837d0af85cdea0a23b86742fff98ffb14cbecffb0c": {
     "availability": "observed",
     "created_at": null,
@@ -5069,6 +5164,25 @@
      "playback_state": "playing",
      "title": "Song B",
      "track_key": "5429eb46623abac5"
+    }
+   },
+   "69ebffec81a6572a9b0319cbbdcc6d4ad078e142bd6a7a9830a16f1c5e888b4e": {
+    "availability": "observed",
+    "created_at": null,
+    "effective_local_date": "2026-09-02",
+    "observation_id": "69ebffec81a6572a9b0319cbbdcc6d4ad078e142bd6a7a9830a16f1c5e888b4e",
+    "occurred_at": "2026-09-02T08:00:00+08:00",
+    "received_at": "2026-09-02T08:00:05+08:00",
+    "signal": "health_sleep",
+    "signal_schema_version": 1,
+    "source": "ios",
+    "source_event_id": null,
+    "source_revision": null,
+    "subject_id": "u-compat",
+    "timezone": "Asia/Shanghai",
+    "typed_value": {
+     "duration_minutes": 110,
+     "stage": "rem"
     }
    },
    "6eb808e2038acf43fdc566f35411a77574987853fcf3e1b6ceea80ea44497295": {
@@ -5249,23 +5363,23 @@
      "resting_heart_rate": 58
     }
    },
-   "9c382547597185866a9764d60c8a38d62dea23dd3c68fc3e834c7da092421ebf": {
+   "9d4c74f0f61c32445c6d743b2bfdccfc0679947a06a8e78cc7059bbd370b337d": {
     "availability": "observed",
     "created_at": null,
-    "effective_local_date": "2026-09-01",
-    "observation_id": "9c382547597185866a9764d60c8a38d62dea23dd3c68fc3e834c7da092421ebf",
-    "occurred_at": "2026-09-01T00:31:00+00:00",
-    "received_at": "2026-09-01T08:31:05+08:00",
-    "signal": "photo_library_added",
+    "effective_local_date": "2026-09-02",
+    "observation_id": "9d4c74f0f61c32445c6d743b2bfdccfc0679947a06a8e78cc7059bbd370b337d",
+    "occurred_at": "2026-09-02T08:00:00+08:00",
+    "received_at": "2026-09-02T08:00:05+08:00",
+    "signal": "health_sleep",
     "signal_schema_version": 1,
-    "source": "ios_photo",
-    "source_event_id": "ph-1",
+    "source": "ios",
+    "source_event_id": null,
     "source_revision": null,
     "subject_id": "u-compat",
     "timezone": "Asia/Shanghai",
     "typed_value": {
-     "added_at": "2026-09-01T00:31:00+00:00",
-     "count": 1
+     "duration_minutes": 250,
+     "stage": "core"
     }
    },
    "a01599336d28667efac678dec69a9f9e3f6387d36853808aa3a9596dfcce74b6": {
@@ -5414,25 +5528,26 @@
      "state": "stationary"
     }
    },
-   "b8f9f43a57813fc24f00fdf2e7ae99f32c1c2a3f715ece28607441f8057887a7": {
+   "b8956fb170e0653c0651466a943347fa7a19537c434655b514f8e041932745d9": {
     "availability": "observed",
     "created_at": null,
     "effective_local_date": "2026-09-01",
-    "observation_id": "b8f9f43a57813fc24f00fdf2e7ae99f32c1c2a3f715ece28607441f8057887a7",
-    "occurred_at": "2026-09-01T00:45:00+00:00",
-    "received_at": "2026-09-01T08:45:05+08:00",
+    "observation_id": "b8956fb170e0653c0651466a943347fa7a19537c434655b514f8e041932745d9",
+    "occurred_at": "2026-09-01T00:41:00+00:00",
+    "received_at": "2026-09-01T08:41:05+08:00",
     "signal": "app_usage",
     "signal_schema_version": 1,
     "source": "ios_app_shortcut",
-    "source_event_id": "app-b1b10513da3b3383",
+    "source_event_id": "app-9634a97b3ed19ac4",
     "source_revision": null,
     "subject_id": "u-compat",
     "timezone": "Asia/Shanghai",
     "typed_value": {
-     "action": "close",
+     "action": "open",
      "app_id": "WeChat",
      "app_name": "WeChat",
-     "category": "social"
+     "category": "social",
+     "open_count": 1
     }
    },
    "c06fa39fe99cc2d0648cb654580c75c8e9a81ed2a9ac5acad5b3ff28620323df": {
@@ -5621,6 +5736,25 @@
     "timezone": "Asia/Shanghai",
     "typed_value": {
      "step_count": 4211
+    }
+   },
+   "e7bc216410f20dc185ffac222aff2ce0834b42623425afd8861b83ed8f1e2c48": {
+    "availability": "observed",
+    "created_at": null,
+    "effective_local_date": "2026-09-01",
+    "observation_id": "e7bc216410f20dc185ffac222aff2ce0834b42623425afd8861b83ed8f1e2c48",
+    "occurred_at": "2026-09-01T00:32:00+00:00",
+    "received_at": "2026-09-01T08:32:05+08:00",
+    "signal": "photo_library_added",
+    "signal_schema_version": 1,
+    "source": "ios_photo",
+    "source_event_id": "ph-2",
+    "source_revision": null,
+    "subject_id": "u-compat",
+    "timezone": "Asia/Shanghai",
+    "typed_value": {
+     "added_at": "2026-09-01T00:32:00+00:00",
+     "count": 1
     }
    },
    "e97a9a2d6ded5ec5bfd076b3cfdc2a5f65273a17f5cecd92c7b6b540d7c32f60": {

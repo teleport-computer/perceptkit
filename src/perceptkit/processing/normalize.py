@@ -60,6 +60,8 @@ class NormalizedObservation:
     content_digest: str
     #: 跨午夜的区间会摊到多天：``[(本地日期, 分钟数), ...]``。其余为空。
     day_slices: tuple[tuple[str, float], ...] = ()
+    #: 升级前这条投递会算出的身份。只用来认旧数据，见 ``identity_for``。
+    legacy_identity_digest: str | None = None
 
 
 def _canonical(value: Any) -> str:
@@ -302,8 +304,8 @@ def check_clock(occurred_at: datetime, received_at: datetime,
 def identity_for(
     obs: Observation, sig: SignalDefinition, ctx: IngestContext, *,
     source: str, content_digest: str,
-) -> tuple[str, str, list[str]]:
-    """算两种身份，返回 ``(投递身份, 事实身份, 问题清单)``。
+) -> tuple[str, str, str | None, list[str]]:
+    """算两种身份，返回 ``(投递身份, 事实身份, 兼容用的旧投递身份, 问题清单)``。
 
     见 :class:`NormalizedObservation` 的文档 —— 这两个混用会造成两类静默错误。
     """
@@ -328,14 +330,24 @@ def identity_for(
         # 没有上游身份：同一时刻同一内容才算同一条事实。
         fact = _digest(ctx.subject_id, source, sig.key, to_iso(obs.occurred_at))
 
-    # 投递身份 = 事实 + 这一版的时刻、版本、内容。
+    # 投递身份 = 事实 + 这一版的版本、内容（+ 没有上游身份时的时刻）。
     # 少了任何一项，都会有一类"新数据"被误判成重传而静默丢掉。
-    delivery = _digest(
-        fact, to_iso(obs.occurred_at),
-        "" if obs.source_revision is None else str(obs.source_revision),
-        content_digest,
-    )
-    return delivery, fact, problems
+    #
+    # 🔴 上游给了稳定样本 id 时**不能把 occurred_at 算进去**：那一刻是这条
+    #    事实自身的属性（样本的开始时间），不是这次投递的属性。宿主重传时
+    #    只要把它标成另一个时刻（比如写成"这次上报的时刻"），同一条样本就
+    #    成了"新投递"，当天直接加两遍 —— 30 分钟的睡眠变 60（外部审查 F5）。
+    #    时刻真的变了属于**修订**，由 source_revision 表达，上面已经算进去了。
+    rev = "" if obs.source_revision is None else str(obs.source_revision)
+    legacy = _digest(fact, to_iso(obs.occurred_at), rev, content_digest)
+    if strategy == "source_event_id":
+        delivery = _digest(fact, rev, content_digest)
+    else:
+        delivery = legacy
+    # 旧身份只在换算法的这一版用来**认旧数据**：升级前落库的那些记的是
+    # 带 occurred_at 的摘要，只查新摘要的话，升级后第一次重传会认不出来、
+    # 再加一遍。过完一个保留周期就可以删掉这一路。
+    return delivery, fact, (legacy if legacy != delivery else None), problems
 
 
 # ---------------------------------------------------------------------------
@@ -419,7 +431,7 @@ def normalize_observations(
         warnings += day_problems
 
         content = _digest(_canonical(clean), obs.availability)
-        identity, fact_key, id_problems = identity_for(
+        identity, fact_key, legacy_identity, id_problems = identity_for(
             obs, sig, context, source=source, content_digest=content,
         )
         warnings += id_problems
@@ -442,6 +454,7 @@ def normalize_observations(
                 source_revision=obs.source_revision,
             ),
             identity_digest=identity,
+            legacy_identity_digest=legacy_identity,
             fact_key=fact_key,
             content_digest=content,
             day_slices=slices,
