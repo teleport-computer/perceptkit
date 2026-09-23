@@ -102,12 +102,17 @@ def test_the_recompute_runs_inside_the_same_transaction_as_the_retraction():
     """
     s = _DepthSpy(); kit = _kit(s)
     _weigh(kit, 70.5, at=T0, eid="hk-A")
+    # ⚠️ 收数据那一步自己也会写聚合。不清掉的话，这条测试在"重算被整个
+    #    去掉"时照样绿 —— 它量的是别人留下的痕迹（故障注入抓到过）。
+    s.depth_at.clear()
+
     kit.apply_retractions(
         [Retraction("u", "health_weight", "hk-A", "ios", T0 + timedelta(hours=2))],
         now=T0 + timedelta(hours=2))
 
     assert s.depth_at.get("record_retraction", 0) > 0, "记撤回没包在事务里"
-    assert s.depth_at.get("put_aggregate", 0) > 0, \
+    assert "put_aggregate" in s.depth_at, "撤回之后根本没重算聚合"
+    assert s.depth_at["put_aggregate"] > 0, \
         "重算聚合在事务外面 —— 撤回提交了、重算崩了，就再也对不上了"
 
 
