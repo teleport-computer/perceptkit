@@ -451,11 +451,29 @@ def list_definitions(
     return out
 
 
+def _drain(fetch, *, cap: int | None) -> tuple[list[Any], bool]:
+    """把一个分页查询**读到底**，返回 ``(全部行, 有没有被 cap 截断)``。
+
+    只读第一页是这里最坏的形态：用户以为"把我的数据给我"拿到了全部，
+    实际第 501 条起直接消失，返回里没有任何线索（外部审查 F9）。
+    ``MAX_LIMIT`` 是为**模型上下文**设的预算，不该拿来限制用户自己的数据。
+    """
+    out: list[Any] = []
+    cursor = None
+    while True:
+        rows, cursor = fetch(cursor, MAX_LIMIT)
+        out.extend(rows)
+        if cap is not None and len(out) >= cap:
+            return out[:cap], True
+        if not cursor:
+            return out, False
+
+
 def export_subject(
     storage: StoragePort, *, subject_id: str,
     manifest: Mapping[str, SignalDefinition],
     start: datetime | None = None, end: datetime | None = None,
-    per_signal_limit: int = MAX_LIMIT,
+    per_signal_limit: int | None = None,
 ) -> dict[str, Any]:
     """把一个人的全部感知数据导出来。
 
@@ -473,16 +491,39 @@ def export_subject(
     """
     signals = sorted(manifest)
     observations: dict[str, list[dict[str, Any]]] = {}
+    daily: dict[str, list[dict[str, Any]]] = {}
+    truncated: list[str] = []
     for signal in signals:
-        rows, _ = list_timeline(
-            storage, subject_id=subject_id, signal=signal, manifest=manifest,
-            start=start, end=end, limit=per_signal_limit,
-            # 导出给用户本人，所以按需字段也要给；
-            # `query_visibility="never"` 的仍然不给 —— 那些**根本没存**。
-            on_demand=True,
+        rows, cut = _drain(
+            lambda cursor, limit, _s=signal: list_timeline(
+                storage, subject_id=subject_id, signal=_s, manifest=manifest,
+                start=start, end=end, cursor=cursor, limit=limit,
+                # 导出给用户本人，所以按需字段也要给；
+                # `query_visibility="never"` 的仍然不给 —— 那些**根本没存**。
+                on_demand=True,
+            ),
+            cap=per_signal_limit,
         )
         if rows:
             observations[signal] = rows
+        if cut:
+            truncated.append(signal)
+
+        # 日聚合也得给。明细有保留期、日统计是永久的 —— 明细清掉之后，
+        # 日统计就是用户那段历史**仅剩**的东西。不给等于把留存最久的
+        # 那一份漏掉了，而且没人会发现。
+        aggs = storage.get_aggregate(
+            subject_id=subject_id, signal=signal,
+            start_date=_ALL_TIME_START, end_date=_ALL_TIME_END,
+            aggregation_kind="daily",
+        )
+        if aggs:
+            daily[signal] = [
+                {"date": a.local_date.isoformat(), "value": a.typed_aggregate,
+                 "aggregation_version": a.aggregation_version}
+                for a in sorted(aggs, key=lambda a: (a.local_date,
+                                                     a.aggregation_version))
+            ]
 
     current = {
         signal: {"state": view.state, "value": view.value,
@@ -499,18 +540,31 @@ def export_subject(
         "kit_managed_only": True,
         "current": current,
         "observations": observations,
-        # 导出取第一页 —— 一个人的日历镜像是有界的，per_signal_limit 已经够大。
-        "calendar_events": list_calendar_events(
-            storage, subject_id=subject_id, start=start, end=end,
-            limit=per_signal_limit)[0],
-        "reminders": list_reminders(storage, subject_id=subject_id,
-                                    include_completed=True,
-                                    limit=per_signal_limit)[0],
-        # 导出取第一页就够 —— 待投递的事件不是"用户的数据"，
-        # 是我们还没送到的东西，列在这里只为完整。
-        "pending_events": list_events(storage, subject_id=subject_id,
-                                      limit=per_signal_limit)[0],
+        "daily_aggregates": daily,
+        # 哪几类被 per_signal_limit 截断了。**空列表 = 真的是全部**，
+        # 不给这一栏的话，"少给了一截"和"本来就这么多"分辨不出来。
+        "truncated": truncated,
+        "calendar_events": _drain(
+            lambda cursor, limit: list_calendar_events(
+                storage, subject_id=subject_id, start=start, end=end,
+                cursor=cursor, limit=limit),
+            cap=per_signal_limit)[0],
+        "reminders": _drain(
+            lambda cursor, limit: list_reminders(
+                storage, subject_id=subject_id, include_completed=True,
+                cursor=cursor, limit=limit),
+            cap=per_signal_limit)[0],
+        # 待投递的事件不是"用户的数据"，是我们还没送到的东西，列在这里只为完整。
+        "pending_events": _drain(
+            lambda cursor, limit: list_events(
+                storage, subject_id=subject_id, cursor=cursor, limit=limit),
+            cap=per_signal_limit)[0],
     }
+
+
+#: 导出时拿"全时段"去取聚合 —— 这个包不读时钟，所以用固定边界而不是 today()。
+_ALL_TIME_START = date(1, 1, 1)
+_ALL_TIME_END = date(9999, 12, 31)
 
 
 def _far_future() -> datetime:

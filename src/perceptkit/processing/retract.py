@@ -23,7 +23,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Callable, Iterable, Sequence
 
 from ..contracts.records import CurrentProjection
@@ -129,6 +129,13 @@ def _all_observations(storage: StoragePort, subject_id: str, signal: str) -> lis
     return page
 
 
+def _value_digest(value, availability: str) -> str:
+    """和正常写入那条路用同一个算法算内容指纹 —— 两边算不一样就没意义了。"""
+    from .normalize import _canonical, _digest
+
+    return _digest(_canonical(value or {}), availability)
+
+
 def _reselect_current(storage: StoragePort, r: Retraction,
                       sig: SignalDefinition, *, now: datetime) -> str:
     """把当前值重选成下一条仍然有效的。返回做了什么。
@@ -147,6 +154,10 @@ def _reselect_current(storage: StoragePort, r: Retraction,
 
         page = (_all_observations(storage, r.subject_id, r.signal)
                 if hasattr(storage, "list_observations") else [])
+        # 同一条事实的多个修订先收敛成最新那版，再挑候选。
+        # 只按时间挑的话，用户**已经改掉**的旧版本可能被选回来当当前值
+        # （外部审查 F10）。和重算用的是同一条规则，不各挑各的。
+        page = canonical_revisions(page, sig)
         retracted = {(x.source, x.source_event_id)
                      for x in storage.list_retractions(
                          subject_id=r.subject_id, signal=r.signal)}
@@ -170,13 +181,25 @@ def _reselect_current(storage: StoragePort, r: Retraction,
                     availability="observed" if winner else "no_data",
                     observed_at=winner.occurred_at if winner else r.observed_at,
                     received_at=now,
-                    expires_at=None,
+                    # 🔴 按**这个值自己的观测时刻**算过期，不是写死 None。
+                    #    写死 None 等于说"这个值永远算数"：用户 2026 年称过
+                    #    一次、2028 年问"我现在多重"，agent 会把那个两年前的
+                    #    数字当成现在的说出来（外部审查 F10）。
+                    expires_at=(
+                        winner.occurred_at + timedelta(seconds=sig.current_ttl_sec)
+                        if winner is not None and sig.current_ttl_sec > 0 else None
+                    ),
                     source_observation_id=winner.observation_id if winner else None,
                     source=winner.source if winner else None,
                     source_event_id=winner.source_event_id if winner else None,
                     source_revision=winner.source_revision if winner else None,
                     version=current.version + 1,
-                    content_digest=current.content_digest,
+                    # 指纹描述的必须是**它自己**。照抄被删掉那条的指纹，
+                    # 等于给靠指纹判"值变没变"的下游一个错的判据。
+                    content_digest=_value_digest(
+                        winner.typed_value if winner else None,
+                        "observed" if winner else "no_data",
+                    ),
                 ),
                 expected_version=current.version,
             )
@@ -239,3 +262,62 @@ def is_retracted(storage: StoragePort, *, subject_id: str, signal: str,
         for x in lookup(subject_id=subject_id, signal=signal,
                         source_event_ids=[source_event_id])
     )
+
+
+def _revision_key(raw: object) -> tuple[int, str]:
+    """修订号的比较键。数字按数字比，其余按字符串比，两者不混。
+
+    ``"10"`` 和 ``10`` 是不同的东西：全按字符串比的话 ``"10" < "9"``，
+    第 10 版会被第 9 版盖掉。所以数字排一档、字符串排另一档，
+    并且**数字档永远小于字符串档**——不给两个不可比的值编一个假的顺序。
+    """
+    if raw is None:
+        return (0, "")
+    text = str(raw)
+    try:
+        return (1, f"{int(text):020d}")
+    except ValueError:
+        return (2, text)
+
+
+def canonical_revisions(rows: list, sig: SignalDefinition) -> list:
+    """同一件源事实的多个修订，只留最新那一版。
+
+    ``source_revision`` 原来只用在当前值上（高版本替换低版本），**历史和聚合
+    完全没用它**。于是修订过的那天会同时折进错值和改正值：
+
+        体重 70.5kg（revision 1）→ 用户在健康 app 里改成 68.5（revision 2）
+        重算那天 → 两条都在 → 平均值 69.5，一个从来没发生过的数字
+
+    而且这个错**只有重算时才现形**：当前值那条路是对的，所以"改过之后当前
+    显示对了"会让人以为整条链路都对了。
+
+    只对按 ``source_event_id`` 定身份的信号生效 —— 别的信号一条观测就是
+    一件独立的事，本来就不该合并。
+    """
+    if sig.identity_strategy != "source_event_id":
+        return rows
+    # 🔴 分组键必须带 **source**，和「哪条被撤回了」用的是同一个身份边界。
+    # 只按 id 分组：同一个 subject 下 iOS 和 Google 碰巧用了同一个
+    # source_event_id 时，Google 那条会被当成 iOS 那条的旧修订丢掉；
+    # 等后面再按 (source,id) 排除被撤回的 iOS，有效的 Google 已经不在了,
+    # 那天的聚合直接变空（外部审查 F7）。
+    groups: dict[tuple[str, str], list] = {}
+    for o in rows:
+        if o.source_event_id is not None:       # 没有源身份的，各算各的
+            groups.setdefault((o.source, o.source_event_id), []).append(o)
+
+    winners = set()
+    for key, members in groups.items():
+        # **一组里全都没有修订号 = 没有"哪版更新"的信息，一条都不合并。**
+        # 合并的话就等于替这些观测编一个"后来的覆盖先来的"的顺序，而那正好
+        # 是 `cumulative` 现在**不**采用的规则（它取 max）—— 重算和增量折叠
+        # 会给出两个不同的数，同一份数据看你从哪条路读。
+        # 修订语义该不该改成"最新的赢"是另一件事，得先定，不能从这里溜进去。
+        if all(o.source_revision is None for o in members):
+            winners.update(id(o) for o in members)
+            continue
+        best = max(members, key=lambda o: (_revision_key(o.source_revision),
+                                           o.occurred_at, o.observation_id))
+        winners.add(id(best))
+    return [o for o in rows if o.source_event_id is None or id(o) in winners]
