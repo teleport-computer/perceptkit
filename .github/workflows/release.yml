@@ -44,10 +44,15 @@ jobs:
         run: pipx install uv
 
       - name: Tag 与 pyproject 版本必须一致
+        env:
+          SELECTED_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         # 不一致就停：否则会出现「tag 是 v0.2.2、wheel 却是 0.2.1」这种凭证与
         # 产物名对不上的情况，验证方无从判断该信哪个。
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          # 手动触发时 GITHUB_REF_NAME 是**分支名**（通常是 main），不是 tag ——
+          # 照它取版本号必然和 pyproject 对不上，手动重发一次都发不出去。
+          # checkout 那步已经按 inputs.tag 取了代码，这里得用同一个来源。
+          TAG="${SELECTED_TAG#v}"
           PKG=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
           echo "tag=$TAG  perceptkit=$PKG"
           test "$TAG" = "$PKG" || { echo "::error::tag $TAG 与版本 $PKG 不一致"; exit 1; }
@@ -96,8 +101,9 @@ jobs:
         # 两件事分开做。两边发的是**同一批字节**。
         env:
           GH_TOKEN: ${{ github.token }}
+          SELECTED_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${SELECTED_TAG}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" out/* --clobber
           else
