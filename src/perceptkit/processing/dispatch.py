@@ -244,6 +244,8 @@ def evaluate_and_enqueue(
             detected_at=stored.received_at,
             fact_snapshot=event.to_dict(),
             dedupe_key=event.event_id,
+            source=stored.source,
+            source_event_id=stored.source_event_id,
             created_at=stored.received_at,
             delivery_state=(_delivery.PENDING if definition.wake_enabled
                             else _delivery.NOT_DISPATCHED),

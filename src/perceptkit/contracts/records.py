@@ -352,6 +352,14 @@ class EventOutboxEntry:
     delivery_state: str = delivery.PENDING
     #: 同一件事的去重键。runtime 崩溃重投时靠它认出是同一个。
     dedupe_key: str | None = None
+    #: 触发它的那条**源事实**。用户后来把这条数据删了时，靠它找到这条事件、
+    #: 把 ``fact_snapshot`` 里的原值抹掉（只留"有过一条已被删除的数据触发过"）。
+    #:
+    #: **刻意只放在存储记录上，不进投出去的信封** —— 信封是宿主接的公开契约，
+    #: 多一个键所有接入方都得改；而匹配发生在存储这一侧，用不着走出去。
+    #: 定时类规则（absence / streak）不由某一条具体样本触发，两者为 None。
+    source: str | None = None
+    source_event_id: str | None = None
     attempt_count: int = 0
     next_attempt_at: datetime | None = None
     #: 当前租约的持有者和到期时间。到期没进展 → 别人可以接管。

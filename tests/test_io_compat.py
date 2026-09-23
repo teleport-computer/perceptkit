@@ -153,6 +153,25 @@ def test_the_fixture_really_exercises_what_the_host_depends_on():
 
 
 def test_host_reports_produce_byte_identical_results_to_v070():
+    """基线是 v0.7.0 的**行为**。
+
+    2026-09-22 唯一一次允许的改动：``IngestOutcome`` 多了一栏空的
+    ``retracted``（来源撤回过的事实被挡在入口外时放这里）。21 处全是
+    ``"retracted": []``，其余逐字节不变 —— 纯新增字段，没有行为变化。
+    2026-09-22 第二次：带稳定样本 id 的信号（睡眠、运动、经期…）的**投递
+    身份**不再把 occurred_at 算进去 —— 同一条样本换个上报时刻重传一次，
+    当天就加两遍（外部审查 F5）。连带 ``observation_id`` 变了，所以这次
+    golden 的 diff 不是纯新增，是**有意的行为变更**。
+
+    旧数据不受影响：入口同时查新旧两个摘要，见 pipeline ③ 和
+    `test_an_identity_remembered_before_the_upgrade_still_blocks_a_re_upload`。
+
+    2026-09-22 第三次：发件箱记录多了 source / source_event_id 两栏（撤回时
+    靠它找到"这条提醒是被哪条数据触发的"）。**刻意没进投出去的信封** ——
+    信封是宿主接的公开契约，多一个键所有接入方都得改。纯新增，没有行为变化。
+
+    再有 diff 一律当成回归，别顺手重新生成 golden。
+    """
     golden = (FIXTURES / "golden_v0.7.0.json").read_text()
     now = _canonical_json(run_sequence()) + "\n"
     if now != golden:

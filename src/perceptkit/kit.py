@@ -75,6 +75,17 @@ class PerceptionKit:
             return cached[1]
         provider = as_provider(source)
         object.__setattr__(self, "_definitions_cache", (source, provider))
+        # 换一份规则时，把**上一版**存进历史档。事件只记 (id, 版本)，
+        # 不留档的话：用户把"超 71kg 提醒"改成 75 之后，上周那条提醒就再也
+        # 解释不清为什么发；整条删掉时更是直接变成一串无从追溯的 id
+        # （外部审查 F11）。留的是"回看"，不是"继续生效"—— 生效与否永远
+        # 只问当前 provider，两者混了的话用户删掉的规则会继续叫醒他。
+        archive = getattr(self, "_definition_archive", None)
+        if archive is None:
+            archive = {}
+            object.__setattr__(self, "_definition_archive", archive)
+        for d in getattr(provider, "__iter__", lambda: ())():
+            archive.setdefault((d.definition_id, d.version), d)
         return provider
 
     def definitions_for(self, subject_id: str) -> Sequence[EventDefinition]:
@@ -88,7 +99,14 @@ class PerceptionKit:
         事件只记 id + 版本；答不出来的话，规则删掉之后那些历史事件就变成
         一串无从追溯的 id，用户问「这条为什么叫醒我」再也答不了。
         """
-        return self._definitions.definition_at(definition_id, version)
+        found = self._definitions.definition_at(definition_id, version)
+        if found is not None:
+            return found
+        # 当前这份里没有 —— 去历史档里找。宿主自己的 provider 如果保留了
+        # 历史，上面那一步就已经命中了；没保留的（含最朴素的
+        # `kit.definitions = [...]` 热替换）由这里兜住。
+        return getattr(self, "_definition_archive", {}).get(
+            (definition_id, version))
 
     # -- 写入侧 ----------------------------------------------------------
 
@@ -214,23 +232,25 @@ class PerceptionKit:
         可以关掉，由调用方自己按更大的范围重算）。重算那条路已经会排除
         被撤回的观测。
         """
-        outcome = apply_retractions(self.storage, list(retractions),
-                                    signals=dict(self.signals), now=now)
-        if recompute:
-            # 🔴 受影响那几天的聚合**在这里真的重算并写回**。
-            #
-            # 早先只返回一个"有几天受影响"的计数，调用方拿不到是哪几天，
-            # 于是谁也没去重算 —— 撤回记下了、当前值改了，而存着的日聚合
-            # 原封不动。测试当时是直接调 recompute_day 验纯函数，所以是绿的：
-            # **它验的是那个函数会算对，不是这条路会去调它。**
-            for subject_id, signal, day in sorted(outcome.affected_days):
-                self.recompute_aggregates(
-                    subject_id=subject_id, signal=signal,
-                    start=day, end=day, now=now,
-                    # 明细可能已经按保留期清掉了。清掉之后重算会得到一份
-                    # 残缺统计，而那比"没重算"更糟 —— 旧值已经被覆盖。
-                    allow_incomplete=False,
-                )
+        # 🔴 受影响那几天的聚合**真的会重算并写回**，而且跟记撤回在同一个
+        # 事务里。早先只返回一个"有几天受影响"的计数，调用方拿不到是哪几天，
+        # 于是谁也没去重算；后来虽然重算了，却是在事务**外面**做的 ——
+        # 撤回提交了、重算崩了，两边再也对不上，下一轮还以为上一轮成功了。
+        def _rebuild(subject_id: str, signal: str, day) -> None:
+            self.recompute_aggregates(
+                subject_id=subject_id, signal=signal,
+                start=day, end=day, now=now,
+                # 明细可能已经按保留期清掉了。清掉之后重算会得到一份
+                # 残缺统计，而那比"没重算"更糟 —— 旧值已经被覆盖。
+                allow_incomplete=False,
+            )
+
+        outcome = apply_retractions(
+            self.storage, list(retractions),
+            signals=dict(self.signals), now=now,
+            # 重算跟着撤回走在**同一个事务**里，见 apply_retractions。
+            on_affected_day=_rebuild if recompute else None,
+        )
         return outcome
 
     def run_retention(

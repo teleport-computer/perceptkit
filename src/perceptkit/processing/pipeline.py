@@ -37,6 +37,7 @@ from ..contracts.records import (
 from ..contracts.report import ReportEnvelope
 from ..manifest.types import SignalDefinition
 from ..ports.storage import StoragePort
+from .retract import is_retracted
 from ..rules.types import EventDefinition
 from . import aggregate as _aggregate
 from .dispatch import evaluate_and_enqueue
@@ -64,6 +65,9 @@ class IngestOutcome:
     rejected: list[tuple[int, tuple[str, ...]]] = field(default_factory=list)
     #: 同一时刻同一版本但内容不同 —— 不静默挑一个，交给宿主决定。
     conflicts: list[NormalizedObservation] = field(default_factory=list)
+    #: 来源早就撤回过这条事实，这次投递不作数（重传 / 乱序 / 补传）。
+    #: 不是错误，也不是重复 —— 单独一栏，宿主排查"我删了怎么又回来了"时要用。
+    retracted: list[NormalizedObservation] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     #: 这批上报产生的事件（已经落进发件箱，还没投）。
     events: list[Any] = field(default_factory=list)
@@ -197,6 +201,15 @@ def _repeats_declared_state(
     """
     if item.stored.availability != "observed":
         return False
+    # 🔴 来源给了这条事实自己的身份，它就是**一件独立的事**，不是保活重复。
+    #
+    #     这条规则防的是 iOS 每 5 分钟一次的保活上报（"还在专注""还在静止"），
+    #     那些信号没有上游身份，只能靠"内容没变"认重复。而睡眠、经期这类
+    #     HealthKit 样本每条都带着自己的 uuid 和起止时间 —— 同一晚两段 core
+    #     是两条真实事实，判成重复就把那一晚的一半直接丢了，不报错。
+    #     （外部审查 F1：30+45 的一晚只留下 30）
+    if sig.identity_strategy == "source_event_id":
+        return False
     watched = [f.key for f in sig.fields if f.comparison_strategy == "state_change"]
     if not watched:
         return False
@@ -229,15 +242,33 @@ def _apply_one(
     """
     stored = item.stored
 
+    # ②·5 来源撤回过的事实，不许被迟到的样本复活。
+    #
+    #     撤回先到、原样本后到是常态（重传、乱序、补传）。不查的话这条后到
+    #     的样本会被当成一条新事实：当前值和日聚合又变回那个已经被用户在
+    #     健康 app 里删掉的数 —— 删了，过一会儿自己回来了（外部审查 F2）。
+    #
+    #     放在幂等检查**之前**：这条根本不该进来，不是"进来过所以跳过"。
+    if is_retracted(
+        storage, subject_id=context.subject_id, signal=stored.signal,
+        source=stored.source, source_event_id=stored.source_event_id,
+    ):
+        outcome.retracted.append(item)
+        return
+
     # ③ 观测级幂等。问的是【投递身份】不是【事实身份】——用事实身份去重会把
     #    "同一条事实的新版本"(电量的新读数、样本的修订)误判成重传丢掉。
     #    也不是问"这条观测还在不在"：明细可能已经按保留期删掉了。
-    if storage.has_seen_identity(
-        subject_id=context.subject_id, signal=stored.signal,
-        source=stored.source, digest=item.identity_digest,
-    ):
-        outcome.duplicates.append(item)
-        return
+    #     ⚠️ 升级前落库的旧数据记的是**旧摘要**（身份里带着 occurred_at）。
+    #     只查新摘要的话，升级后同一条样本第一次重传会认不出来、再加一遍 ——
+    #     把"每次重传都翻倍"换成"升级当天翻一次"，那不叫修好。两个都查。
+    for digest in (item.identity_digest, item.legacy_identity_digest):
+        if digest and storage.has_seen_identity(
+            subject_id=context.subject_id, signal=stored.signal,
+            source=stored.source, digest=digest,
+        ):
+            outcome.duplicates.append(item)
+            return
 
     # ④ 写观测。只留当前值的信号不写明细 —— 否则 current_only 名不副实。
     #

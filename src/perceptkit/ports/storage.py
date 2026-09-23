@@ -231,6 +231,25 @@ class StoragePort(Protocol):
         """
         ...
 
+    def scrub_event_snapshots(
+        self, *, subject_id: str, signal: str,
+        source: str, source_event_id: str,
+    ) -> int:
+        """把被撤回那条事实触发过的事件里的**原值**抹掉，返回改了几条。
+
+        用户在健康 app 里删掉一条体重之后，"体重 72kg 触发了涨重提醒"
+        这条记录里的 72 也不该再留着 —— 那是"删除不再提供原值"的延伸
+        （hx 2026-09-17 拍板）。
+
+        **记录本身留着**：只把 ``fact_snapshot`` 里的数值换成"已删除"的标记，
+        整条删掉的话"这条提醒当初为什么发"就再也解释不清了。
+        已经投递出去的消息不回收 —— 那是已经发生的事。
+
+        ⚠️ **可选方法。** 宿主没实现时 kit 跳过并照常完成撤回的其余部分 ——
+        那等于"事件记录里的旧值还留着"，是个已知缺口，不是故障。
+        """
+        ...
+
     def list_retractions(
         self, *, subject_id: str, signal: str,
         source_event_ids: Sequence[str] | None = None,

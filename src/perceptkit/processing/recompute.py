@@ -28,6 +28,8 @@ from ..contracts.records import DailyAggregate
 from ..manifest.types import PERMANENT, SignalDefinition
 from ..ports.storage import StoragePort
 from . import aggregate as _aggregate
+from .retract import canonical_revisions as _canonical
+from .retract import drop_retracted as _drop_retracted
 
 
 @dataclass
@@ -61,87 +63,6 @@ def details_may_be_incomplete(
         return True                     # 根本不存明细，无从重算
     cutoff = today - timedelta(days=sig.history_retention_days)
     return day < cutoff
-
-
-def _revision_key(raw: object) -> tuple[int, str]:
-    """修订号的比较键。数字按数字比，其余按字符串比，两者不混。
-
-    ``"10"`` 和 ``10`` 是不同的东西：全按字符串比的话 ``"10" < "9"``，
-    第 10 版会被第 9 版盖掉。所以数字排一档、字符串排另一档，
-    并且**数字档永远小于字符串档**——不给两个不可比的值编一个假的顺序。
-    """
-    if raw is None:
-        return (0, "")
-    text = str(raw)
-    try:
-        return (1, f"{int(text):020d}")
-    except ValueError:
-        return (2, text)
-
-
-def _canonical(rows: list, sig: SignalDefinition) -> list:
-    """同一件源事实的多个修订，只留最新那一版。
-
-    ``source_revision`` 原来只用在当前值上（高版本替换低版本），**历史和聚合
-    完全没用它**。于是修订过的那天会同时折进错值和改正值：
-
-        体重 70.5kg（revision 1）→ 用户在健康 app 里改成 68.5（revision 2）
-        重算那天 → 两条都在 → 平均值 69.5，一个从来没发生过的数字
-
-    而且这个错**只有重算时才现形**：当前值那条路是对的，所以"改过之后当前
-    显示对了"会让人以为整条链路都对了。
-
-    只对按 ``source_event_id`` 定身份的信号生效 —— 别的信号一条观测就是
-    一件独立的事，本来就不该合并。
-    """
-    if sig.identity_strategy != "source_event_id":
-        return rows
-    groups: dict[str, list] = {}
-    for o in rows:
-        if o.source_event_id is not None:       # 没有源身份的，各算各的
-            groups.setdefault(o.source_event_id, []).append(o)
-
-    winners = set()
-    for key, members in groups.items():
-        # **一组里全都没有修订号 = 没有"哪版更新"的信息，一条都不合并。**
-        # 合并的话就等于替这些观测编一个"后来的覆盖先来的"的顺序，而那正好
-        # 是 `cumulative` 现在**不**采用的规则（它取 max）—— 重算和增量折叠
-        # 会给出两个不同的数，同一份数据看你从哪条路读。
-        # 修订语义该不该改成"最新的赢"是另一件事，得先定，不能从这里溜进去。
-        if all(o.source_revision is None for o in members):
-            winners.update(id(o) for o in members)
-            continue
-        best = max(members, key=lambda o: (_revision_key(o.source_revision),
-                                           o.occurred_at, o.observation_id))
-        winners.add(id(best))
-    return [o for o in rows if o.source_event_id is None or id(o) in winners]
-
-
-def _drop_retracted(storage: StoragePort, rows: list, *,
-                    subject_id: str, signal: str) -> list:
-    """去掉来源已经撤回的那些观测。
-
-    **不是把观测删掉，是折聚合时不算它。** 观测留着，"那天曾经有条记录、
-    后来被来源删了"才答得出来；抹掉的话那天只是凭空少一块，没人说得清为什么。
-
-    宿主没实现撤回端口时原样返回 —— 那等于"从不撤回"，是安全的那一边：
-    宁可多留一条已经被删的旧数据，也不要因为端口缺失把好数据当成撤回删掉。
-    """
-    ids = {o.source_event_id for o in rows if o.source_event_id}
-    if not ids:
-        return rows
-    lookup = getattr(storage, "list_retractions", None)
-    if lookup is None:
-        return rows
-    # 🔴 (source, id) 成对比，不能只比 id。同一个 subject 下 iOS 和 Google
-    # 完全可能用同一个 source_event_id —— 只比 id 的话，撤回 iOS 那条会
-    # 把 Google 那条一起从聚合里踢掉。
-    retracted = {(r.source, r.source_event_id) for r in lookup(
-        subject_id=subject_id, signal=signal, source_event_ids=sorted(ids))}
-    if not retracted:
-        return rows
-    return [o for o in rows
-            if (o.source, o.source_event_id) not in retracted]
 
 
 def recompute_day(

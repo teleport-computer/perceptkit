@@ -30,6 +30,7 @@ from ..algorithms import history as _history
 from ..algorithms import trend_models as _trend
 from ..manifest.types import SignalDefinition
 from ..ports.storage import StoragePort
+from ..processing.retract import drop_retracted
 from ..processing import recurrence as _recurrence
 
 #: 所有 list 查询的默认与硬上限。agent 问一句"我这个月都去过哪"，
@@ -186,15 +187,29 @@ def list_timeline(
         subject_id=subject_id, signal=signal, start=start, end=end,
         cursor=cursor, limit=_clamp(limit),
     )
-    out = [
-        {
+    # 被来源撤回的那些：**行留着、数值不给**。
+    #
+    # 用户在健康 app 里删掉一条体重，要的是"它没了"，不是"它还在历史里
+    # 躺着"。但整行抹掉的话，"这天为什么少一块"就再也答不出来 —— 所以
+    # 留一条没有数值的记录，并明确标成 retracted（外部审查 F2）。
+    #
+    # availability 用既有的 `unavailable`，不新造状态值：老读者看到的是
+    # "这个数据拿不到"，行为本来就对；新读者看 `retracted` 知道为什么。
+    kept = set(id(o) for o in drop_retracted(
+        storage, list(rows), subject_id=subject_id, signal=signal))
+    out = []
+    for o in rows:
+        gone = id(o) not in kept
+        row = {
             "occurred_at": o.occurred_at.isoformat(),
-            "availability": o.availability,
-            "value": project(sig, o.typed_value, on_demand=on_demand) if sig else None,
+            "availability": "unavailable" if gone else o.availability,
+            "value": None if gone else (
+                project(sig, o.typed_value, on_demand=on_demand) if sig else None),
             "local_date": o.effective_local_date.isoformat(),
         }
-        for o in rows
-    ]
+        if gone:
+            row["retracted"] = True
+        out.append(row)
     return out, nxt
 
 
@@ -436,11 +451,29 @@ def list_definitions(
     return out
 
 
+def _drain(fetch, *, cap: int | None) -> tuple[list[Any], bool]:
+    """把一个分页查询**读到底**，返回 ``(全部行, 有没有被 cap 截断)``。
+
+    只读第一页是这里最坏的形态：用户以为"把我的数据给我"拿到了全部，
+    实际第 501 条起直接消失，返回里没有任何线索（外部审查 F9）。
+    ``MAX_LIMIT`` 是为**模型上下文**设的预算，不该拿来限制用户自己的数据。
+    """
+    out: list[Any] = []
+    cursor = None
+    while True:
+        rows, cursor = fetch(cursor, MAX_LIMIT)
+        out.extend(rows)
+        if cap is not None and len(out) >= cap:
+            return out[:cap], True
+        if not cursor:
+            return out, False
+
+
 def export_subject(
     storage: StoragePort, *, subject_id: str,
     manifest: Mapping[str, SignalDefinition],
     start: datetime | None = None, end: datetime | None = None,
-    per_signal_limit: int = MAX_LIMIT,
+    per_signal_limit: int | None = None,
 ) -> dict[str, Any]:
     """把一个人的全部感知数据导出来。
 
@@ -458,16 +491,39 @@ def export_subject(
     """
     signals = sorted(manifest)
     observations: dict[str, list[dict[str, Any]]] = {}
+    daily: dict[str, list[dict[str, Any]]] = {}
+    truncated: list[str] = []
     for signal in signals:
-        rows, _ = list_timeline(
-            storage, subject_id=subject_id, signal=signal, manifest=manifest,
-            start=start, end=end, limit=per_signal_limit,
-            # 导出给用户本人，所以按需字段也要给；
-            # `query_visibility="never"` 的仍然不给 —— 那些**根本没存**。
-            on_demand=True,
+        rows, cut = _drain(
+            lambda cursor, limit, _s=signal: list_timeline(
+                storage, subject_id=subject_id, signal=_s, manifest=manifest,
+                start=start, end=end, cursor=cursor, limit=limit,
+                # 导出给用户本人，所以按需字段也要给；
+                # `query_visibility="never"` 的仍然不给 —— 那些**根本没存**。
+                on_demand=True,
+            ),
+            cap=per_signal_limit,
         )
         if rows:
             observations[signal] = rows
+        if cut:
+            truncated.append(signal)
+
+        # 日聚合也得给。明细有保留期、日统计是永久的 —— 明细清掉之后，
+        # 日统计就是用户那段历史**仅剩**的东西。不给等于把留存最久的
+        # 那一份漏掉了，而且没人会发现。
+        aggs = storage.get_aggregate(
+            subject_id=subject_id, signal=signal,
+            start_date=_ALL_TIME_START, end_date=_ALL_TIME_END,
+            aggregation_kind="daily",
+        )
+        if aggs:
+            daily[signal] = [
+                {"date": a.local_date.isoformat(), "value": a.typed_aggregate,
+                 "aggregation_version": a.aggregation_version}
+                for a in sorted(aggs, key=lambda a: (a.local_date,
+                                                     a.aggregation_version))
+            ]
 
     current = {
         signal: {"state": view.state, "value": view.value,
@@ -484,18 +540,31 @@ def export_subject(
         "kit_managed_only": True,
         "current": current,
         "observations": observations,
-        # 导出取第一页 —— 一个人的日历镜像是有界的，per_signal_limit 已经够大。
-        "calendar_events": list_calendar_events(
-            storage, subject_id=subject_id, start=start, end=end,
-            limit=per_signal_limit)[0],
-        "reminders": list_reminders(storage, subject_id=subject_id,
-                                    include_completed=True,
-                                    limit=per_signal_limit)[0],
-        # 导出取第一页就够 —— 待投递的事件不是"用户的数据"，
-        # 是我们还没送到的东西，列在这里只为完整。
-        "pending_events": list_events(storage, subject_id=subject_id,
-                                      limit=per_signal_limit)[0],
+        "daily_aggregates": daily,
+        # 哪几类被 per_signal_limit 截断了。**空列表 = 真的是全部**，
+        # 不给这一栏的话，"少给了一截"和"本来就这么多"分辨不出来。
+        "truncated": truncated,
+        "calendar_events": _drain(
+            lambda cursor, limit: list_calendar_events(
+                storage, subject_id=subject_id, start=start, end=end,
+                cursor=cursor, limit=limit),
+            cap=per_signal_limit)[0],
+        "reminders": _drain(
+            lambda cursor, limit: list_reminders(
+                storage, subject_id=subject_id, include_completed=True,
+                cursor=cursor, limit=limit),
+            cap=per_signal_limit)[0],
+        # 待投递的事件不是"用户的数据"，是我们还没送到的东西，列在这里只为完整。
+        "pending_events": _drain(
+            lambda cursor, limit: list_events(
+                storage, subject_id=subject_id, cursor=cursor, limit=limit),
+            cap=per_signal_limit)[0],
     }
+
+
+#: 导出时拿"全时段"去取聚合 —— 这个包不读时钟，所以用固定边界而不是 today()。
+_ALL_TIME_START = date(1, 1, 1)
+_ALL_TIME_END = date(9999, 12, 31)
 
 
 def _far_future() -> datetime:

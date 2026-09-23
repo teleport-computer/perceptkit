@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import date, datetime, timezone
 
 #: 排序时给「没有时间」的条目垫底用的哨兵，不参与任何业务判断。
@@ -246,6 +247,23 @@ class InMemoryStorage:
             return False
         self.retractions[key] = retraction
         return True
+
+    def scrub_event_snapshots(self, *, subject_id, signal, source, source_event_id) -> int:
+        hit = 0
+        for event_id, entry in list(self.outbox.items()):
+            if (entry.subject_id, entry.source, entry.source_event_id) != (
+                    subject_id, source, source_event_id):
+                continue
+            snap = dict(entry.fact_snapshot or {})
+            if snap.get("retracted"):
+                continue
+            # 只抹数值，留下"触发过、而且触发它的数据已被删除"。
+            snap["previous"] = None
+            snap["current"] = None
+            snap["retracted"] = True
+            self.outbox[event_id] = replace(entry, fact_snapshot=snap)
+            hit += 1
+        return hit
 
     def list_retractions(self, *, subject_id, signal, source_event_ids=None):
         wanted = set(source_event_ids) if source_event_ids is not None else None
