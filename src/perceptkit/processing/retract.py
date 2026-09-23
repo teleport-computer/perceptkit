@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Sequence
 
 from ..contracts.records import CurrentProjection
 from ..contracts.retraction import Retraction
@@ -61,6 +61,7 @@ def apply_retractions(
     *,
     signals: dict[str, SignalDefinition],
     now: datetime,
+    on_affected_day: Callable[[str, str, date], None] | None = None,
 ) -> RetractionOutcome:
     """记下撤回，重选当前值，报出受影响的日期。
 
@@ -73,9 +74,14 @@ def apply_retractions(
 
     with storage.transaction():
         for r in retractions:
-            if not storage.record_retraction(r):
-                continue                     # 重传，已经记过
-            outcome.recorded += 1
+            # 🔴 已经记过**不等于收尾做完了**。
+            #
+            #    原来是 `记过了 → continue`：而第一次很可能正是崩在后面的
+            #    重算那一步 —— 撤回提交了、聚合还是被删掉的那个数字，重试
+            #    进来直接跳过，于是永远补不回来（外部审查 F3）。
+            #    下面这些（重选当前值、报受影响日期、重算）都是幂等的，
+            #    重做一遍没有副作用；跳过才有。
+            outcome.recorded += 1 if storage.record_retraction(r) else 0
             sig = signals.get(r.signal)
             if sig is None:
                 # 信号不在 manifest 里：撤回照样记下（它是事实），
@@ -84,6 +90,10 @@ def apply_retractions(
                 continue
             for day in _affected_days(storage, r):
                 outcome.affected_days.add((r.subject_id, r.signal, day))
+                if on_affected_day is not None:
+                    # 🔴 **在同一个事务里重算。** 放到事务外面的话，撤回提交了、
+                    #    重算崩了，两边就再也对不上，而下一轮以为上一轮成功了。
+                    on_affected_day(r.subject_id, r.signal, day)
             state = _reselect_current(storage, r, sig, now=now)
             if state == "reselected":
                 outcome.reselected += 1

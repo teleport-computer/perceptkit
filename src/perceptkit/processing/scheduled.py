@@ -158,27 +158,32 @@ def evaluate_daily(
 
     宿主在跨日时调用（每个 subject 一次），不要跟着观测跑。
     """
+    # 🔴 **整趟求值包在一个事务里。** 求值会依次写「规则状态」和「待发事件」，
+    #    分开提交的话：状态标成"今天已触发"、写事件时崩了 —— 重试看到
+    #    "今天已经触发过了"，那次提醒永远不会发出去，而且没有任何报错。
+    #    ingest 那条路本来就是包着的，这两个定时入口漏了（外部审查 F4）。
     outcome = ScheduledOutcome()
     context = IngestContext(subject_id=subject_id, received_at=now)
 
-    for definition in definitions:
-        if definition.condition_type != "streak" or not definition.enabled:
-            continue
-        signal = signals.get(definition.signal)
-        if signal is None:
-            continue
-        length = streak_length(
-            storage, definition, signal, subject_id=subject_id, through=local_date,
-        )
-        item = _fake_observation(signal, subject_id=subject_id, when=now, day=local_date)
-        rules: RuleOutcome = evaluate_and_enqueue(
-            item, context=context, storage=storage, definitions=[definition],
-            extra_evaluators=extra_evaluators,
-            extra_context={"streak_length": length},
-            signal_definition=signal,
-        )
-        outcome.events.extend(rules.events)
-        outcome.misses.extend(rules.misses)
+    with storage.transaction():
+        for definition in definitions:
+            if definition.condition_type != "streak" or not definition.enabled:
+                continue
+            signal = signals.get(definition.signal)
+            if signal is None:
+                continue
+            length = streak_length(
+                storage, definition, signal, subject_id=subject_id, through=local_date,
+            )
+            item = _fake_observation(signal, subject_id=subject_id, when=now, day=local_date)
+            rules: RuleOutcome = evaluate_and_enqueue(
+                item, context=context, storage=storage, definitions=[definition],
+                extra_evaluators=extra_evaluators,
+                extra_context={"streak_length": length},
+                signal_definition=signal,
+            )
+            outcome.events.extend(rules.events)
+            outcome.misses.extend(rules.misses)
     return outcome
 
 
@@ -196,38 +201,43 @@ def evaluate_absence(
     **静默时长从当前值的观测时刻算起** —— 用当前值而不是翻观测明细，
     因为明细可能已经按保留期清理掉了，而当前值一定还在。
     """
+    # 🔴 **整趟求值包在一个事务里。** 求值会依次写「规则状态」和「待发事件」，
+    #    分开提交的话：状态标成"今天已触发"、写事件时崩了 —— 重试看到
+    #    "今天已经触发过了"，那次提醒永远不会发出去，而且没有任何报错。
+    #    ingest 那条路本来就是包着的，这两个定时入口漏了（外部审查 F4）。
     outcome = ScheduledOutcome()
     context = IngestContext(subject_id=subject_id, received_at=now)
 
-    for definition in definitions:
-        if definition.condition_type != "absence" or not definition.enabled:
-            continue
-        signal = signals.get(definition.signal)
-        if signal is None:
-            continue
+    with storage.transaction():
+        for definition in definitions:
+            if definition.condition_type != "absence" or not definition.enabled:
+                continue
+            signal = signals.get(definition.signal)
+            if signal is None:
+                continue
 
-        projections = storage.get_current(
-            subject_id=subject_id, signals=[definition.signal]
-        ).get(definition.signal) or []
-        if not projections:
-            # 从来没有过数据。**不触发** —— "你三天没记录体重了"对一个
-            # 从没记过体重的用户来说是句莫名其妙的话。
-            outcome.misses.append((definition.definition_id, "这个信号从来没有过数据"))
-            continue
+            projections = storage.get_current(
+                subject_id=subject_id, signals=[definition.signal]
+            ).get(definition.signal) or []
+            if not projections:
+                # 从来没有过数据。**不触发** —— "你三天没记录体重了"对一个
+                # 从没记过体重的用户来说是句莫名其妙的话。
+                outcome.misses.append((definition.definition_id, "这个信号从来没有过数据"))
+                continue
 
-        last = max(p.observed_at for p in projections)
-        silent = (now - last).total_seconds()
-        item = _fake_observation(
-            signal, subject_id=subject_id, when=now, day=now.date(),
-        )
-        rules = evaluate_and_enqueue(
-            item, context=context, storage=storage, definitions=[definition],
-            extra_evaluators=extra_evaluators,
-            extra_context={"silent_seconds": silent},
-            signal_definition=signal,
-        )
-        outcome.events.extend(rules.events)
-        outcome.misses.extend(rules.misses)
+            last = max(p.observed_at for p in projections)
+            silent = (now - last).total_seconds()
+            item = _fake_observation(
+                signal, subject_id=subject_id, when=now, day=now.date(),
+            )
+            rules = evaluate_and_enqueue(
+                item, context=context, storage=storage, definitions=[definition],
+                extra_evaluators=extra_evaluators,
+                extra_context={"silent_seconds": silent},
+                signal_definition=signal,
+            )
+            outcome.events.extend(rules.events)
+            outcome.misses.extend(rules.misses)
     return outcome
 
 

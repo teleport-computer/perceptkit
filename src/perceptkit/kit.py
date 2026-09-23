@@ -214,23 +214,25 @@ class PerceptionKit:
         可以关掉，由调用方自己按更大的范围重算）。重算那条路已经会排除
         被撤回的观测。
         """
-        outcome = apply_retractions(self.storage, list(retractions),
-                                    signals=dict(self.signals), now=now)
-        if recompute:
-            # 🔴 受影响那几天的聚合**在这里真的重算并写回**。
-            #
-            # 早先只返回一个"有几天受影响"的计数，调用方拿不到是哪几天，
-            # 于是谁也没去重算 —— 撤回记下了、当前值改了，而存着的日聚合
-            # 原封不动。测试当时是直接调 recompute_day 验纯函数，所以是绿的：
-            # **它验的是那个函数会算对，不是这条路会去调它。**
-            for subject_id, signal, day in sorted(outcome.affected_days):
-                self.recompute_aggregates(
-                    subject_id=subject_id, signal=signal,
-                    start=day, end=day, now=now,
-                    # 明细可能已经按保留期清掉了。清掉之后重算会得到一份
-                    # 残缺统计，而那比"没重算"更糟 —— 旧值已经被覆盖。
-                    allow_incomplete=False,
-                )
+        # 🔴 受影响那几天的聚合**真的会重算并写回**，而且跟记撤回在同一个
+        # 事务里。早先只返回一个"有几天受影响"的计数，调用方拿不到是哪几天，
+        # 于是谁也没去重算；后来虽然重算了，却是在事务**外面**做的 ——
+        # 撤回提交了、重算崩了，两边再也对不上，下一轮还以为上一轮成功了。
+        def _rebuild(subject_id: str, signal: str, day) -> None:
+            self.recompute_aggregates(
+                subject_id=subject_id, signal=signal,
+                start=day, end=day, now=now,
+                # 明细可能已经按保留期清掉了。清掉之后重算会得到一份
+                # 残缺统计，而那比"没重算"更糟 —— 旧值已经被覆盖。
+                allow_incomplete=False,
+            )
+
+        outcome = apply_retractions(
+            self.storage, list(retractions),
+            signals=dict(self.signals), now=now,
+            # 重算跟着撤回走在**同一个事务**里，见 apply_retractions。
+            on_affected_day=_rebuild if recompute else None,
+        )
         return outcome
 
     def run_retention(
