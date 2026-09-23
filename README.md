@@ -28,8 +28,11 @@ kit.dispatch_pending(worker_id="w1", now=now)
 同一个包装到四个宿主上、四种可靠性。所以顺序在包里定死，你只填被调用的方法体。
 就像你写 React 组件但不决定什么时候渲染。
 
-**现状：还没发布到 PyPI**，`pip install perceptkit` 现在装不到东西。
-能确认好用的两条路：
+```bash
+pip install perceptkit        # 也可以 uv add perceptkit
+```
+
+从源码跑（改它、或者想先看看它怎么判断）：
 
 ```bash
 git clone git@github.com:teleport-computer/perceptkit.git
