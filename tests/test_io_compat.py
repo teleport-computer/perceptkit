@@ -166,6 +166,10 @@ def test_host_reports_produce_byte_identical_results_to_v070():
     旧数据不受影响：入口同时查新旧两个摘要，见 pipeline ③ 和
     `test_an_identity_remembered_before_the_upgrade_still_blocks_a_re_upload`。
 
+    2026-09-22 第三次：发件箱记录多了 source / source_event_id 两栏（撤回时
+    靠它找到"这条提醒是被哪条数据触发的"）。**刻意没进投出去的信封** ——
+    信封是宿主接的公开契约，多一个键所有接入方都得改。纯新增，没有行为变化。
+
     再有 diff 一律当成回归，别顺手重新生成 golden。
     """
     golden = (FIXTURES / "golden_v0.7.0.json").read_text()

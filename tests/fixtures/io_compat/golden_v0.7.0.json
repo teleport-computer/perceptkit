@@ -5890,6 +5890,8 @@
     "lease_owner": null,
     "next_attempt_at": null,
     "occurred_at": "2026-09-01T00:40:00+00:00",
+    "source": "ios_device_event",
+    "source_event_id": "ev-2",
     "subject_id": "u-compat"
    },
    "evt_32f17362810b344d90ef84b27d2cf115": {
@@ -5929,6 +5931,8 @@
     "lease_owner": null,
     "next_attempt_at": null,
     "occurred_at": "2026-09-01T00:20:00+00:00",
+    "source": "ios_location",
+    "source_event_id": null,
     "subject_id": "u-compat"
    },
    "evt_46aca310601d540b81ad7856c124c680": {
@@ -5968,6 +5972,8 @@
     "lease_owner": null,
     "next_attempt_at": null,
     "occurred_at": "2026-09-01T00:15:00+00:00",
+    "source": "ios_location",
+    "source_event_id": null,
     "subject_id": "u-compat"
    },
    "evt_4c72718cd6be54f578025d5b103de887": {
@@ -6007,6 +6013,8 @@
     "lease_owner": null,
     "next_attempt_at": null,
     "occurred_at": "2026-09-01T00:25:00+00:00",
+    "source": "ios_location",
+    "source_event_id": null,
     "subject_id": "u-compat"
    },
    "evt_7b20ac8c3edef12056563e06dc0bfd11": {
@@ -6047,6 +6055,8 @@
     "lease_owner": null,
     "next_attempt_at": null,
     "occurred_at": "2026-09-01T08:05:00+08:00",
+    "source": "ios",
+    "source_event_id": null,
     "subject_id": "u-compat"
    },
    "evt_8451d59bc0094e34ff65ab1346bde3e2": {
@@ -6086,6 +6096,8 @@
     "lease_owner": null,
     "next_attempt_at": null,
     "occurred_at": "2026-09-01T00:43:00+00:00",
+    "source": "ios_device_event",
+    "source_event_id": null,
     "subject_id": "u-compat"
    },
    "evt_95f8c255f38bef95cba2131255a06bde": {
@@ -6125,6 +6137,8 @@
     "lease_owner": null,
     "next_attempt_at": null,
     "occurred_at": "2026-09-01T00:32:00+00:00",
+    "source": "ios_photo",
+    "source_event_id": "ph-2",
     "subject_id": "u-compat"
    },
    "evt_bd6523ce2a40d573506b3140e00a8b81": {
@@ -6165,6 +6179,8 @@
     "lease_owner": null,
     "next_attempt_at": null,
     "occurred_at": "2026-09-02T08:00:00+08:00",
+    "source": "ios",
+    "source_event_id": null,
     "subject_id": "u-compat"
    },
    "evt_c13752927a63a34001578874f5672cd3": {
@@ -6205,6 +6221,8 @@
     "lease_owner": null,
     "next_attempt_at": null,
     "occurred_at": "2026-09-01T08:02:00+08:00",
+    "source": "ios",
+    "source_event_id": null,
     "subject_id": "u-compat"
    },
    "evt_e279a0da3565ceb378829ddb0a370460": {
@@ -6244,6 +6262,8 @@
     "lease_owner": null,
     "next_attempt_at": null,
     "occurred_at": "2026-09-01T00:31:00+00:00",
+    "source": "ios_photo",
+    "source_event_id": "ph-1",
     "subject_id": "u-compat"
    },
    "evt_ebc1dd85e62be6870cd8752ae381a7b1": {
@@ -6283,6 +6303,8 @@
     "lease_owner": null,
     "next_attempt_at": null,
     "occurred_at": "2026-09-01T00:42:00+00:00",
+    "source": "ios_device_event",
+    "source_event_id": null,
     "subject_id": "u-compat"
    },
    "evt_efdd6140bcdf4ca6dded513274dfb5ce": {
@@ -6323,6 +6345,8 @@
     "lease_owner": null,
     "next_attempt_at": null,
     "occurred_at": "2026-09-01T08:08:00+08:00",
+    "source": "ios",
+    "source_event_id": null,
     "subject_id": "u-compat"
    },
    "evt_f4d2cd9cbc74c53406a92ae604edc97d": {
@@ -6362,6 +6386,8 @@
     "lease_owner": null,
     "next_attempt_at": null,
     "occurred_at": "2026-09-01T00:33:00+00:00",
+    "source": "ios_device_event",
+    "source_event_id": "ev-1",
     "subject_id": "u-compat"
    }
   },

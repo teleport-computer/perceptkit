@@ -51,6 +51,8 @@ class RetractionOutcome:
     #: 当前值连续写入竞争失败的次数。**不算成功。**
     contended: int = 0
     affected_days: set[tuple[str, str, date]] = field(default_factory=set)
+    #: 顺带抹掉了几条事件记录里的原值（宿主没实现那个可选端口时恒为 0）。
+    scrubbed_events: int = 0
     #: 撤回记下了，但信号不在 manifest 里，没法重选。
     unknown_signals: list[str] = field(default_factory=list)
 
@@ -94,6 +96,18 @@ def apply_retractions(
                     # 🔴 **在同一个事务里重算。** 放到事务外面的话，撤回提交了、
                     #    重算崩了，两边就再也对不上，而下一轮以为上一轮成功了。
                     on_affected_day(r.subject_id, r.signal, day)
+            # 引用这条事实的提醒记录，里面的原值也抹掉。宿主没实现这个
+            # 可选端口时跳过 —— 那是已知缺口（事件里的旧值还留着），不是故障。
+            scrub = getattr(storage, "scrub_event_snapshots", None)
+            if callable(scrub) and r.source_event_id:
+                try:
+                    outcome.scrubbed_events += scrub(
+                        subject_id=r.subject_id, signal=r.signal,
+                        source=r.source, source_event_id=r.source_event_id,
+                    ) or 0
+                except NotImplementedError:
+                    pass
+
             state = _reselect_current(storage, r, sig, now=now)
             if state == "reselected":
                 outcome.reselected += 1
