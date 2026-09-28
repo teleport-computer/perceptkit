@@ -45,6 +45,7 @@ from .dispatch import evaluate_and_enqueue
 from .normalize import NormalizedObservation, _canonical, normalize_observations
 from .facts import decide_fact, durable_identity, detail_proves_revision
 from .mutation import acquire_ingest
+from .conflicts import record_conflict, blocked_by_pending, relative_jump_reason, resolve_pending
 
 #: 聚合算法的版本。改了口径就加这个数并重算，**不原地改写旧统计的语义** ——
 #: 否则同一张表里一半是老口径一半是新口径，而且看不出来。
@@ -204,6 +205,8 @@ def ingest_report(
 
         for item in normalized.normalized:
             if item.fact_key in blocked:
+                record_conflict(storage, item, kind="fact_revision", reason="ambiguous_batch_revision",
+                                now=context.received_at)
                 outcome.conflicts.append(item)
                 continue
             sig = signals[item.stored.signal]
@@ -310,6 +313,8 @@ def _apply_one(
     if sig.identity_strategy == "source_event_id" and stored.source_event_id:
         fact_decision, prior_revisions, reason = decide_fact(storage, item, sig)
         if fact_decision == "conflict":
+            record_conflict(storage, item, kind="fact_revision", reason=reason or "same_fact_revision_different_content",
+                            now=context.received_at)
             outcome.conflicts.append(item)
             return
         if fact_decision == "duplicate":
@@ -345,6 +350,19 @@ def _apply_one(
         source=stored.source, digest=item.identity_digest,
     ):
         outcome.duplicates.append(item)
+        return
+
+    if blocked_by_pending(storage, item):
+        record_conflict(storage, item, kind="pending_revision", reason="pending_conflict_requires_higher_revision",
+                        now=context.received_at)
+        outcome.conflicts.append(item)
+        return
+
+    jump_reason = relative_jump_reason(storage, item, sig, correction=bool(prior_revisions))
+    if jump_reason:
+        record_conflict(storage, item, kind="relative_jump", reason=jump_reason,
+                        now=context.received_at)
+        outcome.conflicts.append(item)
         return
 
     # ④ 写观测。只留当前值的信号不写明细 —— 否则 current_only 名不副实。
@@ -416,6 +434,7 @@ def _apply_one(
                                definitions=definitions, definition_at=definition_at, days=days)
         rebuild_rules(storage, subject=stored.subject_id, signal=sig, scopes=scopes,
                       extra_evaluators=extra_evaluators)
+        resolve_pending(storage, item, now=context.received_at)
         outcome.applied.append(item)
         return
 
@@ -449,6 +468,7 @@ def _apply_one(
             ("*", f"未求值：availability={stored.availability}，当前值决策={decision}")
         )
 
+    resolve_pending(storage, item, now=context.received_at)
     outcome.applied.append(item)
 
 
@@ -544,6 +564,10 @@ def _update_current(
                 source_revision=stored.source_revision,
                 version=(existing.version + 1) if existing else 0,
                 content_digest=candidate_item.content_digest,
+                timezone=stored.timezone,
+                timezone_source=stored.timezone_source,
+                source_units=stored.source_units,
+                source_values=stored.source_values,
             ),
             expected_version=existing.version if existing else -1,
         ):

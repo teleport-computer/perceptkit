@@ -1,5 +1,15 @@
 # 变更记录
 
+In development (not released) — consistency contract D07–D09:
+
+- Pending Fact/anomaly conflicts now persist as queryable ConflictRecords;
+  strictly higher valid source revisions resolve them atomically with acceptance.
+- Per-field `units` converts before canonical range/jump checks. Original unit
+  evidence persists separately; implausible jumps cannot advance projections.
+- Explicit invalid IANA timezone rejects one observation; only omission can use
+  Host fallback, with persisted attribution source. Adapter migrations and
+  conformance obligations: [conflicts, units and timezone](docs/conflicts-units-timezone.md).
+
 ## 0.9.0 — 2026-09-23
 
 **外部审查（2026-09-14 / 09-17 / 09-21）里能在库内修的，全部修完。**

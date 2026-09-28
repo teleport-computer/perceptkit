@@ -186,6 +186,23 @@ def test_host_reports_produce_byte_identical_results_to_v070():
     """
     golden = (FIXTURES / "golden_v0.7.0.json").read_text()
     result = run_sequence()
+    # D08/D09 add audit-only metadata. This fixture declares no source units
+    # and explicitly supplies Asia/Shanghai. Validate new metadata then strip
+    # only those additions; the original golden remains byte-for-byte intact.
+    def check_canonical_metadata(value):
+        if isinstance(value, dict):
+            if "timezone_source" in value:
+                assert value.pop("timezone_source") == "observation"
+                assert value.pop("source_units") == {}
+                assert value.pop("source_values") == {}
+                if "dimension_key" in value:
+                    assert value.pop("timezone") == "Asia/Shanghai"
+            for child in value.values():
+                check_canonical_metadata(child)
+        elif isinstance(value, list):
+            for child in value:
+                check_canonical_metadata(child)
+    check_canonical_metadata(result)
     # D04-D06 add storage-only provenance/audit metadata. Validate it explicitly
     # then compare ALL pre-existing behavior to the untouched golden.
     for entry in result["storage"]["outbox"].values():

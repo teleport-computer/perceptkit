@@ -54,7 +54,7 @@ def observation_semantics(observation: Observation) -> dict[str, Any]:
     Report/Observation currently have no coverage fields. Any future coverage
     contract must extend this inventory before it can influence processing.
     """
-    return {
+    result = {
         "signal": observation.signal,
         "signal_schema_version": observation.signal_schema_version,
         "occurred_at": observation.occurred_at.isoformat(),
@@ -64,9 +64,13 @@ def observation_semantics(observation: Observation) -> dict[str, Any]:
         "source_event_id": observation.source_event_id,
         "source_revision": observation.source_revision,
         "reason": observation.reason,
-        "units": ({} if observation.extensions.get("units") is None
-                  else observation.extensions["units"]),
+        "units": observation.extensions.get("units", {}),
     }
+    if observation.timezone_supplied and observation.timezone is None:
+        # Only explicitly invalid null needs a presence discriminator. Existing
+        # valid/omitted wire payloads retain their released v2 semantic digest.
+        result["timezone_supplied"] = True
+    return result
 
 
 @dataclass(frozen=True)
@@ -132,7 +136,7 @@ class ReportEnvelope:
         else:
             for index, item in enumerate(raw_observations):
                 try:
-                    observations.append(Observation.parse(item))
+                    observations.append(Observation.parse(item, defer_timezone_validation=True))
                 except ContractError as exc:
                     errors.extend(f"observations[{index}].{e}" for e in exc.errors)
 

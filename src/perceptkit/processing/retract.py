@@ -273,6 +273,10 @@ def _reselect_current(storage: StoragePort, r: Retraction,
                     source=winner.source if winner else None,
                     source_event_id=winner.source_event_id if winner else None,
                     source_revision=winner.source_revision if winner else None,
+                    timezone=winner.timezone if winner else None,
+                    timezone_source=winner.timezone_source if winner else "missing",
+                    source_units=winner.source_units if winner else {},
+                    source_values=winner.source_values if winner else {},
                     version=current.version + 1,
                     # 指纹描述的必须是**它自己**。照抄被删掉那条的指纹，
                     # 等于给靠指纹判"值变没变"的下游一个错的判据。

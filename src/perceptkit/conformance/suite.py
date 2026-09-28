@@ -39,6 +39,7 @@ from ..contracts import delivery as _delivery
 from ..contracts import receipt as _receipt
 from ..contracts.records import (
     CalendarEventMirror,
+    ConflictRecord,
     CurrentProjection,
     DailyAggregate,
     DurableDedupeIdentity,
@@ -813,6 +814,86 @@ def _g16_dispatch_fence_and_invalidation(factory: StorageFactory) -> list[str]:
     return problems
 
 
+def _g17_durable_conflicts_and_metadata(new: StorageFactory) -> list[str]:
+    from ..contracts.mutation import fact_key
+
+    s = new()
+    problems = []
+    candidate = StoredObservation("conflict-candidate", "u1", "weight", 1, "ios", T0, T0,
+                                  "observed", DAY, typed_value={"kg": 150}, timezone="UTC",
+                                  source_event_id="sample", source_revision=1,
+                                  source_units={"kg": "g"}, source_values={"kg": 150000},
+                                  timezone_source="host_fallback")
+    row = ConflictRecord("conflict-1", "u1", "weight", "ios", "fact", 1, "semantic", "content",
+                         "relative_jump", "max_relative_jump: kg", candidate, T0, T0)
+    lock = fact_key("u1", "weight", "ios", "sample")
+    with s.mutation_transaction() as owner:
+        owner.acquire((lock,))
+        if s.put_conflict(row) != row:
+            problems.append("conflict insert did not return durable candidate")
+        if s.put_conflict(replace(row, updated_at=T0 + timedelta(seconds=1))) != row:
+            problems.append("conflict retry overwrote original evidence")
+    found = list(s.list_conflicts(subject_id="u1", signal="weight", source="ios", fact_key="fact", status="pending"))
+    if found != [row]:
+        problems.append("conflict insert/query/metadata did not round-trip")
+    if (s.list_conflicts(subject_id="u2") or s.list_conflicts(subject_id="u1", signal="other")
+            or s.list_conflicts(subject_id="u1", source="other")
+            or s.list_conflicts(subject_id="u1", fact_key="other")
+            or s.list_conflicts(subject_id="u1", status="resolved")):
+        problems.append("conflict query leaked subject/filter")
+
+    args = dict(subject_id="u1", conflict_id=row.conflict_id,
+                semantic_digest="resolved-semantic", observation_id="replacement", resolved_at=T0)
+    with s.mutation_transaction() as owner:
+        owner.acquire((lock,))
+        for revision in (0, 1, "opaque"):
+            if s.resolve_conflict(**args, revision=revision):
+                problems.append("conflict resolved without higher comparable revision")
+    try:
+        with s.mutation_transaction() as owner:
+            owner.acquire((lock,))
+            s.put_conflict(replace(row, conflict_id="rolled-back"))
+            s.resolve_conflict(**args, revision=2)
+            raise RuntimeError("conformance rollback")
+    except RuntimeError:
+        pass
+    if list(s.list_conflicts(subject_id="u1")) != [row]:
+        problems.append("conflict insert/resolution survived transaction rollback")
+    with s.mutation_transaction() as owner:
+        owner.acquire((lock,))
+        if not s.resolve_conflict(**args, revision=2):
+            problems.append("conflict resolution failed")
+        if not s.resolve_conflict(**args, revision=2):
+            problems.append("conflict identical resolution is not idempotent")
+        if s.resolve_conflict(**args, revision=3):
+            problems.append("conflict resolution audit was overwritten")
+    resolved = list(s.list_conflicts(subject_id="u1", status="resolved"))
+    expected = replace(row, status="resolved", resolved_at=T0, resolution_revision=2,
+                       resolution_semantic_digest="resolved-semantic",
+                       resolution_observation_id="replacement")
+    if resolved != [expected] or s.list_conflicts(subject_id="u1", status="pending"):
+        problems.append("conflict resolution not durable or candidate audit changed")
+
+    # Persist the same audit fields for accepted Observation and Current-only
+    # values; adapter schema migrations must not silently discard them.
+    s.append_observation(candidate)
+    current = CurrentProjection("u1", "weight", "weight", {"kg": 150}, "observed", T0, T0,
+                                timezone="UTC", timezone_source="host_fallback",
+                                source_units={"kg": "g"}, source_values={"kg": 150000})
+    s.compare_and_put_current(current, expected_version=-1)
+    if list(s.list_observations(subject_id="u1", signal="weight")[0]) != [candidate]:
+        problems.append("conflict source unit/timezone metadata lost on Observation")
+    if list(s.get_current(subject_id="u1", signals=["weight"])["weight"]) != [current]:
+        problems.append("conflict source unit/timezone metadata lost on Current")
+    s.delete_observations(subject_id="u1", signal="weight", before=T0 + timedelta(days=1))
+    if list(s.list_conflicts(subject_id="u1")) != [expected]:
+        problems.append("conflict audit did not survive detail retention")
+    s.purge_subject(subject_id="u1")
+    if s.list_conflicts(subject_id="u1"):
+        problems.append("conflict audit escaped subject purge")
+    return problems
+
+
 GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
     "①上报与观测幂等": _g1_report_and_observation_idempotency,
     "②旧数据不覆盖新当前值": _g2_old_does_not_overwrite_new,
@@ -830,6 +911,7 @@ GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
     "⑭同一跳变再发生是新事件": _g14_a_repeated_transition_is_a_new_event_a_replay_is_not,
     "⑮mutation ownership与aggregate CAS": _g15_mutation_and_aggregate_cas,
     "⑯dispatch fence与event invalidation": _g16_dispatch_fence_and_invalidation,
+    "⑰durable conflict与canonical metadata": _g17_durable_conflicts_and_metadata,
 }
 
 #: 这几条在内存实现上**永远是绿的**，因为内存天然原子、天然无并发。
@@ -838,7 +920,7 @@ NOT_PROVABLE_IN_MEMORY: frozenset[str] = frozenset({"⑤提供原子边界"})
 
 
 def run_storage_conformance(factory: StorageFactory) -> list[str]:
-    """跑全部十六条，返回问题清单（空 = 通过）。
+    """跑全部十七条，返回问题清单（空 = 通过）。
 
     返回列表而不是抛异常：一次看到全部缺口，比逐个修再重跑快得多。
     """

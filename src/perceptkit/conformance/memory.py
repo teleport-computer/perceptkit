@@ -25,6 +25,7 @@ from typing import Any, Iterator, Sequence
 from ..contracts import delivery as _delivery
 from ..contracts.records import (
     CalendarEventMirror,
+    ConflictRecord,
     CurrentProjection,
     DailyAggregate,
     DurableDedupeIdentity,
@@ -32,6 +33,7 @@ from ..contracts.records import (
     ReminderItemMirror,
     SourceSyncState,
     StoredObservation,
+    _compare_revisions,
 )
 from ..contracts.receipt import (
     INGEST_ACCEPTED,
@@ -82,6 +84,7 @@ class InMemoryStorage:
         self.observations: dict[str, StoredObservation] = {}
         self.identities: set[tuple[str, str, str, str]] = set()
         self.identity_records: dict[tuple[str, str, str, str], DurableDedupeIdentity] = {}
+        self.conflicts: dict[tuple[str, str], ConflictRecord] = {}
         self.current: dict[tuple[str, str, str], CurrentProjection] = {}
         self.aggregates: dict[tuple[str, str, date, str, int], DailyAggregate] = {}
         self.calendar: dict[tuple, CalendarEventMirror] = {}
@@ -118,7 +121,7 @@ class InMemoryStorage:
         """嵌套边界使用快照回滚；仅作同步端口参照，不证明数据库隔离。"""
         collections = ("reports", "observations", "identities", "identity_records", "current", "aggregates",
                        "calendar", "reminders", "sync_state", "rule_state", "outbox",
-                       "receipts", "retractions")
+                       "receipts", "retractions", "conflicts")
         before = {key: deepcopy(getattr(self, key)) for key in collections}
         self.transaction_depth += 1
         self.transactions_opened += 1
@@ -132,6 +135,42 @@ class InMemoryStorage:
             self.transaction_depth -= 1
 
     # -- 批级幂等 --------------------------------------------------------
+
+    def put_conflict(self, record):
+        key = (record.subject_id, record.conflict_id)
+        if key not in self.conflicts:
+            self.conflicts[key] = deepcopy(record)
+        return deepcopy(self.conflicts[key])
+
+    def list_conflicts(self, *, subject_id, signal=None, source=None,
+                       fact_key=None, status=None):
+        if status not in (None, "pending", "resolved"):
+            raise ValueError("conflict status must be pending or resolved")
+        return deepcopy(sorted((r for r in self.conflicts.values()
+                                if r.subject_id == subject_id
+                                and (signal is None or r.signal == signal)
+                                and (source is None or r.source == source)
+                                and (fact_key is None or r.fact_key == fact_key)
+                                and (status is None or r.status == status)),
+                               key=lambda r: (r.created_at, r.conflict_id)))
+
+    def resolve_conflict(self, *, subject_id, conflict_id, revision,
+                         semantic_digest, observation_id, resolved_at):
+        key = (subject_id, conflict_id)
+        old = self.conflicts.get(key)
+        if old is None:
+            return False
+        if old.status == "resolved":
+            return (old.resolution_revision == revision
+                    and old.resolution_semantic_digest == semantic_digest
+                    and old.resolution_observation_id == observation_id)
+        if _compare_revisions(revision, old.candidate_revision) != 1:
+            return False
+        self.conflicts[key] = replace(old, status="resolved", updated_at=resolved_at,
+                                      resolved_at=resolved_at, resolution_revision=revision,
+                                      resolution_semantic_digest=semantic_digest,
+                                      resolution_observation_id=observation_id)
+        return True
 
     def claim_report(self, *, subject_id, producer, report_id, payload_digest,
                      received_at) -> IngestReceipt:
@@ -627,6 +666,7 @@ class InMemoryStorage:
             "rule_state": drop(self.rule_state, lambda k, v: k[0]),
             "outbox": drop(self.outbox, lambda k, v: v.subject_id),
             "retractions": drop(self.retractions, lambda k, v: k[0]),
+            "conflicts": drop(self.conflicts, lambda k, v: k[0]),
         }
         before = len(self.identities)
         self.identities = {i for i in self.identities if i[0] != subject_id}

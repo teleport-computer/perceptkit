@@ -57,6 +57,44 @@ class StoredObservation:
     source_event_id: str | None = None
     source_revision: str | int | None = None
     created_at: datetime | None = None
+    #: Audit only: projections always consume typed_value in canonical units.
+    source_units: dict[str, str] = field(default_factory=dict)
+    source_values: dict[str, Any] = field(default_factory=dict)
+    #: legacy_unknown is for pre-upgrade rows, never inferred from their zone.
+    timezone_source: str = "legacy_unknown"
+
+
+@dataclass(frozen=True)
+class ConflictRecord:
+    """Durable quarantined candidate; resolution preserves original evidence.
+
+    Insert/read/resolve share the candidate's Fact mutation owner. This record
+    is not an applied Observation or a dedupe identity. It survives detail
+    retention and is erased only by explicit subject purge.
+    """
+
+    conflict_id: str
+    subject_id: str
+    signal: str
+    source: str
+    fact_key: str
+    candidate_revision: str | int | None
+    semantic_digest: str
+    content_digest: str
+    kind: str
+    reason: str
+    candidate: StoredObservation
+    created_at: datetime
+    updated_at: datetime
+    status: str = "pending"
+    resolved_at: datetime | None = None
+    resolution_revision: str | int | None = None
+    resolution_semantic_digest: str | None = None
+    resolution_observation_id: str | None = None
+
+    def __post_init__(self):
+        if self.status not in ("pending", "resolved"):
+            raise ValueError("conflict status must be pending or resolved")
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +141,11 @@ class CurrentProjection:
     version: int = 0
     #: 内容摘要。用来分辨"同一时刻的重传"和"同一时刻的不同内容"。
     content_digest: str | None = None
+    #: Attribution and source-unit audit, including current_only signals.
+    timezone: str | None = None
+    timezone_source: str = "legacy_unknown"
+    source_units: dict[str, str] = field(default_factory=dict)
+    source_values: dict[str, Any] = field(default_factory=dict)
 
 
 def _compare_revisions(new: str | int | None, old: str | int | None) -> int | None:
@@ -407,6 +450,7 @@ class EventOutboxEntry:
 
 __all__ = [
     "StoredObservation",
+    "ConflictRecord",
     "CurrentProjection", "REPLACE", "IGNORE", "CONFLICT", "decide_current_update",
     "DailyAggregate",
     "CalendarEventMirror", "ReminderItemMirror", "SourceSyncState",

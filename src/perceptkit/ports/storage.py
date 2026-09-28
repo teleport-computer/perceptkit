@@ -20,6 +20,7 @@ from typing import Any, ContextManager, Protocol, Sequence, runtime_checkable
 
 from ..contracts.records import (
     CalendarEventMirror,
+    ConflictRecord,
     CurrentProjection,
     DailyAggregate,
     DurableDedupeIdentity,
@@ -41,6 +42,37 @@ class StoragePort(Protocol):
     """
 
     # -- 事务 ------------------------------------------------------------
+
+    def put_conflict(self, record: ConflictRecord) -> ConflictRecord:
+        """Insert-if-absent on (subject_id, conflict_id), return durable record.
+
+        Caller holds the canonical Fact mutation owner. Never overwrite original
+        evidence/timestamps/resolution on retry. Commit atomically with Report.
+        These records survive detail retention and belong to subject purge/export.
+        """
+        ...
+
+    def list_conflicts(self, *, subject_id: str, signal: str | None = None,
+                       source: str | None = None, fact_key: str | None = None,
+                       status: str | None = None) -> Sequence[ConflictRecord]:
+        """Subject-isolated, ordered by (created_at, conflict_id), no implicit cap.
+
+        Fact mutation reads use source/fact_key under the same owner. Returning
+        detached records must not permit a caller to mutate durable evidence.
+        """
+        ...
+
+    def resolve_conflict(self, *, subject_id: str, conflict_id: str,
+                         revision: str | int | None, semantic_digest: str,
+                         observation_id: str, resolved_at: datetime) -> bool:
+        """Under Fact owner, pending -> resolved iff revision strictly higher.
+
+        Store resolution revision/digest/observation/time without replacing the
+        candidate evidence. Identical resolved retry returns True; a conflicting
+        resolution or non-comparable/lower/equal revision returns False. This
+        write and the accepted replacement Fact must share a transaction.
+        """
+        ...
 
     def mutation_transaction(self) -> ContextManager[MutationOwner]:
         """Atomic transaction with explicit resource ownership, held through commit.

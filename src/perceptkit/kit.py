@@ -52,8 +52,7 @@ class PerceptionKit:
     definitions: Any = ()
     #: 宿主注册的自定义 evaluator。普通用户配置仍然只能用声明式模板。
     extra_evaluators: Mapping[str, Callable[..., Any]] | None = None
-    #: 观测没带时区时用什么兜底。见 OPEN-QUESTIONS B2 —— 这一条还没和
-    #: 产品方对齐，所以由宿主传，不在包里写死。
+    #: Only omitted timezone may use this validated IANA Host fallback (D09).
     timezone_fallback: str | None = None
     max_observations: int = 200
 
@@ -332,6 +331,11 @@ class PerceptionKit:
     #
     # 这条路和写入侧共用存储，方向相反：agent 主动来查。
     # 八个函数的实现在 queries/api.py —— 这里只是绑上 manifest 的薄封装。
+
+    def list_conflicts(self, *, subject_id: str, signal: str | None = None,
+                       status: str | None = None):
+        """Durable quarantined candidates and their immutable resolution audit."""
+        return list(self.storage.list_conflicts(subject_id=subject_id, signal=signal, status=status))
 
     def get_current(self, *, subject_id: str, signals: Sequence[str],
                     now: datetime) -> dict[str, _queries.CurrentView]:

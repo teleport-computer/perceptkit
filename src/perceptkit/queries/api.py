@@ -541,6 +541,7 @@ def export_subject(
         "current": current,
         "observations": observations,
         "daily_aggregates": daily,
+        "conflicts": [_conflict_export(r) for r in storage.list_conflicts(subject_id=subject_id)],
         # 哪几类被 per_signal_limit 截断了。**空列表 = 真的是全部**，
         # 不给这一栏的话，"少给了一截"和"本来就这么多"分辨不出来。
         "truncated": truncated,
@@ -560,6 +561,22 @@ def export_subject(
                 storage, subject_id=subject_id, cursor=cursor, limit=limit),
             cap=per_signal_limit)[0],
     }
+
+
+def _conflict_export(record):
+    """Export audit metadata as JSON-compatible data, matching other exports."""
+    from dataclasses import asdict
+
+    def plain(value):
+        if isinstance(value, (date, datetime)):
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {key: plain(item) for key, item in value.items()}
+        if isinstance(value, (tuple, list)):
+            return [plain(item) for item in value]
+        return value
+
+    return plain(asdict(record))
 
 
 #: 导出时拿"全时段"去取聚合 —— 这个包不读时钟，所以用固定边界而不是 today()。

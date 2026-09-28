@@ -10,8 +10,8 @@
 但纽约的 ``-04:00`` 和 ``-05:00`` 是同一个时区在不同季节 —— 光看偏移
 分不出来,DST 切换那天(那天有 25 小时)就会算错。所以要 IANA 名字。
 
-``timezone`` 缺失时怎么办属于处理层的兜底策略,不在契约里定死 ——
-见 ``OPEN-QUESTIONS.md`` B2,这一条还没和产品方对齐。
+``timezone`` 缺失时可采用宿主配置的 IANA fallback，并记录 attribution source。
+显式错误（包括空字符串与 null）只拒收该 observation，不使用 fallback。
 """
 from __future__ import annotations
 
@@ -50,6 +50,9 @@ class Observation:
     reason: str | None = None
     #: 协议没定义的额外字段。原样保留便于排查,不参与判断。
     extensions: dict[str, Any] = field(default_factory=dict)
+    #: Parser-preserved presence distinguishes explicit invalid null from an
+    #: omitted optional field. Direct object construction with None omits it.
+    timezone_supplied: bool = False
 
     # -- 派生判断（都只读 availability，集中在这里免得每个调用方各判一次） --
 
@@ -68,7 +71,7 @@ class Observation:
         return _availability.enters_trend(self.availability)
 
     @classmethod
-    def parse(cls, payload: object) -> "Observation":
+    def parse(cls, payload: object, *, defer_timezone_validation: bool = False) -> "Observation":
         """从一个 dict 解析并校验。错误一次报全,不是遇到第一个就抛。"""
         errors: list[str] = []
         if not isinstance(payload, dict):
@@ -129,7 +132,11 @@ class Observation:
             errors.append("source_event_id: must be a non-empty string when present")
 
         tz = payload.get("timezone")
-        if tz is not None and (not isinstance(tz, str) or not tz.strip()):
+        # Validate at the per-observation normalization boundary so one bad
+        # zone does not reject valid siblings. Preserve spelling (including
+        # empty/whitespace) rather than silently converting it to omission.
+        if not defer_timezone_validation and tz is not None and (
+                not isinstance(tz, str) or not tz.strip()):
             errors.append("timezone: must be a non-empty IANA name when present")
 
         revision = payload.get("source_revision")
@@ -162,10 +169,11 @@ class Observation:
             availability=state,
             value=value,
             source_event_id=source_event_id.strip() if source_event_id else None,
-            timezone=tz.strip() if tz else None,
+            timezone=tz,
             source_revision=revision,
             reason=reason,
             extensions={k: v for k, v in payload.items() if k not in known},
+            timezone_supplied="timezone" in payload,
         )
 
 

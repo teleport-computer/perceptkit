@@ -37,7 +37,7 @@ def test_a_correct_adapter_passes_everything():
 
 
 def test_the_suite_covers_every_guarantee():
-    assert len(GUARANTEES) == 16
+    assert len(GUARANTEES) == 17
 
 
 def test_catches_report_finalization_that_loses_terminal_failures():
