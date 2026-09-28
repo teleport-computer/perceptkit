@@ -28,7 +28,8 @@ ConflictRecord, not an applied Observation table row.
 
 The Report itself is still accepted: a Fact conflict is one item outcome, not a
 reuse of the Report identity. The receipt persists
-`observations_rejected=[{index, problems: ["fact_conflict"]}]`; valid siblings
+`observations_rejected=[{index, code: "fact_conflict", problems: ["fact_conflict"]}]`;
+valid siblings
 commit. A different payload under the same `(subject, producer, report_id)` is
 the separate batch-level `report_digest_conflict`. Hosts must not map the former
 to "report ID reused".
@@ -127,11 +128,24 @@ real-database restart and two-connection conflict/resolution contention tests;
 InMemory conformance alone does not establish production durability/isolation.
 
 The Report receipt schema also adds a structured `observations_rejected` value.
-Persist the original array index and sanitized problem strings as JSON/child
+Persist the original array index, closed machine code, and sanitized problem strings as JSON/child
 rows; do not persist the rejected Observation, normalized value, source values,
 or restricted fields. Exact-digest replay must return the original item evidence
 with `status=duplicate` and `observations_applied=0` without rerunning the batch.
-Use storage conformance guarantee 1 to catch adapters that drop these entries.
+One item has exactly one terminal code; multiple diagnostics on that item all
+belong to that rejecting phase. Current codes are `validation_failed`,
+`fact_conflict`, `fact_revision_details_incomplete`, and `stale_fact_revision`.
+`recovery_action` reads only those codes, never diagnostic text. If one Report
+contains multiple code classes, the single compatibility action uses the fixed
+priority incomplete evidence, Fact conflict, stale revision, then validation;
+callers needing full remediation enumerate every item.
+
+Use storage conformance guarantee 1 to catch adapters that drop these entries
+within one instance. Separately run
+`run_report_receipt_reopen_conformance(open_same_test_database)`, where every
+call returns a distinct adapter/connection over the same isolated durable
+backend. Reusing an object, constructing a fresh empty database, copying
+InMemory state, or recreating only Kit does not prove restart durability.
 
 No manual resolution UI, worker, new rule-history provider, aggregation generation
 activation or public Current array cutover is introduced here.

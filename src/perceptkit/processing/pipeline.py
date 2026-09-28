@@ -84,20 +84,29 @@ class IngestOutcome:
                 and not self.rejected and not self.conflicts)
 
 
-def _durable_rejections(rejected, conflict_indexes=()):
+def _durable_rejections(rejected, rejection_codes, conflict_indexes=()):
     """Merge one safe receipt issue per original Report array index."""
-    grouped: dict[int, list[str]] = {}
+    grouped: dict[int, tuple[str, list[str]]] = {}
     for index, problems in rejected:
         if index < 0:
             raise ValueError("observation failure is missing its original report index")
-        grouped.setdefault(index, []).extend(str(problem) for problem in problems)
+        code = rejection_codes[index]
+        prior_code, diagnostics = grouped.setdefault(index, (code, []))
+        if prior_code != code:
+            raise ValueError("one observation index cannot have multiple terminal issue codes")
+        diagnostics.extend(str(problem) for problem in problems)
     for index in conflict_indexes:
         if index < 0:
             raise ValueError("fact conflict is missing its original report index")
-        grouped.setdefault(index, []).append("fact_conflict")
+        code = _receipt.OBSERVATION_FACT_CONFLICT
+        prior_code, diagnostics = grouped.setdefault(index, (code, []))
+        if prior_code != code:
+            raise ValueError("one observation index cannot have multiple terminal issue codes")
+        diagnostics.append("fact_conflict")
     return tuple(
-        _receipt.ObservationRejection(index, tuple(dict.fromkeys(problems)))
-        for index, problems in sorted(grouped.items())
+        _receipt.ObservationRejection(
+            index, code, tuple(dict.fromkeys(problems)))
+        for index, (code, problems) in sorted(grouped.items())
     )
 
 
@@ -199,7 +208,12 @@ def ingest_report(
             source=report.producer,
             timezone_fallback=timezone_fallback,
         )
-        normalized_rejections = _durable_rejections(normalized.rejected)
+        rejection_codes = {
+            index: _receipt.OBSERVATION_VALIDATION_FAILED
+            for index, _ in normalized.rejected
+        }
+        normalized_rejections = _durable_rejections(
+            normalized.rejected, rejection_codes)
         source_index_by_item = {
             id(item): index
             for item, index in zip(normalized.normalized, normalized.source_indexes)
@@ -244,10 +258,12 @@ def ingest_report(
             _apply_one(item, sig, context=context, storage=storage, outcome=outcome,
                        definitions=definitions, extra_evaluators=extra_evaluators,
                        mutation=mutation, definition_at=definition_at,
-                       source_index=source_index_by_item[id(item)])
+                       source_index=source_index_by_item[id(item)],
+                       rejection_codes=rejection_codes)
 
         durable_rejections = _durable_rejections(
             outcome.rejected,
+            rejection_codes,
             [source_index_by_item[id(item)] for item in outcome.conflicts],
         )
         outcome.receipt = replace(
@@ -315,6 +331,7 @@ def _apply_one(
     mutation=None,
     definition_at=None,
     source_index: int = -1,
+    rejection_codes: dict[int, str] | None = None,
 ) -> None:
     """③~⑨：一条观测的落地，以及命中规则时写发件箱。
 
@@ -322,6 +339,8 @@ def _apply_one(
     不生效。分开写的话会出现"观测写了但去重身份没写"——下次重传就会重复累计。
     """
     stored = item.stored
+    if rejection_codes is None:
+        rejection_codes = {}
 
     # ②·5 来源撤回过的事实，不许被迟到的样本复活。
     #
@@ -364,6 +383,11 @@ def _apply_one(
                             aggregation_kind="daily", local_date=old.effective_local_date,
                             reason="fact_revision_details_incomplete",
                             updated_at=context.received_at)
+            rejection_codes[source_index] = (
+                _receipt.OBSERVATION_FACT_REVISION_DETAILS_INCOMPLETE
+                if fact_decision == "incomplete"
+                else _receipt.OBSERVATION_STALE_FACT_REVISION
+            )
             outcome.rejected.append((source_index, (f"{stored.signal}: {reason}",)))
             return
         if prior_revisions and sig.stores_history:
@@ -385,6 +409,8 @@ def _apply_one(
                     source_index,
                     (f"{stored.signal}: fact_revision_details_incomplete",),
                 ))
+                rejection_codes[source_index] = (
+                    _receipt.OBSERVATION_FACT_REVISION_DETAILS_INCOMPLETE)
                 return
             active = drop_retracted(storage, canonical_revisions(details, sig),
                                     subject_id=stored.subject_id, signal=stored.signal)
@@ -407,6 +433,8 @@ def _apply_one(
                         source_index,
                         (f"{stored.signal}: fact_revision_details_incomplete",),
                     ))
+                    rejection_codes[source_index] = (
+                        _receipt.OBSERVATION_FACT_REVISION_DETAILS_INCOMPLETE)
                     return
     if storage.has_seen_identity(
         subject_id=context.subject_id, signal=stored.signal,

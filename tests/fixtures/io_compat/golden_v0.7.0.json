@@ -1245,6 +1245,7 @@
     "observations_applied": 1,
     "observations_rejected": [
      {
+      "code": "validation_failed",
       "index": 1,
       "problems": [
        "music_playback.playback_state: <redacted> 不在 [<redacted>, <redacted>, <redacted>]"
@@ -6506,6 +6507,7 @@
     "observations_applied": 1,
     "observations_rejected": [
      {
+      "code": "validation_failed",
       "index": 1,
       "problems": [
        "music_playback.playback_state: <redacted> 不在 [<redacted>, <redacted>, <redacted>]"

@@ -252,6 +252,8 @@ def test_correction_after_detail_retention_rejects_and_marks_old_projection_inco
     assert outcome.receipt.error_code is None
     assert outcome.receipt.observations_rejected[0].problems == (
         "steps: fact_revision_details_incomplete",)
+    assert outcome.receipt.observations_rejected[0].code == (
+        "fact_revision_details_incomplete")
     rows = kit.get_daily(subject_id="u", signal="steps", start=old.date(), end=old.date())
     assert rows and rows[0].completeness == "incomplete"
     assert "fact_revision_details_incomplete" in rows[0].incomplete_reasons

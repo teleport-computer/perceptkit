@@ -25,6 +25,7 @@ def test_incomparable_batch_revisions_never_choose_an_active_fact(reverse, same_
     assert out.receipt.status == "accepted" and not out.ok
     assert out.receipt.error_code is None
     assert len(out.receipt.observations_rejected) == 2
+    assert {item.code for item in out.receipt.observations_rejected} == {"fact_conflict"}
     assert all(item.problems == ("fact_conflict",)
                for item in out.receipt.observations_rejected)
     assert len(out.conflicts) == 2

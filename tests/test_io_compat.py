@@ -181,7 +181,8 @@ def test_host_reports_produce_byte_identical_results_to_v070():
     D02 review fix：Report finalization 持久化19份最终回执。
 
     2026-09-28 durable Report outcome：回执新增结构化、脱敏的
-    observations_rejected。1份 mixed report 由错误的 rejected 修正为
+    observations_rejected；review 后每项补充闭集机器码 `code`，诊断文本不参与
+    恢复决策。1份 mixed report 由错误的 rejected 修正为
     accepted，合法 sibling 保持提交；同 digest 重放返回 duplicate 和
     原失败证据。事实、事件和投影全部仍逐字节一致。
 

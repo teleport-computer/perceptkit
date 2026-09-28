@@ -177,6 +177,12 @@ class StoragePort(Protocol):
         those original entries. Whole-batch preflight rejection happens before
         claim and writes neither Report nor Facts. Report digest conflict is a
         separate ``report_digest_conflict`` result from ``claim_report``.
+
+        Each item has one closed machine ``code`` and one-or-more sanitized
+        diagnostics. Diagnostics are never parsed for recovery behavior. Host
+        adapters prove durability by reopening the same database through
+        ``run_report_receipt_reopen_conformance``; same-object replay is not
+        restart evidence.
         """
         ...
 

@@ -14,7 +14,12 @@
 from __future__ import annotations
 
 from .memory import InMemoryStorage
-from .suite import GUARANTEES, NOT_PROVABLE_IN_MEMORY, run_storage_conformance
+from .suite import (
+    GUARANTEES,
+    NOT_PROVABLE_IN_MEMORY,
+    run_report_receipt_reopen_conformance,
+    run_storage_conformance,
+)
 from .report import (
     REPORT_GUARANTEES, REPORT_NOT_PROVABLE, run_report_conformance,
 )
@@ -24,6 +29,7 @@ from .definitions import run_definition_provider_conformance
 __all__ = [
     "InMemoryStorage",
     "run_storage_conformance", "GUARANTEES", "NOT_PROVABLE_IN_MEMORY",
+    "run_report_receipt_reopen_conformance",
     "run_wake_conformance", "WAKE_GUARANTEES", "WAKE_NOT_PROVABLE",
     "run_report_conformance", "REPORT_GUARANTEES", "REPORT_NOT_PROVABLE",
     "run_definition_provider_conformance",

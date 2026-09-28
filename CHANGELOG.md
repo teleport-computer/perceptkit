@@ -13,7 +13,10 @@ In development (not released) — v0.10 Current/export cutover:
 - Report receipts now persist sanitized per-observation failures. Mixed and
   all-invalid Reports are accepted durable outcomes; valid siblings commit and
   exact replay returns duplicate/applied=0 with the original item evidence.
-  Whole-batch preflight rejection and Report digest conflict remain separate.
+  Each item carries one closed machine code; diagnostic text never drives
+  recovery. Whole-batch preflight rejection and Report digest conflict remain
+  separate. A dedicated reopen conformance proves evidence survives a new
+  adapter instance over the same durable backend.
 
 In development (not released) — consistency contract D07–D09:
 

@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 from perceptkit.conformance import (
     GUARANTEES,
     NOT_PROVABLE_IN_MEMORY,
@@ -54,6 +56,48 @@ def test_catches_report_finalization_that_loses_durable_item_failures():
     def finalize_report(self, receipt):
         pass
     assert hits(run_storage_conformance(broken(finalize_report=finalize_report)), "per-item")
+
+
+def _reopen_factory(storage_type=InMemoryStorage):
+    shared_reports = {}
+
+    def reopen():
+        storage = storage_type()
+        storage.reports = shared_reports
+        return storage
+
+    return reopen
+
+
+def test_report_issue_reopen_conformance_uses_a_distinct_adapter_instance():
+    from perceptkit import conformance
+    check = getattr(conformance, "run_report_receipt_reopen_conformance")
+    assert check(_reopen_factory()) == []
+
+
+def test_report_issue_reopen_conformance_catches_process_only_issue_cache():
+    from perceptkit import conformance
+
+    class ProcessOnlyIssues(InMemoryStorage):
+        def __init__(self):
+            super().__init__()
+            self.issue_cache = {}
+
+        def finalize_report(self, receipt):
+            key = (receipt.subject_id, receipt.producer, receipt.report_id)
+            self.issue_cache[key] = receipt.observations_rejected
+            super().finalize_report(replace(receipt, observations_rejected=()))
+
+        def claim_report(self, **kwargs):
+            receipt = super().claim_report(**kwargs)
+            key = (kwargs["subject_id"], kwargs["producer"], kwargs["report_id"])
+            if receipt.status == "duplicate" and key in self.issue_cache:
+                return replace(receipt, observations_rejected=self.issue_cache[key])
+            return receipt
+
+    problems = conformance.run_report_receipt_reopen_conformance(
+        _reopen_factory(ProcessOnlyIssues))
+    assert hits(problems, "reopen")
 
 
 def test_catches_receipt_backfill_that_ignores_expected_digest():

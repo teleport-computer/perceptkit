@@ -41,6 +41,19 @@ _NUMERIC_LITERAL = re.compile(
     r"(?<![A-Za-z0-9_])-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?![A-Za-z0-9_])"
 )
 
+#: Closed machine-readable outcomes for one Report array entry. Diagnostics in
+#: ``problems`` are display/audit text only and must never drive control flow.
+OBSERVATION_VALIDATION_FAILED = "validation_failed"
+OBSERVATION_FACT_CONFLICT = "fact_conflict"
+OBSERVATION_FACT_REVISION_DETAILS_INCOMPLETE = "fact_revision_details_incomplete"
+OBSERVATION_STALE_FACT_REVISION = "stale_fact_revision"
+OBSERVATION_ISSUE_CODES: frozenset[str] = frozenset({
+    OBSERVATION_VALIDATION_FAILED,
+    OBSERVATION_FACT_CONFLICT,
+    OBSERVATION_FACT_REVISION_DETAILS_INCOMPLETE,
+    OBSERVATION_STALE_FACT_REVISION,
+})
+
 
 def sanitize_observation_problem(problem: object) -> str:
     """Keep a bounded diagnostic, never the rejected payload value itself."""
@@ -60,11 +73,18 @@ class ObservationRejection:
     """
 
     index: int
+    #: One terminal rejecting phase owns an item. Multiple diagnostics from
+    #: that phase share this closed machine code.
+    code: str
     problems: tuple[str, ...]
 
     def __post_init__(self) -> None:
         if type(self.index) is not int or self.index < 0:
             raise ContractError(["observation rejection index must be a non-negative integer"])
+        if self.code not in OBSERVATION_ISSUE_CODES:
+            raise ContractError([
+                f"observation rejection code must be one of {sorted(OBSERVATION_ISSUE_CODES)}"
+            ])
         sanitized = tuple(sanitize_observation_problem(problem) for problem in self.problems)
         if not sanitized or any(not problem for problem in sanitized):
             raise ContractError(["observation rejection problems must not be empty"])
@@ -123,12 +143,15 @@ class IngestReceipt:
             return "restore_fact_evidence_and_use_new_report_id"
         if self.error_code == "fact_conflict":
             return "resolve_fact_conflict_and_use_new_report_id"
-        problems = {problem for item in self.observations_rejected for problem in item.problems}
-        joined = " ".join(problems)
-        if "fact_revision_details_incomplete" in joined:
+        codes = {item.code for item in self.observations_rejected}
+        if OBSERVATION_FACT_REVISION_DETAILS_INCOMPLETE in codes:
             return "restore_fact_evidence_and_use_new_report_id"
-        if "fact_conflict" in problems:
+        if OBSERVATION_FACT_CONFLICT in codes:
             return "resolve_fact_conflict_and_use_new_report_id"
+        if OBSERVATION_STALE_FACT_REVISION in codes:
+            return "use_higher_fact_revision_and_new_report_id"
+        if OBSERVATION_VALIDATION_FAILED in codes:
+            return "correct_rejected_observations_and_use_new_report_id"
         if self.status in (INGEST_REJECTED, INGEST_CONFLICT):
             return "correct_payload_and_use_new_report_id"
         return None
@@ -199,6 +222,9 @@ class WakeReceipt:
 __all__ = [
     "INGEST_ACCEPTED", "INGEST_DUPLICATE", "INGEST_CONFLICT", "INGEST_REJECTED",
     "INGEST_STATUSES", "ObservationRejection", "IngestReceipt",
+    "OBSERVATION_VALIDATION_FAILED", "OBSERVATION_FACT_CONFLICT",
+    "OBSERVATION_FACT_REVISION_DETAILS_INCOMPLETE", "OBSERVATION_STALE_FACT_REVISION",
+    "OBSERVATION_ISSUE_CODES",
     "WAKE_ACCEPTED", "WAKE_DUPLICATE", "WAKE_SUPPRESSED",
     "WAKE_ENQUEUE_FAILED", "WAKE_REJECTED", "WAKE_STATUSES", "WAKE_RETRYABLE",
     "WakeReceipt",

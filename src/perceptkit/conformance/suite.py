@@ -11,6 +11,11 @@
         problems = run_storage_conformance(lambda: MyPostgresStorage(fresh_db()))
         assert not problems, "\\n".join(problems)
 
+    # 每次返回新的 adapter / connection，但连接同一个隔离测试数据库。
+    from perceptkit.conformance import run_report_receipt_reopen_conformance
+    problems = run_report_receipt_reopen_conformance(open_same_test_database)
+    assert not problems, "\\n".join(problems)
+
 ---
 
 ## 🔴 这套东西能证明什么、不能证明什么
@@ -25,6 +30,9 @@
     并发下只有一个胜者   需要两条独立连接 + 同时发起，
                         断言同 report / 同 event / 新旧 current 只有一个赢
     崩溃恢复            需要模拟"wake 已 accepted、回执还没存下来"就断电
+
+``run_report_receipt_reopen_conformance`` 只额外证明逐条 Report outcome 能被新
+adapter 实例从同一后端读回；它仍不能替代真实断电、双连接隔离和 fence 测试。
 
 在内存实现上这三类**永远是绿的** —— 内存天然原子、天然无并发。
 把它们当验过了，是这套东西最危险的用法。
@@ -110,7 +118,8 @@ def _g1_report_and_observation_idempotency(new: StorageFactory) -> list[str]:
     partial_claim = partial.claim_report(
         subject_id="u1", producer="ios", report_id="partial",
         payload_digest="v2:partial", received_at=T0)
-    issue = _receipt.ObservationRejection(0, ("unknown_signal",))
+    issue = _receipt.ObservationRejection(
+        0, _receipt.OBSERVATION_VALIDATION_FAILED, ("unknown_signal",))
     partial.finalize_report(replace(
         partial_claim, observations_applied=1, observations_rejected=(issue,)))
     partial_retry = partial.claim_report(
@@ -138,7 +147,8 @@ def _g1_report_and_observation_idempotency(new: StorageFactory) -> list[str]:
             problems.append("①: terminal report failure must survive identical retry")
 
     # Full Kit/adaptor path: mixed and all-invalid Reports are accepted; exact
-    # replay returns durable item outcomes without duplicate Fact/Event writes.
+    # same-adapter replay returns item outcomes without duplicate Fact/Event writes.
+    # Actual reopen durability is a separate conformance entry point below.
     try:
         from ..contracts.context import IngestContext
         from ..kit import PerceptionKit
@@ -176,7 +186,7 @@ def _g1_report_and_observation_idempotency(new: StorageFactory) -> list[str]:
                 or replay_outcome.receipt.observations_rejected
                 != first_outcome.receipt.observations_rejected
                 or replay_outcome.rejected != [(0, first_outcome.receipt.observations_rejected[0].problems)]):
-            problems.append("①: restart/replay did not reproduce the original item failure")
+            problems.append("①: replay did not reproduce the original item failure")
         if before != after or before != (1, 1):
             problems.append("①: mixed Report replay duplicated a Fact or Event")
 
@@ -289,7 +299,8 @@ def _g5_atomic_boundary_is_offered(new: StorageFactory) -> list[str]:
                 payload_digest="v2:rollback", received_at=T0)
             rollback.finalize_report(replace(
                 claim, observations_rejected=(
-                    _receipt.ObservationRejection(0, ("invalid",)),)))
+                    _receipt.ObservationRejection(
+                        0, _receipt.OBSERVATION_VALIDATION_FAILED, ("invalid",)),)))
             raise RuntimeError("rollback probe")
     except RuntimeError:
         pass
@@ -1127,6 +1138,40 @@ GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
 NOT_PROVABLE_IN_MEMORY: frozenset[str] = frozenset({"⑤提供原子边界"})
 
 
+def run_report_receipt_reopen_conformance(reopen: StorageFactory) -> list[str]:
+    """Prove Report item outcomes survive reopening the same durable backend.
+
+    ``reopen`` must return a new adapter instance on every call while connecting
+    to the same isolated test database. Returning one object, constructing a
+    fresh empty database, or copying InMemory state is not restart evidence.
+    """
+    problems: list[str] = []
+    expected = _receipt.ObservationRejection(
+        0, _receipt.OBSERVATION_VALIDATION_FAILED, ("unknown_signal",))
+    try:
+        writer = reopen()
+        with writer.mutation_transaction():
+            claim = writer.claim_report(
+                subject_id="reopen-user", producer="reopen-producer",
+                report_id="reopen-report", payload_digest="v2:reopen", received_at=T0)
+            writer.finalize_report(replace(
+                claim, observations_applied=1, observations_rejected=(expected,)))
+        reader = reopen()
+        if reader is writer:
+            problems.append("reopen factory returned the same adapter instance")
+            return problems
+        replay = reader.claim_report(
+            subject_id="reopen-user", producer="reopen-producer",
+            report_id="reopen-report", payload_digest="v2:reopen", received_at=T0)
+        if (replay.status != _receipt.INGEST_DUPLICATE
+                or replay.observations_applied != 0
+                or replay.observations_rejected != (expected,)):
+            problems.append("reopen lost durable Report observation issues")
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"reopen receipt check raised {type(exc).__name__}: {exc}")
+    return problems
+
+
 def run_storage_conformance(factory: StorageFactory) -> list[str]:
     """跑全部十八条，返回问题清单（空 = 通过）。
 
@@ -1146,4 +1191,7 @@ def run_storage_conformance(factory: StorageFactory) -> list[str]:
     return problems
 
 
-__all__ = ["run_storage_conformance", "GUARANTEES", "NOT_PROVABLE_IN_MEMORY"]
+__all__ = [
+    "run_storage_conformance", "run_report_receipt_reopen_conformance",
+    "GUARANTEES", "NOT_PROVABLE_IN_MEMORY",
+]
