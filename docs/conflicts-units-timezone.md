@@ -141,11 +141,14 @@ priority incomplete evidence, Fact conflict, stale revision, then validation;
 callers needing full remediation enumerate every item.
 
 Use storage conformance guarantee 1 to catch adapters that drop these entries
-within one instance. Separately run
-`run_report_receipt_reopen_conformance(open_same_test_database)`, where every
-call returns a distinct adapter/connection over the same isolated durable
-backend. Reusing an object, constructing a fresh empty database, copying
-InMemory state, or recreating only Kit does not prove restart durability.
+within one instance. For restart evidence, process 1 runs
+`prepare_report_receipt_restart_conformance(storage)` and exits completely;
+process 2 runs `verify_report_receipt_restart_conformance(storage)` against the
+same isolated durable backend. Creating two adapters in one interpreter can
+still share module/global caches. Reusing an object, clearing a test cache,
+constructing a fresh database, copying InMemory state, or recreating only Kit
+does not prove restart durability. IO and Rokku must orchestrate the two phases
+with separate subprocesses/interpreters in their Host suites.
 
 No manual resolution UI, worker, new rule-history provider, aggregation generation
 activation or public Current array cutover is introduced here.

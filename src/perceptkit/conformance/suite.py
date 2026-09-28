@@ -11,9 +11,14 @@
         problems = run_storage_conformance(lambda: MyPostgresStorage(fresh_db()))
         assert not problems, "\\n".join(problems)
 
-    # 每次返回新的 adapter / connection，但连接同一个隔离测试数据库。
-    from perceptkit.conformance import run_report_receipt_reopen_conformance
-    problems = run_report_receipt_reopen_conformance(open_same_test_database)
+    # 阶段1：独立进程写入同一个隔离测试数据库。
+    from perceptkit.conformance import prepare_report_receipt_restart_conformance
+    problems = prepare_report_receipt_restart_conformance(MyPostgresStorage(test_db_url))
+    assert not problems, "\\n".join(problems)
+
+    # 阶段2：阶段1进程完全退出后，在新解释器/子进程运行。
+    from perceptkit.conformance import verify_report_receipt_restart_conformance
+    problems = verify_report_receipt_restart_conformance(MyPostgresStorage(test_db_url))
     assert not problems, "\\n".join(problems)
 
 ---
@@ -31,8 +36,10 @@
                         断言同 report / 同 event / 新旧 current 只有一个赢
     崩溃恢复            需要模拟"wake 已 accepted、回执还没存下来"就断电
 
-``run_report_receipt_reopen_conformance`` 只额外证明逐条 Report outcome 能被新
-adapter 实例从同一后端读回；它仍不能替代真实断电、双连接隔离和 fence 测试。
+Report receipt restart 证据必须把 prepare / verify 分到两个独立解释器
+或子进程，并连接同一隔离后端。同进程创建两个 adapter 仍可能命中
+module/global cache，不是 restart 证据。该 gate 仍不能替代真实断电、
+双连接隔离和 fence 测试。
 
 在内存实现上这三类**永远是绿的** —— 内存天然原子、天然无并发。
 把它们当验过了，是这套东西最危险的用法。
@@ -1138,37 +1145,50 @@ GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
 NOT_PROVABLE_IN_MEMORY: frozenset[str] = frozenset({"⑤提供原子边界"})
 
 
-def run_report_receipt_reopen_conformance(reopen: StorageFactory) -> list[str]:
-    """Prove Report item outcomes survive reopening the same durable backend.
+def _restart_receipt_issue() -> _receipt.ObservationRejection:
+    return _receipt.ObservationRejection(
+        0, _receipt.OBSERVATION_VALIDATION_FAILED, ("unknown_signal",))
 
-    ``reopen`` must return a new adapter instance on every call while connecting
-    to the same isolated test database. Returning one object, constructing a
-    fresh empty database, or copying InMemory state is not restart evidence.
+
+def prepare_report_receipt_restart_conformance(storage: Any) -> list[str]:
+    """Phase 1: write a fixed Report outcome, then terminate this process.
+
+    The backend must be an isolated empty test database that phase 2 can open.
+    A successful return proves only the write call completed, not durability.
     """
     problems: list[str] = []
-    expected = _receipt.ObservationRejection(
-        0, _receipt.OBSERVATION_VALIDATION_FAILED, ("unknown_signal",))
+    expected = _restart_receipt_issue()
     try:
-        writer = reopen()
-        with writer.mutation_transaction():
-            claim = writer.claim_report(
+        with storage.mutation_transaction():
+            claim = storage.claim_report(
                 subject_id="reopen-user", producer="reopen-producer",
                 report_id="reopen-report", payload_digest="v2:reopen", received_at=T0)
-            writer.finalize_report(replace(
+            if claim.status != _receipt.INGEST_ACCEPTED:
+                problems.append(
+                    "process-boundary prepare requires an empty isolated backend")
+                return problems
+            storage.finalize_report(replace(
                 claim, observations_applied=1, observations_rejected=(expected,)))
-        reader = reopen()
-        if reader is writer:
-            problems.append("reopen factory returned the same adapter instance")
-            return problems
-        replay = reader.claim_report(
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"process-boundary prepare raised {type(exc).__name__}: {exc}")
+    return problems
+
+
+def verify_report_receipt_restart_conformance(storage: Any) -> list[str]:
+    """Phase 2: in a new process, verify phase 1 only from durable state."""
+    problems: list[str] = []
+    expected = _restart_receipt_issue()
+    try:
+        replay = storage.claim_report(
             subject_id="reopen-user", producer="reopen-producer",
             report_id="reopen-report", payload_digest="v2:reopen", received_at=T0)
         if (replay.status != _receipt.INGEST_DUPLICATE
                 or replay.observations_applied != 0
                 or replay.observations_rejected != (expected,)):
-            problems.append("reopen lost durable Report observation issues")
+            problems.append(
+                "process-boundary verify lost durable Report observation issues")
     except Exception as exc:  # noqa: BLE001
-        problems.append(f"reopen receipt check raised {type(exc).__name__}: {exc}")
+        problems.append(f"process-boundary verify raised {type(exc).__name__}: {exc}")
     return problems
 
 
@@ -1192,6 +1212,7 @@ def run_storage_conformance(factory: StorageFactory) -> list[str]:
 
 
 __all__ = [
-    "run_storage_conformance", "run_report_receipt_reopen_conformance",
+    "run_storage_conformance", "prepare_report_receipt_restart_conformance",
+    "verify_report_receipt_restart_conformance",
     "GUARANTEES", "NOT_PROVABLE_IN_MEMORY",
 ]

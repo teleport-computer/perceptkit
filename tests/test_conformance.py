@@ -58,46 +58,62 @@ def test_catches_report_finalization_that_loses_durable_item_failures():
     assert hits(run_storage_conformance(broken(finalize_report=finalize_report)), "per-item")
 
 
-def _reopen_factory(storage_type=InMemoryStorage):
-    shared_reports = {}
-
-    def reopen():
-        storage = storage_type()
-        storage.reports = shared_reports
-        return storage
-
-    return reopen
+PROCESS_ONLY_REPORT_ISSUES = {}
 
 
-def test_report_issue_reopen_conformance_uses_a_distinct_adapter_instance():
+def _shared_report_storage(shared_reports, storage_type=InMemoryStorage):
+    storage = storage_type()
+    storage.reports = shared_reports
+    return storage
+
+
+def test_report_issue_restart_conformance_has_independent_prepare_and_verify_phases():
     from perceptkit import conformance
-    check = getattr(conformance, "run_report_receipt_reopen_conformance")
-    assert check(_reopen_factory()) == []
+
+    prepare = getattr(conformance, "prepare_report_receipt_restart_conformance")
+    verify = getattr(conformance, "verify_report_receipt_restart_conformance")
+    shared_reports = {}
+    assert prepare(_shared_report_storage(shared_reports)) == []
+    assert verify(_shared_report_storage(shared_reports)) == []
+    assert not hasattr(conformance, "run_report_receipt_reopen_conformance")
 
 
-def test_report_issue_reopen_conformance_catches_process_only_issue_cache():
+def test_report_issue_restart_verify_catches_module_cache_after_boundary_reset():
     from perceptkit import conformance
 
     class ProcessOnlyIssues(InMemoryStorage):
-        def __init__(self):
-            super().__init__()
-            self.issue_cache = {}
-
         def finalize_report(self, receipt):
             key = (receipt.subject_id, receipt.producer, receipt.report_id)
-            self.issue_cache[key] = receipt.observations_rejected
+            PROCESS_ONLY_REPORT_ISSUES[key] = receipt.observations_rejected
             super().finalize_report(replace(receipt, observations_rejected=()))
 
         def claim_report(self, **kwargs):
             receipt = super().claim_report(**kwargs)
             key = (kwargs["subject_id"], kwargs["producer"], kwargs["report_id"])
-            if receipt.status == "duplicate" and key in self.issue_cache:
-                return replace(receipt, observations_rejected=self.issue_cache[key])
+            if receipt.status == "duplicate" and key in PROCESS_ONLY_REPORT_ISSUES:
+                return replace(
+                    receipt, observations_rejected=PROCESS_ONLY_REPORT_ISSUES[key])
             return receipt
 
-    problems = conformance.run_report_receipt_reopen_conformance(
-        _reopen_factory(ProcessOnlyIssues))
-    assert hits(problems, "reopen")
+    PROCESS_ONLY_REPORT_ISSUES.clear()
+    shared_reports = {}
+    writer = _shared_report_storage(shared_reports, ProcessOnlyIssues)
+    assert conformance.prepare_report_receipt_restart_conformance(writer) == []
+
+    # This deliberately demonstrates the old false green: a fresh adapter in
+    # the same process can still read a module/global cache.
+    same_process_reader = _shared_report_storage(shared_reports, ProcessOnlyIssues)
+    assert conformance.verify_report_receipt_restart_conformance(
+        same_process_reader) == []
+
+    # Clearing the fake process cache lets this package test exercise the phase
+    # boundary. It is NOT Host restart evidence; Hosts must invoke verify from a
+    # second interpreter/subprocess against the same real database.
+    PROCESS_ONLY_REPORT_ISSUES.clear()
+    independent_phase_reader = _shared_report_storage(shared_reports, ProcessOnlyIssues)
+    problems = conformance.verify_report_receipt_restart_conformance(
+        independent_phase_reader)
+    assert hits(problems, "process-boundary")
 
 
 def test_catches_receipt_backfill_that_ignores_expected_digest():

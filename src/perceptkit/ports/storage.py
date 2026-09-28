@@ -180,9 +180,12 @@ class StoragePort(Protocol):
 
         Each item has one closed machine ``code`` and one-or-more sanitized
         diagnostics. Diagnostics are never parsed for recovery behavior. Host
-        adapters prove durability by reopening the same database through
-        ``run_report_receipt_reopen_conformance``; same-object replay is not
-        restart evidence.
+        Hosts prove durability by running
+        ``prepare_report_receipt_restart_conformance`` and
+        ``verify_report_receipt_restart_conformance`` in two separate
+        interpreters/subprocesses over the same isolated database. Two adapter
+        objects in one process can share a module cache and are not restart
+        evidence.
         """
         ...
 

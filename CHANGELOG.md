@@ -15,8 +15,9 @@ In development (not released) — v0.10 Current/export cutover:
   exact replay returns duplicate/applied=0 with the original item evidence.
   Each item carries one closed machine code; diagnostic text never drives
   recovery. Whole-batch preflight rejection and Report digest conflict remain
-  separate. A dedicated reopen conformance proves evidence survives a new
-  adapter instance over the same durable backend.
+  separate. A two-phase restart conformance must run from separate interpreters
+  over the same durable backend, so module/global caches cannot create a false
+  durability result.
 
 In development (not released) — consistency contract D07–D09:
 
