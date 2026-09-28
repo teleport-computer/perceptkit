@@ -20,6 +20,7 @@ from typing import Any, Callable, Mapping, Sequence
 from .contracts.context import IngestContext
 from .contracts.report import ReportEnvelope
 from .manifest.minimal import MINIMAL_SIGNALS
+from .manifest.checks import require_public_dimension_fields
 from .manifest.types import SignalDefinition
 from .ports.storage import StoragePort
 from .ports.wake import WakePort
@@ -55,6 +56,9 @@ class PerceptionKit:
     #: Only omitted timezone may use this validated IANA Host fallback (D09).
     timezone_fallback: str | None = None
     max_observations: int = 200
+
+    def __post_init__(self) -> None:
+        require_public_dimension_fields(self.signals)
 
     @property
     def _definitions(self):

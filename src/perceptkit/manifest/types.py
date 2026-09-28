@@ -175,6 +175,10 @@ class SignalDefinition:
     #: Wi-Fi，「当前连着哪些锚点」有两个答案，覆盖式写入只会剩最后一个。
     #: 更糟的是用户搬家、新旧网络都叫 "home" —— 按名字看是同一个，按
     #: ``anchor_id`` 看是两个，合并之后历史再也分不开哪段是哪个家。
+    #: With current_policy="latest", these form public business identity: each
+    #: field must have query_visibility="always" and non-restricted privacy.
+    #: current_policy="none" may reuse them as internal aggregate buckets;
+    #: changing to latest revalidates the public capability before any query.
     dimension_fields: tuple[str, ...] = ()
     #: **明细**（逐条观测）保留多少天。``PERMANENT`` = 永久;``0`` = 不存历史。
     history_retention_days: int = 0

@@ -29,6 +29,7 @@ from typing import Any, Mapping, Sequence
 from ..algorithms import history as _history
 from ..algorithms import trend_models as _trend
 from ..manifest.types import SignalDefinition
+from ..manifest.checks import require_public_dimension_fields
 from ..ports.storage import StoragePort
 from ..processing.retract import drop_retracted
 from ..processing import recurrence as _recurrence
@@ -125,6 +126,7 @@ def get_current(
     on_demand: bool = True,
 ) -> dict[str, list[CurrentView]]:
     """v0.10: signal -> entries[]，按 dimension_key 排序；无当前值返回 []。"""
+    require_public_dimension_fields(manifest)
     out: dict[str, list[CurrentView]] = {}
     raw = storage.get_current(subject_id=subject_id, signals=list(signals))
     for signal in signals:
@@ -155,6 +157,7 @@ def get_last_known(
     和 ``get_current`` 的区别是意图：这个函数的调用方已经知道自己要的是
     "最后一次"，不是"现在"。所以永远带 ``as_of``，永远不说 fresh。
     """
+    require_public_dimension_fields(manifest)
     sig = manifest.get(signal)
     projections = storage.get_current(subject_id=subject_id, signals=[signal]).get(signal)
     if sig is None or sig.current_policy == "none" or not projections:
@@ -487,6 +490,7 @@ def export_subject(
     它自己的业务表）要由宿主追加进来 —— 返回值里的 ``kit_managed_only``
     就是提醒这件事的。
     """
+    require_public_dimension_fields(manifest)
     if per_signal_limit is not None and (type(per_signal_limit) is not int or per_signal_limit < 1):
         raise ValueError("per_signal_limit must be a positive integer or None")
     signals = sorted(manifest)

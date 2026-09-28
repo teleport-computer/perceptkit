@@ -23,13 +23,31 @@ for entry in views["proximity_anchor"]:
 已知单维度的调用可以验证长度后取 `[0]`；多维信号必须迭代，不能挑最新一条。
 StoragePort.get_current 已经是维度数组，其合同不变。没有 legacy API 或形状探测开关。
 
+公开 `dimension_key` 的前提是 manifest 的公开身份能力声明：对
+`current_policy="latest"`，每个 dimension_fields 引用必须唯一对应已声明字段，
+该字段必须 `query_visibility="always"`，且 privacy_class 不得为 restricted。
+never/on_demand 字段不能通过拼进 key 绕过隐私投影；也不通过普通 hash 伪匿名。
+validate_manifest 返回明确错误，PerceptionKit 初始化立即拒绝，直接 query/export
+入口及运行时替换 manifest 后的读取也执行同一检查。Storage raw dimension_key
+仍属内部表示，只有满足该公开业务身份合同才允许作为公共 entry identity。
+
+dimension_fields 当前复用两种角色：`latest` 是公共 Current 身份，`none` 仅用于
+内部聚合分桶。睡眠 stage 属后者，保持 on_demand；所有 Current/last-known 返回 []，
+所以内部 stage key 不公开。以后将 none 改为 latest 时，公开能力检查立即重新生效。
+
 ## Export：完整性、窗口与命名
 
 `export_subject` 返回 JSON-compatible 对象。`per_signal_limit=None` 分页读到底；
 正整数为每个命名集合上限。只有找到第 cap+1 个匹配项才算截断；恰好 cap 项完整。
-`truncated` 是升序、不重复的集合名列表，空数组表示这些集合没有被 cap 截断。
+`truncated` 是升序、不重复的集合名列表，空数组表示这些集合没有被调用方 cap 截断。
 分页请求最多 500 行，只读取证明 cap+1 所需的剩余行；允许用一个空末页确认结束。
 零、负数、布尔或非整数 cap 会抛出 ValueError。
+
+已知边界：重复日历展开沿用 recurrence.MAX_INSTANCES=200，单一系列在大窗口内
+可能超过这个内部上限；当前查询并不将该展开上限计入 truncated。因此即使
+`per_signal_limit=None` 且 `truncated=[]`，也不能宣称日历所有重复实例无限完整。
+本轮不扩修 recurrence；最终验收必须带出此遗留，后续用独立重复实例游标/完整性
+合同处理。基础日历条目分页与调用方 cap 的完整性已按上述合同验证。
 
 | 导出 key / 截断名字 | start/end 的含义 |
 | --- | --- |
