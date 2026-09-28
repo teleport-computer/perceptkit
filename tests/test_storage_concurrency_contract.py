@@ -92,7 +92,7 @@ def test_ingest_correction_retraction_hold_identical_fact_through_all_writes():
     retract(kit, "A")
     assert first == storage.requests[0]
     assert not storage.held
-    assert kit.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"].value is None
+    assert kit.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"][0].value is None
 
 
 def test_batch_resources_canonical_independent_of_input_order():

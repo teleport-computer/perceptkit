@@ -338,14 +338,14 @@ class PerceptionKit:
         return list(self.storage.list_conflicts(subject_id=subject_id, signal=signal, status=status))
 
     def get_current(self, *, subject_id: str, signals: Sequence[str],
-                    now: datetime) -> dict[str, _queries.CurrentView]:
+                    now: datetime) -> dict[str, list[_queries.CurrentView]]:
         """取当前值，**带 TTL 判定**：过期的不冒充现在。"""
         return _queries.get_current(
             self.storage, subject_id=subject_id, signals=signals,
             manifest=self.signals, now=now,
         )
 
-    def get_last_known(self, *, subject_id: str, signal: str):
+    def get_last_known(self, *, subject_id: str, signal: str) -> list[_queries.CurrentView]:
         return _queries.get_last_known(
             self.storage, subject_id=subject_id, signal=signal, manifest=self.signals,
         )

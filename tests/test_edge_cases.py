@@ -123,7 +123,7 @@ def test_losing_permission_does_not_erase_what_we_last_knew():
     send(kit, steps_report(None, occurred=when("10:00"), rid="r2",
                            availability="unavailable"), when("10:00"))
 
-    view = kit.get_current(subject_id="u1", signals=["steps"], now=when("10:05"))["steps"]
+    view = kit.get_current(subject_id="u1", signals=["steps"], now=when("10:05"))["steps"][0]
     assert view.state == "unavailable"
     assert view.value is None
     assert view.last_known is not None and view.last_known["step_count"] == 8000
@@ -179,7 +179,7 @@ def test_a_late_arriving_unavailable_does_not_unseat_a_newer_reading():
     send(kit, steps_report(None, occurred=when("08:30"), rid="c",
                            availability="unavailable"), when("09:21"))
 
-    view = kit.get_current(subject_id="u1", signals=["steps"], now=when("09:25"))["steps"]
+    view = kit.get_current(subject_id="u1", signals=["steps"], now=when("09:25"))["steps"][0]
     assert view.state == "fresh" and view.value["step_count"] == 8000
 
 

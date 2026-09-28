@@ -65,8 +65,8 @@ def test_two_people_walking_do_not_share_a_step_count():
 
     u1 = kit.get_current(subject_id="u1", signals=["steps"], now=when("09:30"))
     u2 = kit.get_current(subject_id="u2", signals=["steps"], now=when("09:30"))
-    assert u1["steps"].value["step_count"] == 8000
-    assert u2["steps"].value["step_count"] == 200
+    assert u1["steps"][0].value["step_count"] == 8000
+    assert u2["steps"][0].value["step_count"] == 200
 
 
 def test_a_newer_reading_from_another_person_never_overwrites_mine():
@@ -77,7 +77,7 @@ def test_a_newer_reading_from_another_person_never_overwrites_mine():
     send(kit, "u2", report(11, "09:30", rid="b"), hhmm="09:30")
 
     u1 = kit.get_current(subject_id="u1", signals=["steps"], now=when("09:40"))
-    assert u1["steps"].value["step_count"] == 8000
+    assert u1["steps"][0].value["step_count"] == 8000
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +96,7 @@ def test_two_people_can_use_the_same_report_id_without_erasing_each_other():
 
     assert first.applied and second.applied
     u2 = kit.get_current(subject_id="u2", signals=["steps"], now=when("09:30"))
-    assert u2["steps"].value["step_count"] == 200
+    assert u2["steps"][0].value["step_count"] == 200
 
 
 def test_the_same_source_event_id_from_two_people_is_two_observations():
@@ -194,9 +194,9 @@ def test_deleting_one_persons_data_leaves_everyone_else_untouched():
     s.purge_subject(subject_id="u1")
 
     gone = kit.get_current(subject_id="u1", signals=["steps"], now=when("09:30"))
-    assert gone["steps"].state == "no_data" and gone["steps"].value is None
+    assert gone["steps"] == []
     u2 = kit.get_current(subject_id="u2", signals=["steps"], now=when("09:30"))
-    assert u2["steps"].value["step_count"] == 200
+    assert u2["steps"][0].value["step_count"] == 200
 
 
 def test_a_retention_sweep_for_one_person_does_not_sweep_another():

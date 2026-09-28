@@ -169,7 +169,7 @@ def test_the_converted_report_goes_all_the_way_into_the_kit():
                      context=IngestContext("u1", NOW))
     assert out.applied and not out.rejected
 
-    view = kit.get_current(subject_id="u1", signals=["battery"], now=NOW)["battery"]
+    view = kit.get_current(subject_id="u1", signals=["battery"], now=NOW)["battery"][0]
     assert view.state == "fresh"
     assert view.value["level_ratio"] == 0.62
 
@@ -185,7 +185,7 @@ def test_a_denied_snapshot_lands_as_unavailable_all_the_way_through():
                context=IngestContext("u1", later))
 
     view = kit.get_current(subject_id="u1", signals=["health_resting_hr"],
-                           now=NOW + timedelta(minutes=2))["health_resting_hr"]
+                           now=NOW + timedelta(minutes=2))["health_resting_hr"][0]
     assert view.state == "unavailable"
     assert view.last_known is not None      # 上次读到的还在
 
@@ -269,5 +269,6 @@ def test_the_fanned_out_observations_are_accepted_by_the_kit():
     wanted = ["health_body_fat", "health_blood_pressure", "health_oxygen", "steps"]
     views = kit.get_current(subject_id="u1", signals=wanted, now=NOW)
     for name in wanted:
-        assert views[name].state == "fresh", f"{name} 没落进 kit"
-    assert views["health_body_fat"].value["body_fat_ratio"] == pytest.approx(0.184)
+        assert len(views[name]) == 1
+        assert views[name][0].state == "fresh", f"{name} 没落进 kit"
+    assert views["health_body_fat"][0].value["body_fat_ratio"] == pytest.approx(0.184)

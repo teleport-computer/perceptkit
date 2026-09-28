@@ -22,7 +22,7 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 from typing import Any, Mapping, Sequence
 
@@ -107,10 +107,11 @@ def project(sig: SignalDefinition, value: Mapping[str, Any] | None,
 
 @dataclass(frozen=True)
 class CurrentView:
-    """一个信号的当前状态，以及"它还算不算当前"。"""
+    """一个信号维度的状态；同一信号的其他维度独立判断。"""
 
     signal: str
-    #: ``fresh`` / ``stale`` / ``unavailable`` / ``no_data``
+    dimension_key: str
+    #: ``fresh`` / ``stale`` / ``unavailable`` / ``last_known``
     state: str
     value: dict[str, Any] | None
     #: 最后一次可靠值。**stale 时也给**，但必须带 ``as_of``，不能冒充当前。
@@ -122,37 +123,33 @@ def get_current(
     storage: StoragePort, *, subject_id: str, signals: Sequence[str],
     manifest: Mapping[str, SignalDefinition], now: datetime,
     on_demand: bool = True,
-) -> dict[str, CurrentView]:
-    """取当前值，带 TTL 判定和隐私投影。"""
-    out: dict[str, CurrentView] = {}
+) -> dict[str, list[CurrentView]]:
+    """v0.10: signal -> entries[]，按 dimension_key 排序；无当前值返回 []。"""
+    out: dict[str, list[CurrentView]] = {}
     raw = storage.get_current(subject_id=subject_id, signals=list(signals))
     for signal in signals:
         sig = manifest.get(signal)
         projections = raw.get(signal) or []
         if sig is None or sig.current_policy == "none" or not projections:
-            out[signal] = CurrentView(signal, "no_data", None)
+            out[signal] = []
             continue
-        proj = max(projections, key=lambda p: p.observed_at)
-        visible = project(sig, proj.typed_value, on_demand=on_demand)
-        fresh = proj.expires_at is None or proj.expires_at > now
-        if proj.availability != "observed":
-            state = "unavailable"
-        else:
-            state = "fresh" if fresh else "stale"
-        out[signal] = CurrentView(
-            signal=signal,
-            state=state,
-            value=visible if state == "fresh" else None,
-            last_known=visible,
-            as_of=proj.observed_at.isoformat(),
-        )
+        out[signal] = []
+        for proj in sorted(projections, key=lambda p: p.dimension_key):
+            visible = project(sig, proj.typed_value, on_demand=on_demand)
+            fresh = proj.expires_at is None or proj.expires_at > now
+            state = "unavailable" if proj.availability != "observed" else ("fresh" if fresh else "stale")
+            out[signal].append(CurrentView(
+                signal=signal, dimension_key=proj.dimension_key, state=state,
+                value=visible if state == "fresh" else None, last_known=visible,
+                as_of=proj.observed_at.isoformat(),
+            ))
     return out
 
 
 def get_last_known(
     storage: StoragePort, *, subject_id: str, signal: str,
     manifest: Mapping[str, SignalDefinition], on_demand: bool = True,
-) -> CurrentView:
+) -> list[CurrentView]:
     """最后一次可靠值，**不判 TTL**。
 
     和 ``get_current`` 的区别是意图：这个函数的调用方已经知道自己要的是
@@ -161,13 +158,12 @@ def get_last_known(
     sig = manifest.get(signal)
     projections = storage.get_current(subject_id=subject_id, signals=[signal]).get(signal)
     if sig is None or sig.current_policy == "none" or not projections:
-        return CurrentView(signal, "no_data", None)
-    proj = max(projections, key=lambda p: p.observed_at)
-    return CurrentView(
-        signal=signal, state="last_known", value=None,
+        return []
+    return [CurrentView(
+        signal=signal, dimension_key=proj.dimension_key, state="last_known", value=None,
         last_known=project(sig, proj.typed_value, on_demand=on_demand),
         as_of=proj.observed_at.isoformat(),
-    )
+    ) for proj in sorted(projections, key=lambda p: p.dimension_key)]
 
 
 # ---------------------------------------------------------------------------
@@ -315,9 +311,10 @@ def list_calendar_events(
     # 展开会把一条基础日程变成几十条，所以"读了几条"和"产出几条"对不上，
     # 游标必须记两个位置：读到第几条基础日程、以及那一条展开后消费到第几个。
     while True:
+        chunk = min(_BASE_CHUNK, size - len(out))
         rows = storage.list_calendar_events(
             subject_id=subject_id, start=start, end=end,
-            limit=_BASE_CHUNK, offset=base_at,
+            limit=chunk, offset=base_at,
         )
         if not rows:
             return out, None
@@ -360,7 +357,7 @@ def list_calendar_events(
             base_at += 1
             if len(out) >= size:
                 return out, _join_cursor(base_at, 0)
-        if len(rows) < _BASE_CHUNK:
+        if len(rows) < chunk:
             return out, None
 
 
@@ -461,9 +458,10 @@ def _drain(fetch, *, cap: int | None) -> tuple[list[Any], bool]:
     out: list[Any] = []
     cursor = None
     while True:
-        rows, cursor = fetch(cursor, MAX_LIMIT)
+        size = MAX_LIMIT if cap is None else min(MAX_LIMIT, cap + 1 - len(out))
+        rows, cursor = fetch(cursor, size)
         out.extend(rows)
-        if cap is not None and len(out) >= cap:
+        if cap is not None and len(out) > cap:
             return out[:cap], True
         if not cursor:
             return out, False
@@ -489,6 +487,8 @@ def export_subject(
     它自己的业务表）要由宿主追加进来 —— 返回值里的 ``kit_managed_only``
     就是提醒这件事的。
     """
+    if per_signal_limit is not None and (type(per_signal_limit) is not int or per_signal_limit < 1):
+        raise ValueError("per_signal_limit must be a positive integer or None")
     signals = sorted(manifest)
     observations: dict[str, list[dict[str, Any]]] = {}
     daily: dict[str, list[dict[str, Any]]] = {}
@@ -512,71 +512,93 @@ def export_subject(
         # 日聚合也得给。明细有保留期、日统计是永久的 —— 明细清掉之后，
         # 日统计就是用户那段历史**仅剩**的东西。不给等于把留存最久的
         # 那一份漏掉了，而且没人会发现。
-        aggs = storage.get_aggregate(
-            subject_id=subject_id, signal=signal,
-            start_date=_ALL_TIME_START, end_date=_ALL_TIME_END,
-            aggregation_kind="daily",
+        aggs, cut = _drain(
+            lambda cursor, limit, _s=signal: _offset_page(
+                storage.get_aggregate, cursor=cursor, limit=limit,
+                subject_id=subject_id, signal=_s,
+                start_date=start.date() if start else _ALL_TIME_START,
+                end_date=end.date() if end else _ALL_TIME_END,
+                aggregation_kind="daily"),
+            cap=per_signal_limit,
         )
+        if cut:
+            truncated.append(f"daily_aggregates:{signal}")
         if aggs:
             daily[signal] = [
-                {"date": a.local_date.isoformat(), "value": a.typed_aggregate,
+                {"date": a.local_date.isoformat(), "value": project(manifest[signal], a.typed_aggregate),
                  "aggregation_version": a.aggregation_version}
                 for a in sorted(aggs, key=lambda a: (a.local_date,
                                                      a.aggregation_version))
             ]
 
     current = {
-        signal: {"state": view.state, "value": view.value,
-                 "last_known": view.last_known, "as_of": view.as_of}
-        for signal, view in get_current(
+        signal: [asdict(view) for view in entries]
+        for signal, entries in get_current(
             storage, subject_id=subject_id, signals=signals,
             manifest=manifest, now=end or _far_future(),
         ).items()
-        if view.state != "no_data"
+        if entries
     }
+    collections = {}
+    for name, fetch in {
+        "calendar_events": lambda cursor, limit: list_calendar_events(
+            storage, subject_id=subject_id, start=start, end=end, cursor=cursor, limit=limit),
+        # Reminders have no universal occurrence time; start/end do not apply.
+        "reminders": lambda cursor, limit: _offset_page(
+            storage.list_reminders, subject_id=subject_id, include_completed=True, cursor=cursor, limit=limit),
+        "events": lambda cursor, limit: _offset_page(
+            storage.list_events, subject_id=subject_id, start=start, end=end, cursor=cursor, limit=limit),
+        "conflicts": lambda cursor, limit: _offset_page(
+            storage.list_conflicts, subject_id=subject_id, start=start, end=end,
+            cursor=cursor, limit=limit),
+    }.items():
+        rows, cut = _drain(fetch, cap=per_signal_limit)
+        if name == "conflicts":
+            collections[name] = [_conflict_export(r) for r in rows]
+        elif name == "reminders":
+            collections[name] = [{"source_reminder_id": r.source_reminder_id, **r.reminder_fields} for r in rows]
+        elif name == "events":
+            collections[name] = [{"event_id": e.event_id, "type": e.event_type,
+                                  "occurred_at": e.occurred_at.isoformat(),
+                                  "delivery_state": e.delivery_state, "attempts": e.attempt_count} for e in rows]
+        else:
+            collections[name] = rows
+        if cut:
+            truncated.append(name)
 
-    return {
+    return _json_value({
         "subject_id": subject_id,
         "kit_managed_only": True,
         "current": current,
         "observations": observations,
         "daily_aggregates": daily,
-        "conflicts": [_conflict_export(r) for r in storage.list_conflicts(subject_id=subject_id)],
         # 哪几类被 per_signal_limit 截断了。**空列表 = 真的是全部**，
         # 不给这一栏的话，"少给了一截"和"本来就这么多"分辨不出来。
-        "truncated": truncated,
-        "calendar_events": _drain(
-            lambda cursor, limit: list_calendar_events(
-                storage, subject_id=subject_id, start=start, end=end,
-                cursor=cursor, limit=limit),
-            cap=per_signal_limit)[0],
-        "reminders": _drain(
-            lambda cursor, limit: list_reminders(
-                storage, subject_id=subject_id, include_completed=True,
-                cursor=cursor, limit=limit),
-            cap=per_signal_limit)[0],
-        # 待投递的事件不是"用户的数据"，是我们还没送到的东西，列在这里只为完整。
-        "pending_events": _drain(
-            lambda cursor, limit: list_events(
-                storage, subject_id=subject_id, cursor=cursor, limit=limit),
-            cap=per_signal_limit)[0],
-    }
+        "truncated": sorted(truncated),
+        **collections,
+    })
+
+
+def _offset_page(fetch, *, cursor, limit, **kwargs):
+    """Bounded page, allowing a final empty probe instead of fetching ahead twice."""
+    at = _offset(cursor)
+    rows = list(fetch(**kwargs, limit=limit, offset=at))
+    return rows, str(at + len(rows)) if len(rows) == limit else None
+
+
+def _json_value(value):
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _json_value(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_json_value(item) for item in value]
+    return value
 
 
 def _conflict_export(record):
     """Export audit metadata as JSON-compatible data, matching other exports."""
-    from dataclasses import asdict
-
-    def plain(value):
-        if isinstance(value, (date, datetime)):
-            return value.isoformat()
-        if isinstance(value, dict):
-            return {key: plain(item) for key, item in value.items()}
-        if isinstance(value, (tuple, list)):
-            return [plain(item) for item in value]
-        return value
-
-    return plain(asdict(record))
+    return _json_value(asdict(record))
 
 
 #: 导出时拿"全时段"去取聚合 —— 这个包不读时钟，所以用固定边界而不是 today()。

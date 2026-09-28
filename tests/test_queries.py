@@ -434,7 +434,7 @@ def test_the_last_known_value_always_says_when_it_was_true():
             "value": {"step_count": 8000}}],
     }, context=IngestContext("u1", t("2026-08-01")))
 
-    view = kit.get_last_known(subject_id="u1", signal="steps")
+    view = kit.get_last_known(subject_id="u1", signal="steps")[0]
     assert view.state == "last_known"
     assert view.as_of is not None and view.as_of.startswith("2026-08-01")
     # **永远不说 fresh，也不把值放在 value 上** —— 放上去调用方会当成现在的事实
@@ -446,7 +446,7 @@ def test_asking_for_the_last_known_of_a_signal_with_no_data_says_so():
     s = InMemoryStorage()
     kit = PerceptionKit(storage=s)
     view = kit.get_last_known(subject_id="u1", signal="steps")
-    assert view.state == "no_data" and view.last_known is None
+    assert view == []
 
 
 def test_a_stale_current_still_reports_when_it_was_true():
@@ -465,7 +465,7 @@ def test_a_stale_current_still_reports_when_it_was_true():
 
     # steps 的 TTL 是 1 小时
     view = kit.get_current(subject_id="u1", signals=["steps"],
-                           now=t("2026-08-01", "23:00"))["steps"]
+                           now=t("2026-08-01", "23:00"))["steps"][0]
     assert view.state == "stale"
     assert view.value is None                  # 不冒充现在
     assert view.as_of.startswith("2026-08-01")  # 但说得出是什么时候的
@@ -540,10 +540,8 @@ def test_acceptance_A17_public_current_preserves_both_anchor_dimensions():
         assert len(out.applied) == 1
     assert len(storage.get_current(subject_id="u", signals=["proximity_anchor"])["proximity_anchor"]) == 2
     public = kit.get_current(subject_id="u", signals=["proximity_anchor"], now=T + timedelta(minutes=2))
-    # D10: measure lost dimensions in today's public API. This normalization is
-    # test-only, not a compatibility API or a v0.9.1 public shape requirement.
-    value = public["proximity_anchor"]
-    entries = value if isinstance(value, list) else [value]
+    entries = public["proximity_anchor"]
+    assert isinstance(entries, list)
     assert {e.value["anchor_id"] for e in entries if e.value} == {"home", "office"}
 
 

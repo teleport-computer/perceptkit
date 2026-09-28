@@ -143,7 +143,8 @@ class InMemoryStorage:
         return deepcopy(self.conflicts[key])
 
     def list_conflicts(self, *, subject_id, signal=None, source=None,
-                       fact_key=None, status=None):
+                       fact_key=None, status=None, start=None, end=None,
+                       limit=None, offset=0):
         if status not in (None, "pending", "resolved"):
             raise ValueError("conflict status must be pending or resolved")
         return deepcopy(sorted((r for r in self.conflicts.values()
@@ -151,8 +152,11 @@ class InMemoryStorage:
                                 and (signal is None or r.signal == signal)
                                 and (source is None or r.source == source)
                                 and (fact_key is None or r.fact_key == fact_key)
-                                and (status is None or r.status == status)),
-                               key=lambda r: (r.created_at, r.conflict_id)))
+                                and (status is None or r.status == status)
+                                and (start is None or r.created_at >= start)
+                                and (end is None or r.created_at <= end)),
+                               key=lambda r: (r.created_at, r.conflict_id))[
+                                   offset:None if limit is None else offset + limit])
 
     def resolve_conflict(self, *, subject_id, conflict_id, revision,
                          semantic_digest, observation_id, resolved_at):
@@ -327,13 +331,15 @@ class InMemoryStorage:
         return len(doomed)
 
     def get_aggregate(self, *, subject_id, signal, start_date, end_date,
-                      aggregation_kind=None):
-        return [
+                      aggregation_kind=None, limit=None, offset=0):
+        rows = [
             a for (subj, sig, day, kind, _v), a in self.aggregates.items()
             if subj == subject_id and sig == signal
             and start_date <= day <= end_date
             and (aggregation_kind is None or kind == aggregation_kind)
         ]
+        rows.sort(key=lambda a: (a.local_date, a.aggregation_kind, a.aggregation_version))
+        return rows[offset:None if limit is None else offset + limit]
 
     def put_aggregate(self, aggregate: DailyAggregate) -> None:
         key = (

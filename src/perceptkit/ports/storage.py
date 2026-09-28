@@ -54,11 +54,16 @@ class StoragePort(Protocol):
 
     def list_conflicts(self, *, subject_id: str, signal: str | None = None,
                        source: str | None = None, fact_key: str | None = None,
-                       status: str | None = None) -> Sequence[ConflictRecord]:
+                       status: str | None = None,
+                       start: datetime | None = None, end: datetime | None = None,
+                       limit: int | None = None, offset: int = 0) -> Sequence[ConflictRecord]:
         """Subject-isolated, ordered by (created_at, conflict_id), no implicit cap.
 
         Fact mutation reads use source/fact_key under the same owner. Returning
         detached records must not permit a caller to mutate durable evidence.
+        start/end inclusively filter created_at (quarantine detection time),
+        before applying offset/limit. None limit preserves the full query.
+        Database adapters must push filtering, stable ordering and paging down.
         """
         ...
 
@@ -239,7 +244,14 @@ class StoragePort(Protocol):
         self, *, subject_id: str, signal: str,
         start_date: date, end_date: date,
         aggregation_kind: str | None = None,
+        limit: int | None = None, offset: int = 0,
     ) -> Sequence[DailyAggregate]:
+        """Inclusive local-date window, ordered by (local_date, kind, version).
+
+        Optional limit/offset are applied after filtering in storage. None limit
+        preserves full reads. Export is a versioned audit; ordinary active-version
+        selection is a separate query concern.
+        """
         ...
 
     def put_aggregate(self, aggregate: DailyAggregate) -> None:

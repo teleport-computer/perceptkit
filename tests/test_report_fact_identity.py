@@ -183,7 +183,7 @@ def test_correction_can_move_current_fact_back_before_a_sibling():
     out = ingest(kit, [dict(sample, source_revision=2, value={"weight_kg": 68},
                            occurred_at=(T - timedelta(minutes=2)).isoformat())], report_id="corrected")
     assert len(out.applied) == 1
-    assert kit.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"].value == {"weight_kg": 69}
+    assert kit.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"][0].value == {"weight_kg": 69}
 
 
 def test_unseen_older_revision_cannot_restore_an_outdated_fact():

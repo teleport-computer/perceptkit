@@ -67,7 +67,7 @@ def test_a_reselected_value_still_expires():
         "过期时间不是按这个值自己的观测时刻算的"
 
     view = kit.get_current(subject_id="u", signals=["health_weight"],
-                           now=T0 + timedelta(days=600))["health_weight"]
+                           now=T0 + timedelta(days=600))["health_weight"][0]
     assert view.state != "fresh", "600 天前的旧体重还在冒充「现在」"
 
 

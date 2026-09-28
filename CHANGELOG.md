@@ -1,5 +1,16 @@
 # 变更记录
 
+In development (not released) — v0.10 Current/export cutover:
+
+- Public Current has one shape: `signal -> entries[]`, ordered by dimension key;
+  TTL, availability and privacy remain independent per dimension. Last-known also
+  returns entries, and empty/no-current signals return `[]`.
+- Export preserves all Current dimensions, renames `pending_events` to `events`
+  (all delivery states), drains every collection or proves cap+1 before reporting
+  truncation, and applies explicit time windows to aggregates/events/conflicts.
+- Conflict and aggregate storage reads add optional bounded pagination. Full
+  contract and Host migration checklist: [v0.10 Current/export](docs/current-export-v010.md).
+
 In development (not released) — consistency contract D07–D09:
 
 - Pending Fact/anomaly conflicts now persist as queryable ConflictRecords;

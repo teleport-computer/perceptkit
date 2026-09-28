@@ -91,7 +91,7 @@ def _seed_export_collection(storage, collection, count):
     return kit
 
 
-@pytest.mark.parametrize("collection", ["health_weight", "calendar_events", "reminders", "pending_events"])
+@pytest.mark.parametrize("collection", ["health_weight", "calendar_events", "reminders", "events"])
 def test_acceptance_A19_exact_export_cap_is_not_truncated(collection):
     kit = _seed_export_collection(InMemoryStorage(), collection, 1)
     dump = kit.export_subject(subject_id="u", per_signal_limit=1)
@@ -100,7 +100,7 @@ def test_acceptance_A19_exact_export_cap_is_not_truncated(collection):
     assert dump["truncated"] == [], dump["truncated"]
 
 
-@pytest.mark.parametrize("collection", ["health_weight", "calendar_events", "reminders", "pending_events"])
+@pytest.mark.parametrize("collection", ["health_weight", "calendar_events", "reminders", "events"])
 def test_acceptance_A20_over_export_cap_names_each_truncated_collection(collection):
     kit = _seed_export_collection(InMemoryStorage(), collection, 2)
     dump = kit.export_subject(subject_id="u", per_signal_limit=1)

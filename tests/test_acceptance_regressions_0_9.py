@@ -126,10 +126,7 @@ def test_acceptance_A02_sleep_current_does_not_present_one_segment_as_the_night(
                          signal="health_sleep")
     assert len(ingest(kit, [sample]).applied) == 1
     view = kit.get_current(subject_id="u", signals=["health_sleep"], now=T).get("health_sleep")
-    # Do not prescribe a replacement API: omitted/no-data/empty entries all
-    # avoid falsely offering a raw segment as a meaningful sleep Current.
-    entries = view if isinstance(view, list) else ([] if view is None else [view])
-    assert all(x.value is None and x.last_known is None for x in entries), view
+    assert view == []
 
 
 @pytest.fixture
@@ -253,7 +250,8 @@ def test_acceptance_A08_retraction_between_fact_check_and_write_cannot_resurrect
         retract(second, "A")
     assert storage.list_retractions(subject_id="u", signal="health_weight")
     view = second.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"]
-    assert view.value is None and view.last_known is None, view
+    assert len(view) == 1
+    assert view[0].value is None and view[0].last_known is None, view
     aggregates = storage.get_aggregate(subject_id="u", signal="health_weight", start_date=DAY, end_date=DAY)
     assert all(not a.typed_aggregate.get("weight_kg") for a in aggregates), aggregates
 
@@ -264,7 +262,7 @@ def test_acceptance_A14_relative_jump_does_not_become_current_and_survives_retry
     weigh(kit, 70)
     out = weigh(kit, 150, eid="jump", at=T + timedelta(hours=1))
     assert len(out.conflicts) == 1 and not out.rejected, out
-    assert kit.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"].value == {"weight_kg": 70}
+    assert kit.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"][0].value == {"weight_kg": 70}
     # A new Kit/report cannot silently relabel the unresolved candidate applied.
     retry = weigh(PerceptionKit(storage), 150, eid="jump", at=T + timedelta(hours=1), report_id="retry-jump")
     assert len(retry.conflicts) == 1 and not retry.applied and not retry.duplicates, retry
@@ -278,7 +276,7 @@ def test_acceptance_A15_units_convert_before_validation(unit, value, canonical):
     out = ingest(kit, [observation({"weight_kg": value}, eid="converted", at=T + timedelta(hours=1),
                                   units={"weight_kg": unit})], report_id="converted", at=T + timedelta(hours=1))
     assert not out.rejected and not out.conflicts and len(out.applied) == 1, out
-    current = kit.get_current(subject_id="u", signals=["health_weight"], now=T + timedelta(hours=1))["health_weight"]
+    current = kit.get_current(subject_id="u", signals=["health_weight"], now=T + timedelta(hours=1))["health_weight"][0]
     assert current.value["weight_kg"] == pytest.approx(canonical)
 
 
@@ -289,7 +287,7 @@ def test_acceptance_A15_unspecified_unit_means_canonical(units):
     extras = {} if units is None else {"units": units}
     out = ingest(kit, [observation({"weight_kg": 70}, **extras)])
     assert len(out.applied) == 1 and not out.rejected
-    assert kit.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"].value == {"weight_kg": 70}
+    assert kit.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"][0].value == {"weight_kg": 70}
 
 
 def test_acceptance_A16_invalid_explicit_timezone_rejects_only_that_observation():

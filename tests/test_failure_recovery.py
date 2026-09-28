@@ -204,4 +204,4 @@ def test_acceptance_A06_exhausted_current_cas_rolls_back_every_write_and_can_ret
     storage.fail_cas = False
     retry = ingest(kit, [sample])
     assert len(retry.applied) == 1 and not retry.duplicates
-    assert kit.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"].value == {"weight_kg": 70}
+    assert kit.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"][0].value == {"weight_kg": 70}

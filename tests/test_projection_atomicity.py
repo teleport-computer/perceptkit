@@ -71,9 +71,9 @@ def test_sleep_queries_hide_legacy_segment_current():
         observed_at=T, received_at=T), expected_version=-1)
     kit = PerceptionKit(storage)
     view = kit.get_current(subject_id="u", signals=["health_sleep"], now=T)["health_sleep"]
-    assert view.value is None and view.last_known is None
+    assert view == []
     last = kit.get_last_known(subject_id="u", signal="health_sleep")
-    assert last.value is None and last.last_known is None
+    assert last == []
 
 
 def test_sleep_reference_mapping_does_not_promise_current_storage():

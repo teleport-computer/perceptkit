@@ -248,7 +248,7 @@ def test_a_restricted_field_never_reaches_the_agent_either():
     kit = PerceptionKit(storage=s)
     kit.ingest(_location(coordinate={"lat": 31.23}), context=ctx("10:00"))
     view = kit.get_current(subject_id="u1", signals=["location_city"], now=t("10:05"))
-    assert "coordinate" not in (view["location_city"].value or {})
+    assert "coordinate" not in (view["location_city"][0].value or {})
 
 
 def test_fields_the_manifest_never_declared_do_not_get_persisted():

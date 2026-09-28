@@ -119,12 +119,12 @@ def main() -> None:
     print("\n⑥ agent 主动来查")
     current = kit.get_current(subject_id="user_1", signals=["steps"],
                               now=moment("11:05"))
-    print(f"   现在：{current['steps'].state} {current['steps'].value}")
+    print(f"   现在：{current['steps'][0].state} {current['steps'][0].value}")
 
     stale = kit.get_current(subject_id="user_1", signals=["steps"],
                             now=moment("23:00"))
-    print(f"   十二小时后：{stale['steps'].state}"
-          f"（不冒充当前，但给 last_known + as_of={stale['steps'].as_of}）")
+    print(f"   十二小时后：{stale['steps'][0].state}"
+          f"（不冒充当前，但给 last_known + as_of={stale['steps'][0].as_of}）")
 
     daily = kit.get_daily(subject_id="user_1", signal="steps",
                           start=moment("00:00").date(), end=moment("00:00").date())

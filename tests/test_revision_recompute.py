@@ -110,7 +110,7 @@ def test_acceptance_A09_retraction_repairs_every_derived_projection(projection):
     old_event = next(iter(storage.outbox))
     retract(kit)
     if projection == "current":
-        assert kit.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"].value == {"weight_kg": 70}
+        assert kit.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"][0].value == {"weight_kg": 70}
     elif projection == "aggregate":
         assert aggregate(storage, "health_weight").typed_aggregate["weight_kg"] == 70
     elif projection == "rule_state":
@@ -165,7 +165,7 @@ def test_acceptance_A11_correction_repairs_every_derived_projection(projection):
     out = weigh(kit, 70, eid="trigger", at=T + timedelta(hours=1), revision=2)
     assert len(out.applied) == 1 and not out.duplicates
     if projection == "current":
-        assert kit.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"].value == {"weight_kg": 70}
+        assert kit.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"][0].value == {"weight_kg": 70}
     elif projection == "aggregate":
         assert aggregate(storage, "health_weight").typed_aggregate["weight_kg"] == 70
     elif projection == "rule_state":
