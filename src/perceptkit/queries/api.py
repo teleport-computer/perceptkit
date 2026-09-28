@@ -22,7 +22,7 @@
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timezone
 from typing import Any, Mapping, Sequence
 
@@ -30,7 +30,8 @@ from ..algorithms import history as _history
 from ..algorithms import trend_models as _trend
 from ..manifest.types import SignalDefinition
 from ..manifest.checks import require_public_dimension_fields
-from ..ports.storage import StoragePort
+from ..ports.storage import StoragePort, require_aggregate_generation_storage
+from ..contracts.records import DailyAggregate
 from ..processing.retract import drop_retracted
 from ..processing import recurrence as _recurrence
 
@@ -225,22 +226,39 @@ class DailyView:
 def _active_aggregate_rows(storage, *, subject_id, signal, start_date, end_date,
                            aggregation_kind="daily", include_incomplete=True):
     """Read one explicit active generation; never infer ``max(version)``."""
-    active_getter = getattr(storage, "get_active_aggregate_generation", None)
-    active = (active_getter(subject_id=subject_id, signal=signal,
-                            aggregation_kind=aggregation_kind)
-              if callable(active_getter) else None)
+    require_aggregate_generation_storage(storage)
+    active = storage.get_active_aggregate_generation(
+        subject_id=subject_id, signal=signal, aggregation_kind=aggregation_kind)
+    if active is None:
+        return []
     rows = storage.get_aggregate(
         subject_id=subject_id, signal=signal, start_date=start_date,
         end_date=end_date, aggregation_kind=aggregation_kind,
     )
-    if active is not None:
-        rows = [row for row in rows if row.generation_id == active.generation_id]
-    else:
-        # Transitional adapter behavior for pre-D11 hosts. This is intentionally
-        # the Kit's declared current algorithm, not max(version) or insertion
-        # order. Production conformance requires an explicit active pointer.
-        from ..processing.pipeline import AGGREGATION_VERSION
-        rows = [row for row in rows if row.aggregation_version == AGGREGATION_VERSION]
+    rows = [row for row in rows if row.generation_id == active.generation_id]
+    by_day = {row.local_date: row for row in rows}
+    incomplete_days = {
+        day for day in active.incomplete_dates if start_date <= day <= end_date
+    }
+    for day in incomplete_days:
+        row = by_day.get(day)
+        if row is None:
+            by_day[day] = DailyAggregate(
+                subject_id=subject_id, signal=signal, local_date=day,
+                aggregation_kind=aggregation_kind,
+                aggregation_version=active.aggregation_version,
+                typed_aggregate={}, generation_id=active.generation_id,
+                completeness="incomplete",
+                incomplete_reasons=active.incomplete_reasons,
+                source_coverage={"generation_incomplete_placeholder": True},
+                updated_at=active.updated_at,
+            )
+        elif row.completeness == "complete":
+            by_day[day] = replace(
+                row, completeness="incomplete",
+                incomplete_reasons=tuple(sorted(set(row.incomplete_reasons)
+                                                | set(active.incomplete_reasons))))
+    rows = list(by_day.values())
     if not include_incomplete:
         rows = [row for row in rows if row.completeness == "complete"]
     # Rebuild coverage includes no-data days as accounted rows; ordinary daily
@@ -248,6 +266,7 @@ def _active_aggregate_rows(storage, *, subject_id, signal, start_date, end_date,
     return [row for row in rows if not (
         row.source_coverage.get("recomputed") is True
         and int(row.source_coverage.get("observations", 0)) == 0
+        and row.local_date not in incomplete_days
     )]
 
 
@@ -266,6 +285,7 @@ def get_daily_aggregates(
     )
     return [
         DailyView(date=r.local_date.isoformat(), value=r.typed_aggregate,
+                  has_data=not r.source_coverage.get("generation_incomplete_placeholder", False),
                   completeness=r.completeness,
                   incomplete_reasons=r.incomplete_reasons)
         for r in sorted(rows, key=lambda r: r.local_date)
@@ -534,6 +554,7 @@ def export_subject(
     signals = sorted(manifest)
     observations: dict[str, list[dict[str, Any]]] = {}
     daily: dict[str, list[dict[str, Any]]] = {}
+    generations: dict[str, list[dict[str, Any]]] = {}
     truncated: list[str] = []
     for signal in signals:
         rows, cut = _drain(
@@ -576,6 +597,20 @@ def export_subject(
                                                      a.aggregation_version))
             ]
 
+        attempts, cut = _drain(
+            lambda cursor, limit, _s=signal: _offset_page(
+                storage.list_aggregate_generations,
+                cursor=cursor, limit=limit,
+                subject_id=subject_id, signal=_s, aggregation_kind="daily",
+                start_date=start.date() if start else None,
+                end_date=end.date() if end else None),
+            cap=per_signal_limit,
+        )
+        if cut:
+            truncated.append(f"aggregate_generations:{signal}")
+        if attempts:
+            generations[signal] = [_json_value(asdict(g)) for g in attempts]
+
     current = {
         signal: [asdict(view) for view in entries]
         for signal, entries in get_current(
@@ -617,6 +652,7 @@ def export_subject(
         "current": current,
         "observations": observations,
         "daily_aggregates": daily,
+        "aggregate_generations": generations,
         # 哪几类被 per_signal_limit 截断了。**空列表 = 真的是全部**，
         # 不给这一栏的话，"少给了一截"和"本来就这么多"分辨不出来。
         "truncated": sorted(truncated),

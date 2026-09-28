@@ -156,6 +156,8 @@ def recompute_range(
     ``allow_incomplete=False``（默认）时，明细可能已经不全的日子**不算**，
     并在 ``skipped`` 里说明原因。True 只写 incomplete 审计候选，不激活。
     """
+    if end_date < start_date:
+        raise ValueError("aggregate generation coverage end precedes start")
     generation_id = generation_id or f"agg-{uuid4().hex}"
     sig = signals.get(signal)
     if sig is None:
@@ -176,15 +178,15 @@ def recompute_range(
         except Exception as exc:
             # The candidate transaction rolled back, but the failed attempt is
             # still useful audit evidence. It is never active.
-            failed = AggregateGeneration(
-                generation_id=generation_id, subject_id=subject_id, signal=signal,
-                aggregation_kind="daily", aggregation_version=version,
-                requested_start_date=start_date, requested_end_date=end_date,
-                status="failed", completeness="incomplete",
-                failure_reason=f"{type(exc).__name__}: {exc}",
-                created_at=now, updated_at=now,
-            )
             try:
+                failed = AggregateGeneration(
+                    generation_id=generation_id, subject_id=subject_id, signal=signal,
+                    aggregation_kind="daily", aggregation_version=version,
+                    requested_start_date=start_date, requested_end_date=end_date,
+                    status="failed", completeness="incomplete",
+                    failure_reason=f"{type(exc).__name__}: {exc}",
+                    created_at=now, updated_at=now,
+                )
                 with storage.mutation_transaction() as owner:
                     owner.acquire((aggregate_generation_key(subject_id, signal, "daily"),))
                     storage.put_aggregate_generation(failed)
@@ -285,16 +287,13 @@ def _recompute_owned_range(storage, signals, *, subject_id, signal, start_date,
                 "明细可能已被清理。拿残缺明细重算会写下一个数量级都不对的统计，"
                 "而且旧值会被覆盖、不可恢复。active projection 已标记 incomplete",
             ))
-            marker = getattr(storage, "mark_active_aggregate_incomplete", None)
-            if callable(marker):
-                marker(subject_id=subject_id, signal=signal, aggregation_kind="daily",
-                       local_date=day, reason="detail_retention_expired", updated_at=now)
+            storage.mark_active_aggregate_incomplete(
+                subject_id=subject_id, signal=signal, aggregation_kind="daily",
+                local_date=day, reason="detail_retention_expired", updated_at=now)
             day += timedelta(days=1)
             continue
-        active_getter = getattr(storage, "get_active_aggregate_generation", None)
-        active = (active_getter(subject_id=subject_id, signal=signal,
-                                aggregation_kind="daily")
-                  if callable(active_getter) else None)
+        active = storage.get_active_aggregate_generation(
+            subject_id=subject_id, signal=signal, aggregation_kind="daily")
         storage.put_aggregate(recompute_day(
             storage, sig, subject_id=subject_id, day=day,
             version=active.aggregation_version if active else version, updated_at=now,

@@ -35,6 +35,25 @@ from ..contracts.retraction import Retraction
 from ..contracts.mutation import MutationOwner
 
 
+AGGREGATE_GENERATION_METHODS = (
+    "put_aggregate_generation", "update_aggregate_generation",
+    "get_aggregate_generation", "list_aggregate_generations",
+    "get_active_aggregate_generation", "activate_aggregate_generation",
+    "mark_active_aggregate_incomplete", "account_active_aggregate_range",
+)
+
+
+def require_aggregate_generation_storage(storage: object) -> None:
+    """Fail fast when a v0.10 adapter cannot preserve generation semantics."""
+    missing = [name for name in AGGREGATE_GENERATION_METHODS
+               if not callable(getattr(storage, name, None))]
+    if missing:
+        raise TypeError(
+            "aggregate-generation storage contract is incomplete; missing: "
+            + ", ".join(missing)
+        )
+
+
 @runtime_checkable
 class StoragePort(Protocol):
     """宿主的存储适配器。
@@ -238,6 +257,11 @@ class StoragePort(Protocol):
 
         🔴 **``aggregate_retention_days`` 是 PERMANENT 的信号绝不能进来。**
         判定在 kit 里（``run_retention``），不指望每个宿主自己记得。
+
+        Deleting active rows must atomically reconcile the active generation's
+        readable coverage, or clear its pointer when nothing remains. Later
+        activation compares candidate coverage with retained scope, not dates
+        policy has already deleted. Failed/zero-row attempt audit remains.
         """
         ...
 
@@ -280,7 +304,14 @@ class StoragePort(Protocol):
 
     def list_aggregate_generations(
         self, *, subject_id: str, signal: str, aggregation_kind: str,
+        start_date: date | None = None, end_date: date | None = None,
+        limit: int | None = None, offset: int = 0,
     ) -> Sequence[AggregateGeneration]:
+        """Audit attempts whose requested coverage overlaps the date window.
+
+        Filter before stable ordering/paging. Failed and zero-row attempts are
+        records in their own right and must not be inferred from aggregate rows.
+        """
         ...
 
     def get_active_aggregate_generation(
@@ -309,6 +340,17 @@ class StoragePort(Protocol):
         """Durably flag stale active coverage without publishing partial data."""
         ...
 
+    def account_active_aggregate_range(
+        self, *, subject_id: str, signal: str, aggregation_kind: str,
+        start_date: date, end_date: date, updated_at: datetime,
+    ) -> None:
+        """Explicitly account a live no-data/data range before aggregate writes.
+
+        This is the only operation that may widen active coverage as complete.
+        A raw sparse row insert is not evidence that intervening dates were read.
+        """
+        ...
+
     def put_aggregate(self, aggregate: DailyAggregate) -> None:
         """写入或替换一个聚合。
 
@@ -317,8 +359,8 @@ class StoragePort(Protocol):
         **不原地改写旧统计的语义**。每次写入必须将写入 version 从现存值
         加一（新行为 0），
         使已读旧值的增量 CAS 失败并重读。重算与事实变更仍须由调用方序列化。
-        写入 active generation 的新日期还必须原子扩展它的 requested coverage
-        和 accounted dates；否则下一次全量 cutover 会低估当前可见历史范围。
+        扩大 active coverage 前必须先调用 ``account_active_aggregate_range``；
+        raw sparse writes 不能拿两个端点行推断中间日期已完整核对。
         """
         ...
 

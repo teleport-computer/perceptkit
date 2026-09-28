@@ -332,6 +332,32 @@ class InMemoryStorage:
                   and v.local_date < before]
         for k in doomed:
             del self.aggregates[k]
+        # Retention changes the readable active scope. Keep the pointer and its
+        # coverage coherent so a subsequent rebuild only has to cover retained
+        # history, not rows that policy deliberately deleted.
+        for scope, gid in list(self.active_aggregate_generations.items()):
+            if scope[:2] != (subject_id, signal):
+                continue
+            key = (*scope, gid)
+            generation = self.aggregate_generations.get(key)
+            if generation is None:
+                del self.active_aggregate_generations[scope]
+                continue
+            retained = tuple(day for day in generation.accounted_dates if day >= before)
+            incomplete = tuple(day for day in generation.incomplete_dates if day >= before)
+            retained_scope = tuple(sorted(set(retained) | set(incomplete)))
+            if not retained_scope:
+                self.aggregate_generations[key] = replace(generation, status="complete")
+                del self.active_aggregate_generations[scope]
+                continue
+            self.aggregate_generations[key] = replace(
+                generation,
+                requested_start_date=min(retained_scope),
+                accounted_dates=retained,
+                incomplete_dates=incomplete,
+                completeness="incomplete" if incomplete else "complete",
+                incomplete_reasons=(generation.incomplete_reasons if incomplete else ()),
+            )
         return len(doomed)
 
     def get_aggregate(self, *, subject_id, signal, start_date, end_date,
@@ -380,13 +406,36 @@ class InMemoryStorage:
             if status == "active":
                 self.active_aggregate_generations[scope] = generation_id
         elif generation.status == "active":
-            days = tuple(sorted(set(generation.accounted_dates) | {aggregate.local_date}))
+            old_start, old_end = generation.requested_start_date, generation.requested_end_date
+            new_start = min(old_start, aggregate.local_date)
+            new_end = max(old_end, aggregate.local_date)
+            required = {
+                new_start + timedelta(days=i)
+                for i in range((new_end - new_start).days + 1)
+            }
+            accounted = set(generation.accounted_dates) | {aggregate.local_date}
+            gaps = required - accounted
+            incomplete_dates = set(generation.incomplete_dates) | gaps
             self.aggregate_generations[generation_key] = replace(
                 generation,
-                requested_start_date=min(generation.requested_start_date, aggregate.local_date),
-                requested_end_date=max(generation.requested_end_date, aggregate.local_date),
-                accounted_dates=days, updated_at=aggregate.updated_at or generation.updated_at,
+                requested_start_date=new_start, requested_end_date=new_end,
+                completeness="incomplete" if incomplete_dates else generation.completeness,
+                accounted_dates=tuple(sorted(accounted)),
+                incomplete_dates=tuple(sorted(incomplete_dates)),
+                incomplete_reasons=(tuple(sorted(set(generation.incomplete_reasons)
+                                                  | ({"unaccounted_bootstrap_gap"} if gaps else set())))),
+                updated_at=aggregate.updated_at or generation.updated_at,
             )
+            generation = self.aggregate_generations[generation_key]
+        # Generation-level incomplete evidence is authoritative over a later
+        # row write; a fold may refresh values but cannot declare the day whole.
+        if (aggregate.local_date in generation.incomplete_dates
+                or aggregate.completeness == "incomplete"):
+            reasons = set(aggregate.incomplete_reasons)
+            if aggregate.local_date in generation.incomplete_dates:
+                reasons.update(generation.incomplete_reasons)
+            aggregate = replace(aggregate, completeness="incomplete",
+                                incomplete_reasons=tuple(sorted(reasons)))
         key = (
             aggregate.subject_id, aggregate.signal, aggregate.local_date,
             aggregate.aggregation_kind, aggregate.aggregation_version, generation_id,
@@ -444,10 +493,14 @@ class InMemoryStorage:
         return deepcopy(self.aggregate_generations.get(
             (subject_id, signal, aggregation_kind, generation_id)))
 
-    def list_aggregate_generations(self, *, subject_id, signal, aggregation_kind):
-        return deepcopy(sorted((g for (sub, sig, kind, _), g in self.aggregate_generations.items()
-                                if (sub, sig, kind) == (subject_id, signal, aggregation_kind)),
-                               key=lambda g: ((g.created_at or _EPOCH), g.generation_id)))
+    def list_aggregate_generations(self, *, subject_id, signal, aggregation_kind,
+                                   start_date=None, end_date=None, limit=None, offset=0):
+        rows = sorted((g for (sub, sig, kind, _), g in self.aggregate_generations.items()
+                       if (sub, sig, kind) == (subject_id, signal, aggregation_kind)
+                       and (start_date is None or g.requested_end_date >= start_date)
+                       and (end_date is None or g.requested_start_date <= end_date)),
+                      key=lambda g: ((g.created_at or _EPOCH), g.generation_id))
+        return deepcopy(rows[offset:None if limit is None else offset + limit])
 
     def get_active_aggregate_generation(self, *, subject_id, signal, aggregation_kind):
         gid = self.active_aggregate_generations.get((subject_id, signal, aggregation_kind))
@@ -505,6 +558,8 @@ class InMemoryStorage:
         generation = self.aggregate_generations[key]
         self.aggregate_generations[key] = replace(
             generation, completeness="incomplete",
+            requested_start_date=min(generation.requested_start_date, local_date),
+            requested_end_date=max(generation.requested_end_date, local_date),
             incomplete_dates=tuple(sorted(set(generation.incomplete_dates) | {local_date})),
             incomplete_reasons=tuple(sorted(set(generation.incomplete_reasons) | {reason})),
             updated_at=updated_at,
@@ -519,6 +574,25 @@ class InMemoryStorage:
                     updated_at=updated_at,
                 )
         return True
+
+    def account_active_aggregate_range(self, *, subject_id, signal, aggregation_kind,
+                                       start_date, end_date, updated_at):
+        if end_date < start_date:
+            raise ValueError("aggregate accounted range end precedes start")
+        scope = (subject_id, signal, aggregation_kind)
+        gid = self.active_aggregate_generations.get(scope)
+        if gid is None:
+            return
+        key = (*scope, gid)
+        generation = self.aggregate_generations[key]
+        new_start = min(generation.requested_start_date, start_date)
+        new_end = max(generation.requested_end_date, end_date)
+        accounted = set(generation.accounted_dates)
+        accounted.update(start_date + timedelta(days=i)
+                         for i in range((end_date - start_date).days + 1))
+        self.aggregate_generations[key] = replace(
+            generation, requested_start_date=new_start, requested_end_date=new_end,
+            accounted_dates=tuple(sorted(accounted)), updated_at=updated_at)
 
     # -- 来源镜像 --------------------------------------------------------
 

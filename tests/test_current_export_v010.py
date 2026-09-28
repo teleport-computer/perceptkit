@@ -8,7 +8,7 @@ import pytest
 from perceptkit import PerceptionKit
 from perceptkit.conformance import InMemoryStorage
 from perceptkit.contracts.records import (
-    CalendarEventMirror, ConflictRecord, CurrentProjection, DailyAggregate,
+    AggregateGeneration, CalendarEventMirror, ConflictRecord, CurrentProjection, DailyAggregate,
     EventOutboxEntry, ReminderItemMirror, StoredObservation,
 )
 from perceptkit.queries import api
@@ -84,9 +84,16 @@ def seed(storage, collection, count, *, subject="u", at=T, prefix=""):
         elif collection == "daily_aggregates:health_weight":
             storage.put_aggregate(DailyAggregate(subject, "health_weight", at.date() + timedelta(days=i),
                 "daily", 1, {"weight_kg": {"latest": 70}}))
+        elif collection == "aggregate_generations:health_weight":
+            day = at.date() + timedelta(days=i)
+            storage.put_aggregate_generation(AggregateGeneration(
+                f"{prefix}failed-{subject}-{i}", subject, "health_weight", "daily", 2,
+                day, day, status="failed", completeness="incomplete",
+                failure_reason="build failed", created_at=at, updated_at=at))
 
 
-COLLECTIONS = ["health_weight", "calendar_events", "reminders", "events", "conflicts", "daily_aggregates:health_weight"]
+COLLECTIONS = ["health_weight", "calendar_events", "reminders", "events", "conflicts",
+               "daily_aggregates:health_weight", "aggregate_generations:health_weight"]
 
 
 def exported_rows(dump, name):
@@ -94,6 +101,8 @@ def exported_rows(dump, name):
         return dump["observations"].get(name, [])
     if name.startswith("daily_aggregates:"):
         return dump["daily_aggregates"].get("health_weight", [])
+    if name.startswith("aggregate_generations:"):
+        return dump["aggregate_generations"].get("health_weight", [])
     return dump[name]
 
 
@@ -117,6 +126,7 @@ def test_every_export_collection_has_exact_cap_and_full_drain(collection, count)
         "events": lambda r: r["event_id"],
         "conflicts": lambda r: r["conflict_id"],
         "daily_aggregates:health_weight": lambda r: r["date"],
+        "aggregate_generations:health_weight": lambda r: r["generation_id"],
     }
     assert len({identities[collection](r) for r in rows}) == count
     assert full["truncated"] == []
@@ -167,6 +177,10 @@ def test_window_uses_local_boundary_dates_and_created_conflict_time():
     for name in ["health_weight", "events", "conflicts", "calendar_events"]:
         assert len(exported_rows(dump, name)) == 1
     assert [r["date"] for r in dump["daily_aggregates"]["health_weight"]] == [T.date().isoformat(), end.date().isoformat()]
+    # The active attempt overlaps the window and the zero-row failed attempt is
+    # audit data in its own right; neither depends on aggregate-row existence.
+    assert {g["generation_id"] for g in dump["aggregate_generations"]["health_weight"]} == {
+        "legacy-v1", "failed-u-0"}
 
 
 @pytest.mark.parametrize("count,cap", [(3, 3), (4, 3), (503, 501), (503, None)])
@@ -199,6 +213,10 @@ def test_export_pushes_bounded_conflict_and_aggregate_queries_to_storage():
             assert kwargs.get("limit") <= 4
             assert kwargs["start_date"] == kwargs["end_date"] == T.date()
             return super().get_aggregate(**kwargs)
+        def list_aggregate_generations(self, **kwargs):
+            assert kwargs.get("limit") <= 4
+            assert kwargs["start_date"] == kwargs["end_date"] == T.date()
+            return super().list_aggregate_generations(**kwargs)
     assert PerceptionKit(Spy()).export_subject(subject_id="u", start=T, end=T, per_signal_limit=3)["truncated"] == []
 
 

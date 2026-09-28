@@ -163,10 +163,9 @@ def acquire_ingest(owner, storage, items, signals, definitions, version, definit
     owner.acquire(canonical_keys([aggregate_generation_key(subject, signal, "daily")
                                   for subject, signal in scopes]))
     active_versions = {}
-    getter = getattr(storage, "get_active_aggregate_generation", None)
     for subject, signal in scopes:
-        active = (getter(subject_id=subject, signal=signal, aggregation_kind="daily")
-                  if callable(getter) else None)
+        active = storage.get_active_aggregate_generation(
+            subject_id=subject, signal=signal, aggregation_kind="daily")
         active_versions[(subject, signal)] = active.aggregation_version if active else version
     owner.acquire(canonical_keys([aggregate_key(
         subject, signal, day, "daily", active_versions[(subject, signal)])

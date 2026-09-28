@@ -121,11 +121,9 @@ def apply_retractions(
             for r in retractions
         ]))
         active_versions = {}
-        active_getter = getattr(storage, "get_active_aggregate_generation", None)
         for r in retractions:
-            active = (active_getter(subject_id=r.subject_id, signal=r.signal,
-                                    aggregation_kind="daily")
-                      if callable(active_getter) else None)
+            active = storage.get_active_aggregate_generation(
+                subject_id=r.subject_id, signal=r.signal, aggregation_kind="daily")
             active_versions[(r.subject_id, r.signal)] = (
                 active.aggregation_version if active else AGGREGATION_VERSION)
         mutation.acquire(canonical_keys([

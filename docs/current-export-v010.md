@@ -53,6 +53,7 @@ dimension_fields 当前复用两种角色：`latest` 是公共 Current 身份，
 | --- | --- |
 | observations[signal] / signal | occurred_at，双端包含 |
 | daily_aggregates[signal] / daily_aggregates:signal | start.date() 到 end.date()，包含两个本地日期；不转成 UTC 日期 |
+| aggregate_generations[signal] / aggregate_generations:signal | requested coverage 与 start.date()/end.date() 有交集；包括没有任何 aggregate row 的失败尝试 |
 | calendar_events | 沿用日历查询窗口及重复事件展开语义；参考存储按 start_at 筛选，时间不明的条目保留 |
 | reminders | 不适用；无统一发生时间，包含已完成项 |
 | events | occurred_at，双端包含；全部 9 种投递状态 |
@@ -66,6 +67,9 @@ date、value、aggregation_version、generation_id、completeness 和
 incomplete_reasons，不合并版本，也不声称是普通查询选中的活动版本；
 活动 generation 的发布/选择见 `aggregate-generations-and-definition-history.md`。
 普通 get_daily/get_trend 只读明确 active generation，不是审计查询。
+`aggregate_generations` 是独立分页的尝试级审计，包含 requested coverage、
+status、completeness、accounted/incomplete dates、reasons、failure 和 timestamps；
+它与 `daily_aggregates` 分别应用 cap 并分别报告截断。
 
 Kit 导出仍标记 `kit_managed_only=True`；Host 自己的载荷、加密信封、Runtime 业务数据
 由 Host 合并导出。不要把这份包级导出当成整个产品的数据导出。并发导出快照一致性
@@ -82,7 +86,9 @@ Kit 导出仍标记 `kit_managed_only=True`；Host 自己的载荷、加密信�
    local_date、aggregation_kind、aggregation_version；日期过滤在分页之前。
    默认不传 limit 的旧完整读取语义不变。
 5. 数据导出采用稳定事务快照；用实际数据库验证分页无重复、无遗漏和 subject 隔离。
-6. package 版本、依赖锁、发布产物由发布任务统一处理；本次没有改版本或发布。
+6. StoragePort.list_aggregate_generations 增加 coverage-overlap 窗口和稳定 limit/offset；
+   导出必须包含 failed/zero-row attempts，不能从 aggregate rows 反推 generation audit。
+7. package 版本、依赖锁、发布产物由发布任务统一处理；本次没有改版本或发布。
 
 库内已迁移的可执行消费者：examples/end_to_end.py，以及 queries、definitions_0_8、
 end_to_end、ios_fixture、isolation、edge_cases、regressions、acceptance_regressions_0_9、

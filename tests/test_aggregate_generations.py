@@ -104,8 +104,11 @@ def test_narrow_candidate_cannot_collapse_broader_active_history():
         activated_at=T)
     still_visible = api.get_daily_aggregates(
         s, subject_id="u", signal="steps", start_date=start, end_date=end)
-    assert [(row.date, row.value["step_count"]["total"]) for row in still_visible] == [
+    assert [(row.date, row.value["step_count"]["total"])
+            for row in still_visible if row.has_data] == [
         (start.isoformat(), 100), (end.isoformat(), 200)]
+    assert sum(not row.has_data and row.completeness == "incomplete"
+               for row in still_visible) == (end - start).days - 1
 
 
 def test_scheduled_streak_reads_only_the_active_complete_generation():
@@ -244,3 +247,134 @@ def test_generation_and_activation_roll_back_together():
         subject_id="u", signal="steps", aggregation_kind="daily")
               if g.aggregation_version == 3]
     assert len(failed) == 1 and failed[0].status == "failed"
+
+
+def test_missing_generation_api_fails_readiness_instead_of_version_fallback():
+    class LegacyStorage:
+        def get_aggregate(self, **kwargs):
+            return []
+
+    with pytest.raises(TypeError, match="aggregate-generation storage contract"):
+        PerceptionKit(LegacyStorage())
+    with pytest.raises(TypeError, match="get_active_aggregate_generation"):
+        api.get_daily_aggregates(
+            LegacyStorage(), subject_id="u", signal="steps",
+            start_date=T.date(), end_date=T.date())
+
+
+def test_rows_without_an_active_pointer_never_become_same_version_fallback():
+    s = InMemoryStorage()
+    candidate = _generation("same-version-candidate", 2, T.date(), T.date(),
+                            status="complete", accounted=(T.date(),))
+    s.put_aggregate_generation(candidate)
+    s.put_aggregate(_daily(T.date(), 2, 999, generation_id=candidate.generation_id))
+    assert api.get_daily_aggregates(
+        s, subject_id="u", signal="steps",
+        start_date=T.date(), end_date=T.date()) == []
+    PerceptionKit(s).ingest({
+        "schema_version": 1, "report_id": "live", "producer": "ios",
+        "observations": [{"signal": "steps", "signal_schema_version": 1,
+                          "occurred_at": T.isoformat(), "local_date": T.date().isoformat(),
+                          "availability": "observed", "source_event_id": "live",
+                          "value": {"step_count": 10}}]},
+        context=IngestContext("u", T))
+    active = s.get_active_aggregate_generation(
+        subject_id="u", signal="steps", aggregation_kind="daily")
+    assert active.generation_id != candidate.generation_id
+    assert api.get_daily_aggregates(
+        s, subject_id="u", signal="steps", start_date=T.date(), end_date=T.date()
+    )[0].value["step_count"]["total"] == 10
+    candidate_row = next(row for row in s.get_aggregate(
+        subject_id="u", signal="steps", start_date=T.date(), end_date=T.date())
+        if row.generation_id == candidate.generation_id)
+    assert candidate_row.typed_aggregate["step_count"]["total"] == 999
+
+
+def test_generation_incomplete_date_is_authoritative_even_without_or_after_row():
+    s = InMemoryStorage()
+    day = T.date()
+    s.put_aggregate(_daily(day, 2, 100))
+    assert s.mark_active_aggregate_incomplete(
+        subject_id="u", signal="steps", aggregation_kind="daily",
+        local_date=day + timedelta(days=1), reason="detail_lost", updated_at=T)
+
+    rows = api.get_daily_aggregates(
+        s, subject_id="u", signal="steps", start_date=day,
+        end_date=day + timedelta(days=1))
+    assert [(row.date, row.has_data, row.completeness) for row in rows] == [
+        (day.isoformat(), True, "complete"),
+        ((day + timedelta(days=1)).isoformat(), False, "incomplete"),
+    ]
+    assert rows[1].incomplete_reasons == ("detail_lost",)
+    trend = api.get_trend(
+        s, subject_id="u", signal="steps", field="step_count",
+        manifest=MINIMAL_SIGNALS, start_date=day,
+        end_date=day + timedelta(days=1))
+    assert trend["days_with_data"] == 1
+    assert trend["days_missing"] == 0
+    assert trend["days_incomplete"] == 1
+
+    # A later live fold must not erase the durable generation-level warning.
+    s.put_aggregate(_daily(day + timedelta(days=1), 2, 200,
+                           generation_id=rows_generation_id(s)))
+    later = api.get_daily_aggregates(
+        s, subject_id="u", signal="steps", start_date=day + timedelta(days=1),
+        end_date=day + timedelta(days=1))
+    assert len(later) == 1 and later[0].has_data
+    assert later[0].completeness == "incomplete"
+    assert later[0].incomplete_reasons == ("detail_lost",)
+
+
+def rows_generation_id(storage):
+    return storage.get_active_aggregate_generation(
+        subject_id="u", signal="steps", aggregation_kind="daily").generation_id
+
+
+def test_sparse_direct_bootstrap_never_claims_the_gap_is_complete():
+    s = InMemoryStorage()
+    d1 = date(2026, 8, 1)
+    d3 = date(2026, 8, 3)
+    s.put_aggregate(_daily(d1, 2, 100))
+    s.put_aggregate(_daily(d3, 2, 300, generation_id=rows_generation_id(s)))
+
+    active = s.get_active_aggregate_generation(
+        subject_id="u", signal="steps", aggregation_kind="daily")
+    assert active.completeness == "incomplete"
+    assert active.incomplete_dates == (date(2026, 8, 2),)
+    daily = api.get_daily_aggregates(
+        s, subject_id="u", signal="steps", start_date=d1, end_date=d3)
+    assert [(row.date, row.has_data, row.completeness) for row in daily] == [
+        (d1.isoformat(), True, "complete"),
+        (date(2026, 8, 2).isoformat(), False, "incomplete"),
+        (d3.isoformat(), True, "complete"),
+    ]
+
+
+def test_retention_reconciles_active_coverage_before_narrow_cutover():
+    s = InMemoryStorage()
+    d1, d2 = date(2026, 8, 1), date(2026, 8, 2)
+    s.put_aggregate(_daily(d1, 2, 100))
+    s.put_aggregate(_daily(d2, 2, 200, generation_id=rows_generation_id(s)))
+    old = rows_generation_id(s)
+    assert s.delete_aggregates(subject_id="u", signal="steps", before=d2) == 1
+    active = s.get_active_aggregate_generation(
+        subject_id="u", signal="steps", aggregation_kind="daily")
+    assert active.requested_start_date == active.requested_end_date == d2
+
+    candidate = _generation("retained", 3, d2, d2, status="complete", accounted=(d2,))
+    s.put_aggregate_generation(candidate)
+    s.put_aggregate(_daily(d2, 3, 999, generation_id="retained"))
+    assert s.activate_aggregate_generation(
+        subject_id="u", signal="steps", aggregation_kind="daily",
+        generation_id="retained", expected_active_generation_id=old,
+        activated_at=T)
+
+
+def test_invalid_recompute_range_preserves_original_validation_error():
+    s = InMemoryStorage()
+    with pytest.raises(ValueError, match="end precedes start"):
+        PerceptionKit(s).recompute_aggregates(
+            subject_id="u", signal="steps", start=T.date(),
+            end=T.date() - timedelta(days=1), now=T, version=3)
+    assert s.list_aggregate_generations(
+        subject_id="u", signal="steps", aggregation_kind="daily") == []

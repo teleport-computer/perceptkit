@@ -22,7 +22,7 @@ from .contracts.report import ReportEnvelope
 from .manifest.minimal import MINIMAL_SIGNALS
 from .manifest.checks import require_public_dimension_fields
 from .manifest.types import SignalDefinition
-from .ports.storage import StoragePort
+from .ports.storage import StoragePort, require_aggregate_generation_storage
 from .ports.wake import WakePort
 from .processing.dispatch import DispatchOutcome, drain
 from .processing.pipeline import AGGREGATION_VERSION, IngestOutcome, ingest_report
@@ -59,6 +59,7 @@ class PerceptionKit:
 
     def __post_init__(self) -> None:
         require_public_dimension_fields(self.signals)
+        require_aggregate_generation_storage(self.storage)
 
     @property
     def _definitions(self):

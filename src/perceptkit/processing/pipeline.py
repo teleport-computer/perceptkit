@@ -37,7 +37,7 @@ from ..contracts.records import (
 )
 from ..contracts.report import ReportEnvelope, canonical_semantics
 from ..manifest.types import SignalDefinition
-from ..ports.storage import StoragePort
+from ..ports.storage import StoragePort, require_aggregate_generation_storage
 from .retract import is_retracted
 from ..rules.types import EventDefinition
 from . import aggregate as _aggregate
@@ -108,6 +108,7 @@ def ingest_report(
     上报，不设上限的话，一个构造过的 report 就能让单次 ingest 跑很久。
     超限**拒收整批**而不是截断 —— 截断会静默丢数据，比拒收难查得多。
     """
+    require_aggregate_generation_storage(storage)
     payload_digest = _batch_digest(report)
 
     # 真的量一下，而不是摆一个从不生效的参数。
@@ -328,15 +329,13 @@ def _apply_one(
             outcome.warnings.append(f"{stored.signal}: {reason}")
         if fact_decision in ("incomplete", "stale"):
             if fact_decision == "incomplete":
-                marker = getattr(storage, "mark_active_aggregate_incomplete", None)
-                if callable(marker):
-                    for old in prior_revisions:
-                        if old.effective_local_date is not None:
-                            marker(subject_id=stored.subject_id, signal=stored.signal,
-                                   aggregation_kind="daily",
-                                   local_date=old.effective_local_date,
-                                   reason="fact_revision_details_incomplete",
-                                   updated_at=context.received_at)
+                for old in prior_revisions:
+                    if old.effective_local_date is not None:
+                        storage.mark_active_aggregate_incomplete(
+                            subject_id=stored.subject_id, signal=stored.signal,
+                            aggregation_kind="daily", local_date=old.effective_local_date,
+                            reason="fact_revision_details_incomplete",
+                            updated_at=context.received_at)
             outcome.rejected.append((-1, (f"{stored.signal}: {reason}",)))
             return
         if prior_revisions and sig.stores_history:
@@ -347,15 +346,13 @@ def _apply_one(
             if any(r.effective_local_date is None or not any(
                 detail_proves_revision(detail, r, item) for detail in details
             ) for r in prior_revisions):
-                marker = getattr(storage, "mark_active_aggregate_incomplete", None)
-                if callable(marker):
-                    for old in prior_revisions:
-                        if old.effective_local_date is not None:
-                            marker(subject_id=stored.subject_id, signal=stored.signal,
-                                   aggregation_kind="daily",
-                                   local_date=old.effective_local_date,
-                                   reason="fact_revision_details_incomplete",
-                                   updated_at=context.received_at)
+                for old in prior_revisions:
+                    if old.effective_local_date is not None:
+                        storage.mark_active_aggregate_incomplete(
+                            subject_id=stored.subject_id, signal=stored.signal,
+                            aggregation_kind="daily", local_date=old.effective_local_date,
+                            reason="fact_revision_details_incomplete",
+                            updated_at=context.received_at)
                 outcome.rejected.append((-1, (f"{stored.signal}: fact_revision_details_incomplete",)))
                 return
             active = drop_retracted(storage, canonical_revisions(details, sig),
@@ -364,14 +361,17 @@ def _apply_one(
                 count = sum(r.availability == "observed" and r.effective_local_date == day for r in active)
                 aggregates = storage.get_aggregate(subject_id=stored.subject_id, signal=stored.signal,
                                                    start_date=day, end_date=day)
-                if any(a.aggregation_version == AGGREGATION_VERSION
+                active_generation = storage.get_active_aggregate_generation(
+                    subject_id=stored.subject_id, signal=stored.signal,
+                    aggregation_kind="daily")
+                if active_generation is not None and any(
+                       a.generation_id == active_generation.generation_id
                        and int(a.source_coverage.get("observations", 0)) > count for a in aggregates):
-                    marker = getattr(storage, "mark_active_aggregate_incomplete", None)
-                    if callable(marker):
-                        marker(subject_id=stored.subject_id, signal=stored.signal,
-                               aggregation_kind="daily", local_date=day,
-                               reason="fact_revision_details_incomplete",
-                               updated_at=context.received_at)
+                    storage.mark_active_aggregate_incomplete(
+                        subject_id=stored.subject_id, signal=stored.signal,
+                        aggregation_kind="daily", local_date=day,
+                        reason="fact_revision_details_incomplete",
+                        updated_at=context.received_at)
                     outcome.rejected.append((-1, (f"{stored.signal}: fact_revision_details_incomplete",)))
                     return
     if storage.has_seen_identity(
@@ -624,10 +624,19 @@ def _update_aggregate(
     # 「重置」和「修订」，混了的话「重置到 0」会被当成错值吃掉。
     typed = stored.typed_value or {}
     epoch = typed.get("counter_epoch_id")
-    active_getter = getattr(storage, "get_active_aggregate_generation", None)
-    active = (active_getter(subject_id=context.subject_id, signal=stored.signal,
-                            aggregation_kind=kind)
-              if callable(active_getter) else None)
+    active = storage.get_active_aggregate_generation(
+        subject_id=context.subject_id, signal=stored.signal, aggregation_kind=kind)
+    if active is not None and not (
+            active.requested_start_date <= day <= active.requested_end_date):
+        storage.account_active_aggregate_range(
+            subject_id=context.subject_id, signal=stored.signal,
+            aggregation_kind=kind,
+            start_date=min(active.requested_start_date, day),
+            end_date=max(active.requested_end_date, day),
+            updated_at=stored.received_at)
+        active = storage.get_active_aggregate_generation(
+            subject_id=context.subject_id, signal=stored.signal,
+            aggregation_kind=kind)
     aggregation_version = active.aggregation_version if active else AGGREGATION_VERSION
     generation_id = active.generation_id if active else None
     for _ in range(MAX_CAS_RETRIES):
@@ -635,8 +644,7 @@ def _update_aggregate(
             a for a in storage.get_aggregate(
                 subject_id=context.subject_id, signal=stored.signal,
                 start_date=day, end_date=day, aggregation_kind=kind,
-            ) if a.aggregation_version == aggregation_version
-            and (generation_id is None or a.generation_id == generation_id)
+            ) if generation_id is not None and a.generation_id == generation_id
         ), None)
         doc = _aggregate.fold_into_day(
             existing.typed_aggregate if existing else None, sig, typed,
@@ -670,18 +678,15 @@ def _batch_digest(report: ReportEnvelope) -> str:
 
 def _rebuild_corrected_day(storage, sig, *, context, day):
     from .recompute import recompute_day
-    active_getter = getattr(storage, "get_active_aggregate_generation", None)
-    active = (active_getter(subject_id=context.subject_id, signal=sig.key,
-                            aggregation_kind="daily")
-              if callable(active_getter) else None)
+    active = storage.get_active_aggregate_generation(
+        subject_id=context.subject_id, signal=sig.key, aggregation_kind="daily")
     aggregation_version = active.aggregation_version if active else AGGREGATION_VERSION
     generation_id = active.generation_id if active else None
     for _ in range(MAX_CAS_RETRIES):
         old = next((row for row in storage.get_aggregate(
             subject_id=context.subject_id, signal=sig.key,
             start_date=day, end_date=day, aggregation_kind="daily",
-        ) if row.aggregation_version == aggregation_version
-            and (generation_id is None or row.generation_id == generation_id)), None)
+        ) if generation_id is not None and row.generation_id == generation_id), None)
         expected = old.version if old else -1
         rebuilt = recompute_day(storage, sig, subject_id=context.subject_id,
                                 day=day, version=aggregation_version,

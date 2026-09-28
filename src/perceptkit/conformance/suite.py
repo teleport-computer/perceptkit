@@ -956,6 +956,37 @@ def _g18_aggregate_generation_cutover(new: StorageFactory) -> list[str]:
         subject_id="u1", signal="steps", aggregation_kind="daily")
     if marked is None or DAY not in marked.incomplete_dates or marked.completeness != "incomplete":
         problems.append("active generation still claims complete after lost detail")
+
+    # Sparse raw inserts are not proof that the dates between endpoints were
+    # inspected. The adapter must surface the gap rather than claim it complete.
+    sparse = new()
+    sparse.put_aggregate(DailyAggregate(
+        "u1", "steps", DAY, "daily", 2, {"n": 1}, updated_at=T0))
+    sparse_active = sparse.get_active_aggregate_generation(
+        subject_id="u1", signal="steps", aggregation_kind="daily")
+    gap_end = DAY + timedelta(days=2)
+    sparse.put_aggregate(DailyAggregate(
+        "u1", "steps", gap_end, "daily", 2, {"n": 2},
+        generation_id=sparse_active.generation_id, updated_at=T0))
+    sparse_active = sparse.get_active_aggregate_generation(
+        subject_id="u1", signal="steps", aggregation_kind="daily")
+    if (sparse_active.completeness != "incomplete"
+            or DAY + timedelta(days=1) not in sparse_active.incomplete_dates):
+        problems.append("sparse bootstrap inferred contiguous complete coverage")
+    from ..queries.api import get_daily_aggregates
+    visible = get_daily_aggregates(
+        sparse, subject_id="u1", signal="steps", start_date=DAY, end_date=gap_end)
+    gap = [row for row in visible if row.date == (DAY + timedelta(days=1)).isoformat()]
+    if len(gap) != 1 or gap[0].has_data or gap[0].completeness != "incomplete":
+        problems.append("generation incomplete date was absent from ordinary daily reads")
+
+    # Retention narrows what remains readable; a replacement covering exactly
+    # that retained scope must no longer be rejected against deleted history.
+    sparse.delete_aggregates(subject_id="u1", signal="steps", before=gap_end)
+    retained = sparse.get_active_aggregate_generation(
+        subject_id="u1", signal="steps", aggregation_kind="daily")
+    if retained is None or retained.requested_start_date != gap_end:
+        problems.append("retention did not reconcile active generation coverage")
     return problems
 
 
@@ -991,6 +1022,11 @@ def run_storage_conformance(factory: StorageFactory) -> list[str]:
     返回列表而不是抛异常：一次看到全部缺口，比逐个修再重跑快得多。
     """
     problems: list[str] = []
+    from ..ports.storage import require_aggregate_generation_storage
+    try:
+        require_aggregate_generation_storage(factory())
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"v0.10 aggregate-generation adapter readiness: {type(exc).__name__}: {exc}")
     for name, check in GUARANTEES.items():
         try:
             problems += [f"{name} {p}" for p in check(factory)]

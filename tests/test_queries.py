@@ -152,7 +152,9 @@ def test_daily_does_not_fill_the_missing_days_with_zero():
 
     rows = api.get_daily_aggregates(s, subject_id="u1", signal="steps",
                                     start_date=date(2026, 8, 1), end_date=date(2026, 8, 5))
-    assert [r.date for r in rows] == ["2026-08-01", "2026-08-04"]
+    assert [r.date for r in rows if r.has_data] == ["2026-08-01", "2026-08-04"]
+    assert all(r.value == {} and r.completeness == "incomplete"
+               for r in rows if not r.has_data)
 
 
 def test_daily_comes_back_in_date_order_regardless_of_insert_order():
@@ -162,7 +164,8 @@ def test_daily_comes_back_in_date_order_regardless_of_insert_order():
 
     rows = api.get_daily_aggregates(s, subject_id="u1", signal="steps",
                                     start_date=date(2026, 8, 1), end_date=date(2026, 8, 31))
-    assert [r.date for r in rows] == ["2026-08-01", "2026-08-03", "2026-08-05"]
+    assert [r.date for r in rows if r.has_data] == [
+        "2026-08-01", "2026-08-03", "2026-08-05"]
 
 
 # ---------------------------------------------------------------------------
