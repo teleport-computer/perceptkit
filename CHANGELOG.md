@@ -10,6 +10,10 @@ In development (not released) — v0.10 Current/export cutover:
   truncation, and applies explicit time windows to aggregates/events/conflicts.
 - Conflict and aggregate storage reads add optional bounded pagination. Full
   contract and Host migration checklist: [v0.10 Current/export](docs/current-export-v010.md).
+- Report receipts now persist sanitized per-observation failures. Mixed and
+  all-invalid Reports are accepted durable outcomes; valid siblings commit and
+  exact replay returns duplicate/applied=0 with the original item evidence.
+  Whole-batch preflight rejection and Report digest conflict remain separate.
 
 In development (not released) — consistency contract D07–D09:
 

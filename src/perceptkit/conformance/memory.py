@@ -193,8 +193,10 @@ class InMemoryStorage:
                 subject_id=subject_id, producer=producer, report_id=report_id,
                 payload_digest=prior.payload_digest, received_at=prior.received_at,
                 status=status,
-                error_code=None if status == INGEST_DUPLICATE else "digest_mismatch",
+                error_code=None if status == INGEST_DUPLICATE else "report_digest_conflict",
                 observations_applied=0,
+                observations_rejected=(prior.observations_rejected
+                                       if status == INGEST_DUPLICATE else ()),
             )
         fresh = IngestReceipt(
             subject_id=subject_id, producer=producer, report_id=report_id,

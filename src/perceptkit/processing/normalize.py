@@ -440,6 +440,9 @@ def identity_for(
 @dataclass(frozen=True)
 class NormalizeResult:
     normalized: tuple[NormalizedObservation, ...]
+    #: Original Report array index aligned with ``normalized``. Kept outside
+    #: NormalizedObservation so durable/public Fact shapes do not gain request metadata.
+    source_indexes: tuple[int, ...]
     #: 被拒的观测：``(在这批里的下标, 问题清单)``。其余照常处理。
     rejected: tuple[tuple[int, tuple[str, ...]], ...]
     #: 处理了但有话要说的（退回了备用策略之类）。不影响落库。
@@ -461,6 +464,7 @@ def normalize_observations(
     —— 那会让重放和测试都做不了）。不给时用去重身份当 id。
     """
     out: list[NormalizedObservation] = []
+    source_indexes: list[int] = []
     rejected: list[tuple[int, tuple[str, ...]]] = []
     warnings: list[str] = []
 
@@ -555,8 +559,9 @@ def normalize_observations(
             day_slices=slices,
             semantic_digest=_digest(canonical_semantics(observation_semantics(obs))),
         ))
+        source_indexes.append(index)
 
-    return NormalizeResult(tuple(out), tuple(rejected), tuple(warnings))
+    return NormalizeResult(tuple(out), tuple(source_indexes), tuple(rejected), tuple(warnings))
 
 
 __all__ = [

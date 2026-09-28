@@ -22,7 +22,11 @@ def test_incomparable_batch_revisions_never_choose_an_active_fact(reverse, same_
     if reverse:
         batch.reverse()
     out = ingest(kit, batch)
-    assert out.receipt.status == "conflict" and not out.ok
+    assert out.receipt.status == "accepted" and not out.ok
+    assert out.receipt.error_code is None
+    assert len(out.receipt.observations_rejected) == 2
+    assert all(item.problems == ("fact_conflict",)
+               for item in out.receipt.observations_rejected)
     assert len(out.conflicts) == 2
     assert [item.stored.source_event_id for item in out.applied] == ["B"]
     assert {row.source_event_id for row in storage.observations.values()} == {"B"}

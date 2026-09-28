@@ -26,6 +26,13 @@ Unresolved candidates do not write Observation, applied durable identity,
 Current, Aggregate, RuleState or EventOutbox. Their `candidate` is a value in the
 ConflictRecord, not an applied Observation table row.
 
+The Report itself is still accepted: a Fact conflict is one item outcome, not a
+reuse of the Report identity. The receipt persists
+`observations_rejected=[{index, problems: ["fact_conflict"]}]`; valid siblings
+commit. A different payload under the same `(subject, producer, report_id)` is
+the separate batch-level `report_digest_conflict`. Hosts must not map the former
+to "report ID reused".
+
 Task 2's Current tie between **different** independently accepted Facts remains
 a projection-choice result; it does not turn either Fact into a quarantined
 candidate or prevent occurrence/aggregate participation. Durable identity
@@ -118,6 +125,13 @@ Kit version. Use conformance guarantee 17 for deterministic insert, retry,
 resolution, filtering, rollback, metadata, retention and purge behavior. Add
 real-database restart and two-connection conflict/resolution contention tests;
 InMemory conformance alone does not establish production durability/isolation.
+
+The Report receipt schema also adds a structured `observations_rejected` value.
+Persist the original array index and sanitized problem strings as JSON/child
+rows; do not persist the rejected Observation, normalized value, source values,
+or restricted fields. Exact-digest replay must return the original item evidence
+with `status=duplicate` and `observations_applied=0` without rerunning the batch.
+Use storage conformance guarantee 1 to catch adapters that drop these entries.
 
 No manual resolution UI, worker, new rule-history provider, aggregation generation
 activation or public Current array cutover is introduced here.

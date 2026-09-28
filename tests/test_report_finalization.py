@@ -29,9 +29,13 @@ def test_report_retry_preserves_failed_fact_outcome(kind):
                        storage.rule_state, storage.outbox))
     second = ingest(PerceptionKit(storage), [changed], report_id="failed")
     assert not first.ok and not second.ok
-    assert first.receipt.status == second.receipt.status
-    assert first.receipt.error_code == second.receipt.error_code
-    assert first.receipt.status in ("conflict", "rejected")
+    assert first.receipt.status == "accepted"
+    assert second.receipt.status == "duplicate"
+    assert first.receipt.error_code is second.receipt.error_code is None
+    assert first.receipt.observations_rejected
+    assert second.receipt.observations_rejected == first.receipt.observations_rejected
+    assert second.rejected == [(item.index, item.problems)
+                               for item in first.receipt.observations_rejected]
     assert not second.applied and not second.duplicates
     assert (storage.observations, storage.current, storage.aggregates,
             storage.rule_state, storage.outbox) == before

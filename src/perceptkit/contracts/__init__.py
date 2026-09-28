@@ -38,6 +38,7 @@ from .receipt import (
     INGEST_CONFLICT,
     INGEST_DUPLICATE,
     INGEST_REJECTED,
+    ObservationRejection,
     WAKE_ACCEPTED,
     WAKE_DUPLICATE,
     WAKE_ENQUEUE_FAILED,
@@ -80,7 +81,7 @@ __all__ = [
     # envelopes
     "ReportEnvelope", "Observation", "PerceptionEvent", "EventCondition",
     # trusted context + receipts
-    "IngestContext", "IngestReceipt", "WakeReceipt",
+    "IngestContext", "IngestReceipt", "ObservationRejection", "WakeReceipt",
     "INGEST_ACCEPTED", "INGEST_DUPLICATE", "INGEST_CONFLICT", "INGEST_REJECTED",
     "WAKE_ACCEPTED", "WAKE_DUPLICATE", "WAKE_SUPPRESSED",
     "WAKE_ENQUEUE_FAILED", "WAKE_REJECTED", "WAKE_RETRYABLE",

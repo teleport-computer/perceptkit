@@ -20,7 +20,8 @@ def test_unrepresentable_number_rejects_one_observation_and_finalizes_report(uni
                       observation({"weight_kg": 71}, eid="good")])
     assert len(out.rejected) == 1 and "invalid_numeric_value" in str(out.rejected)
     assert [item.stored.source_event_id for item in out.applied] == ["good"]
-    assert out.receipt.status == "rejected" and out.receipt.observations_applied == 1
+    assert out.receipt.status == "accepted" and out.receipt.observations_applied == 1
+    assert out.receipt.observations_rejected[0].index == 0
     assert storage.reports[("u", "ios", "report")] == out.receipt
     assert len(storage.observations) == len(storage.identities) == 1
     assert not kit.list_conflicts(subject_id="u")
@@ -41,10 +42,12 @@ def test_python_nonfinite_values_reject_one_observation(value, unit):
     out = kit.ingest(report, context=IngestContext("u", T))
     assert len(out.rejected) == 1 and "invalid_numeric_value" in str(out.rejected)
     assert [item.stored.source_event_id for item in out.applied] == ["good"]
-    assert out.receipt.status == "rejected" and out.receipt.observations_applied == 1
+    assert out.receipt.status == "accepted" and out.receipt.observations_applied == 1
+    assert out.receipt.observations_rejected[0].index == 0
     assert storage.reports[("u", "ios", "nonfinite")] == out.receipt
     retry = kit.ingest(report, context=IngestContext("u", T))
-    assert retry.receipt.status == "rejected" and not retry.applied
+    assert retry.receipt.status == "duplicate" and not retry.applied
+    assert retry.receipt.observations_rejected == out.receipt.observations_rejected
     assert len(storage.observations) == 1 and not storage.conflicts
 
 
@@ -136,7 +139,9 @@ def test_nonfinite_report_fingerprints_are_distinct_and_fact_canonicalization_st
     bad = Observation("health_weight", 1, T, "observed", {"weight_kg": float("nan")},
                       source_event_id="bad", timezone="UTC")
     report = ReportEnvelope(1, "nonfinite", "ios", (bad,))
-    assert kit.ingest(report, context=IngestContext("u", T)).receipt.status == "rejected"
+    first = kit.ingest(report, context=IngestContext("u", T))
+    assert first.receipt.status == "accepted"
+    assert first.receipt.observations_rejected
     changed = replace(report, observations=(replace(bad, value={"weight_kg": float("inf")}),))
     assert kit.ingest(changed, context=IngestContext("u", T)).receipt.status == "conflict"
     with pytest.raises(ContractError):

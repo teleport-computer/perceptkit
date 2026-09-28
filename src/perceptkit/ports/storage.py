@@ -155,7 +155,8 @@ class StoragePort(Protocol):
     ) -> IngestReceipt:
         """认领一批上报，同时回答"这批处理过没有"。
 
-        同 identity + 同摘要 → 返回原来那份回执（``duplicate``），**不重复处理**。
+        同 identity + 同摘要 → 返回 ``duplicate``，``observations_applied=0``，
+        同时原样返回已持久化的 ``observations_rejected``，**不重复处理**。
         同 identity + 异摘要 → ``conflict``，不能静默挑一个覆盖。
         没见过         → ``accepted``，并占住这个 identity。
 
@@ -167,13 +168,15 @@ class StoragePort(Protocol):
     # -- 观测 ------------------------------------------------------------
 
     def finalize_report(self, receipt: IngestReceipt) -> None:
-        """Persist terminal status/count/code in the same transaction as Facts.
+        """Persist the durable Report outcome in the same transaction as Facts.
 
         Match the claimed identity AND digest; mismatches must raise/roll back.
-        Replays of finalized rejected/conflict reports return that terminal
-        failure, never successful duplicate. Accepted replays remain duplicate.
-        Partial batches retain accepted siblings but expose their failed report
-        status on every retry. Restored evidence is submitted under a new ID.
+        Item-level validation and Fact conflicts are stored as sanitized
+        ``observations_rejected`` entries while the Report stays accepted and
+        valid siblings commit. Exact replay returns duplicate/applied=0 plus
+        those original entries. Whole-batch preflight rejection happens before
+        claim and writes neither Report nor Facts. Report digest conflict is a
+        separate ``report_digest_conflict`` result from ``claim_report``.
         """
         ...
 

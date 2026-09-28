@@ -325,11 +325,17 @@ payload_digest
 received_at
 status
 error_code
+observations_applied
+observations_rejected[]: { index, problems[] }
 ```
 
 唯一身份：`(subject_id, producer, report_id)`。
 
-相同 identity + 相同 digest 返回原结果；相同 identity + 不同 digest 必须报 conflict，不能静默覆盖。
+相同 identity + 相同 digest 返回 `duplicate` + 原逐条失败，不重跑；相同
+identity + 不同 digest 必须报 `report_digest_conflict`，不能静默覆盖。
+单条校验或 Fact conflict 不否定整个 Report：Report 保持 accepted，合法 sibling
+正常提交；`observations_rejected` 只保存原数组下标和脱敏、限长问题，不保存
+被拒 Observation 或其 value。只有整批 preflight failure 才是 rejected，且不落 Report/Fact。
 
 ### 7.2 Observation
 

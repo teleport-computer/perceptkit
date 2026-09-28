@@ -84,6 +84,23 @@ class IngestOutcome:
                 and not self.rejected and not self.conflicts)
 
 
+def _durable_rejections(rejected, conflict_indexes=()):
+    """Merge one safe receipt issue per original Report array index."""
+    grouped: dict[int, list[str]] = {}
+    for index, problems in rejected:
+        if index < 0:
+            raise ValueError("observation failure is missing its original report index")
+        grouped.setdefault(index, []).extend(str(problem) for problem in problems)
+    for index in conflict_indexes:
+        if index < 0:
+            raise ValueError("fact conflict is missing its original report index")
+        grouped.setdefault(index, []).append("fact_conflict")
+    return tuple(
+        _receipt.ObservationRejection(index, tuple(dict.fromkeys(problems)))
+        for index, problems in sorted(grouped.items())
+    )
+
+
 def _epoch(dt: Any) -> float:
     return dt.timestamp()
 
@@ -168,7 +185,11 @@ def ingest_report(
         if claim.status != _receipt.INGEST_ACCEPTED:
             if claim.status == _receipt.INGEST_CONFLICT and not claim.payload_digest.startswith("v2:"):
                 claim = replace(claim, error_code=LEGACY_REPORT_SEMANTICS_UNVERIFIABLE)
-            return IngestOutcome(receipt=claim)
+            return IngestOutcome(
+                receipt=claim,
+                rejected=[(item.index, item.problems)
+                          for item in claim.observations_rejected],
+            )
 
         # ② 校验 + 标准化。
         normalized = normalize_observations(
@@ -178,9 +199,14 @@ def ingest_report(
             source=report.producer,
             timezone_fallback=timezone_fallback,
         )
+        normalized_rejections = _durable_rejections(normalized.rejected)
+        source_index_by_item = {
+            id(item): index
+            for item, index in zip(normalized.normalized, normalized.source_indexes)
+        }
         outcome = IngestOutcome(
             receipt=claim,
-            rejected=list(normalized.rejected),
+            rejected=[(item.index, item.problems) for item in normalized_rejections],
             warnings=list(normalized.warnings),
         )
         acquire_ingest(mutation, storage, normalized.normalized, signals, definitions,
@@ -217,17 +243,18 @@ def ingest_report(
             sig = signals[item.stored.signal]
             _apply_one(item, sig, context=context, storage=storage, outcome=outcome,
                        definitions=definitions, extra_evaluators=extra_evaluators,
-                       mutation=mutation, definition_at=definition_at)
+                       mutation=mutation, definition_at=definition_at,
+                       source_index=source_index_by_item[id(item)])
 
-        status, code = _receipt.INGEST_ACCEPTED, None
-        if outcome.conflicts:
-            status, code = _receipt.INGEST_CONFLICT, "fact_conflict"
-        elif outcome.rejected:
-            status, code = _receipt.INGEST_REJECTED, "observations_rejected"
-            if any("fact_revision_details_incomplete" in str(reasons) for _, reasons in outcome.rejected):
-                code = "fact_revision_details_incomplete"
-        outcome.receipt = replace(claim, status=status, error_code=code,
-                                  observations_applied=len(outcome.applied))
+        durable_rejections = _durable_rejections(
+            outcome.rejected,
+            [source_index_by_item[id(item)] for item in outcome.conflicts],
+        )
+        outcome.receipt = replace(
+            claim, status=_receipt.INGEST_ACCEPTED, error_code=None,
+            observations_applied=len(outcome.applied),
+            observations_rejected=durable_rejections,
+        )
         storage.finalize_report(outcome.receipt)
     return outcome
 
@@ -287,6 +314,7 @@ def _apply_one(
     extra_evaluators: Mapping[str, Callable[..., Any]] | None = None,
     mutation=None,
     definition_at=None,
+    source_index: int = -1,
 ) -> None:
     """③~⑨：一条观测的落地，以及命中规则时写发件箱。
 
@@ -336,7 +364,7 @@ def _apply_one(
                             aggregation_kind="daily", local_date=old.effective_local_date,
                             reason="fact_revision_details_incomplete",
                             updated_at=context.received_at)
-            outcome.rejected.append((-1, (f"{stored.signal}: {reason}",)))
+            outcome.rejected.append((source_index, (f"{stored.signal}: {reason}",)))
             return
         if prior_revisions and sig.stores_history:
             # Corrections require complete persisted evidence to subtract the
@@ -353,7 +381,10 @@ def _apply_one(
                             aggregation_kind="daily", local_date=old.effective_local_date,
                             reason="fact_revision_details_incomplete",
                             updated_at=context.received_at)
-                outcome.rejected.append((-1, (f"{stored.signal}: fact_revision_details_incomplete",)))
+                outcome.rejected.append((
+                    source_index,
+                    (f"{stored.signal}: fact_revision_details_incomplete",),
+                ))
                 return
             active = drop_retracted(storage, canonical_revisions(details, sig),
                                     subject_id=stored.subject_id, signal=stored.signal)
@@ -372,7 +403,10 @@ def _apply_one(
                         aggregation_kind="daily", local_date=day,
                         reason="fact_revision_details_incomplete",
                         updated_at=context.received_at)
-                    outcome.rejected.append((-1, (f"{stored.signal}: fact_revision_details_incomplete",)))
+                    outcome.rejected.append((
+                        source_index,
+                        (f"{stored.signal}: fact_revision_details_incomplete",),
+                    ))
                     return
     if storage.has_seen_identity(
         subject_id=context.subject_id, signal=stored.signal,

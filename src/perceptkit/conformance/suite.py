@@ -106,12 +106,26 @@ def _g1_report_and_observation_idempotency(new: StorageFactory) -> list[str]:
     if again.status != _receipt.INGEST_DUPLICATE:
         problems.append("①: 同 identity 同摘要重传应该 duplicate，不重复处理")
 
+    partial = new()
+    partial_claim = partial.claim_report(
+        subject_id="u1", producer="ios", report_id="partial",
+        payload_digest="v2:partial", received_at=T0)
+    issue = _receipt.ObservationRejection(0, ("unknown_signal",))
+    partial.finalize_report(replace(
+        partial_claim, observations_applied=1, observations_rejected=(issue,)))
+    partial_retry = partial.claim_report(
+        subject_id="u1", producer="ios", report_id="partial",
+        payload_digest="v2:partial", received_at=T0)
+    if (partial_retry.status != _receipt.INGEST_DUPLICATE
+            or partial_retry.observations_applied != 0
+            or partial_retry.observations_rejected != (issue,)):
+        problems.append("①: finalized per-item failures were not durable on duplicate replay")
+
     s2 = new()
     if not s2.append_observation(_obs()):
         problems.append("①: 第一次写观测应该返回 True")
     if s2.append_observation(_obs()):
         problems.append("①: 同一个 observation_id 重复写应该返回 False 且不重复落库")
-    from dataclasses import replace
     for status, code in (("conflict", "fact_conflict"),
                          ("rejected", "fact_revision_details_incomplete")):
         terminal_store = new()
@@ -122,6 +136,60 @@ def _g1_report_and_observation_idempotency(new: StorageFactory) -> list[str]:
                                             payload_digest="v2:terminal", received_at=T0)
         if retry.status != status or retry.error_code != code:
             problems.append("①: terminal report failure must survive identical retry")
+
+    # Full Kit/adaptor path: mixed and all-invalid Reports are accepted; exact
+    # replay returns durable item outcomes without duplicate Fact/Event writes.
+    try:
+        from ..contracts.context import IngestContext
+        from ..kit import PerceptionKit
+        from ..rules.types import EventDefinition
+        event_rule = EventDefinition.parse({
+            "id": "report-outcome-conformance", "version": 1,
+            "source": {"signal": "steps"},
+            "condition": {"type": "occurrence"},
+            "event": {"type": "report.outcome"},
+        })
+        mixed_store = new()
+        kit = PerceptionKit(mixed_store, definitions=[event_rule])
+        valid = {"signal": "steps", "signal_schema_version": 1,
+                 "occurred_at": T0.isoformat(), "local_date": DAY.isoformat(),
+                 "availability": "observed", "source_event_id": "mixed-valid",
+                 "value": {"step_count": 10}}
+        invalid = {"signal": "unknown", "signal_schema_version": 1,
+                   "occurred_at": T0.isoformat(), "availability": "observed", "value": {}}
+        envelope = {"schema_version": 1, "report_id": "mixed", "producer": "ios",
+                    "observations": [invalid, valid]}
+        first_outcome = kit.ingest(envelope, context=IngestContext("u1", T0))
+        before = (len(mixed_store.list_observations(
+            subject_id="u1", signal="steps", limit=100)[0]),
+                  len(mixed_store.list_events(subject_id="u1", limit=100)))
+        replay_outcome = PerceptionKit(mixed_store, definitions=[event_rule]).ingest(
+            envelope, context=IngestContext("u1", T0))
+        after = (len(mixed_store.list_observations(
+            subject_id="u1", signal="steps", limit=100)[0]),
+                 len(mixed_store.list_events(subject_id="u1", limit=100)))
+        if (first_outcome.receipt.status != _receipt.INGEST_ACCEPTED
+                or first_outcome.receipt.observations_applied != 1
+                or len(first_outcome.receipt.observations_rejected) != 1):
+            problems.append("①: mixed Report did not commit as accepted with one durable item failure")
+        if (replay_outcome.receipt.status != _receipt.INGEST_DUPLICATE
+                or replay_outcome.receipt.observations_rejected
+                != first_outcome.receipt.observations_rejected
+                or replay_outcome.rejected != [(0, first_outcome.receipt.observations_rejected[0].problems)]):
+            problems.append("①: restart/replay did not reproduce the original item failure")
+        if before != after or before != (1, 1):
+            problems.append("①: mixed Report replay duplicated a Fact or Event")
+
+        all_invalid = {"schema_version": 1, "report_id": "all-invalid",
+                       "producer": "ios", "observations": [invalid]}
+        invalid_outcome = PerceptionKit(mixed_store).ingest(
+            all_invalid, context=IngestContext("u1", T0))
+        if (invalid_outcome.receipt.status != _receipt.INGEST_ACCEPTED
+                or invalid_outcome.receipt.observations_applied != 0
+                or len(invalid_outcome.receipt.observations_rejected) != 1):
+            problems.append("①: all-invalid Report was not an accepted zero-Fact item outcome")
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"①: durable mixed Report conformance raised {type(exc).__name__}: {exc}")
     return problems
 
 
@@ -150,7 +218,8 @@ def _g3_same_identity_different_content_conflicts(new: StorageFactory) -> list[s
                    payload_digest="d1", received_at=T0)
     clash = s.claim_report(subject_id="u1", producer="ios", report_id="r1",
                            payload_digest="d2", received_at=T0)
-    if clash.status != _receipt.INGEST_CONFLICT:
+    if (clash.status != _receipt.INGEST_CONFLICT
+            or clash.error_code != "report_digest_conflict"):
         problems.append(
             "③: 同 report_id 不同内容必须 conflict —— 静默挑一个覆盖会让"
             "「到底哪份数据生效了」永远说不清"
@@ -212,6 +281,23 @@ def _g5_atomic_boundary_is_offered(new: StorageFactory) -> list[str]:
             s.append_observation(_obs())
     except Exception as exc:                       # noqa: BLE001
         problems.append(f"⑤: transaction() 不可用：{exc}")
+    rollback = new()
+    try:
+        with rollback.mutation_transaction():
+            claim = rollback.claim_report(
+                subject_id="u1", producer="ios", report_id="rollback-issue",
+                payload_digest="v2:rollback", received_at=T0)
+            rollback.finalize_report(replace(
+                claim, observations_rejected=(
+                    _receipt.ObservationRejection(0, ("invalid",)),)))
+            raise RuntimeError("rollback probe")
+    except RuntimeError:
+        pass
+    retry = rollback.claim_report(
+        subject_id="u1", producer="ios", report_id="rollback-issue",
+        payload_digest="v2:rollback", received_at=T0)
+    if retry.status != _receipt.INGEST_ACCEPTED or retry.observations_rejected:
+        problems.append("⑤: rolled-back Report item failure remained durable")
     return problems
 
 

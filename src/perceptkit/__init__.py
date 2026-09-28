@@ -38,6 +38,7 @@ from .ports.definitions import (
     StaticDefinitions,
 )
 from .contracts import (AggregateGeneration, IngestContext, Observation,
+                        ObservationRejection,
                         PerceptionEvent, ReportEnvelope, WakeReceipt)
 from .kit import PerceptionKit
 from .contracts.errors import RetryableProjectionError, RetryableMutationError, UnsupportedRetractionIdentityError, RuleStateAttributionIncompleteError
@@ -71,6 +72,7 @@ __all__ = [
     "SyncBatch", "SyncOutcome", "SyncContractError",
     "FULL", "INCREMENTAL",
     "ReportEnvelope", "Observation", "PerceptionEvent", "WakeReceipt", "IngestContext",
+    "ObservationRejection",
     "AggregateGeneration",
     "contracts", "manifest", "ports", "processing", "rules",
     # 算法

@@ -50,10 +50,10 @@ def test_catches_an_adapter_that_activates_partial_generation():
     assert hits(problems, "⑱")
 
 
-def test_catches_report_finalization_that_loses_terminal_failures():
+def test_catches_report_finalization_that_loses_durable_item_failures():
     def finalize_report(self, receipt):
         pass
-    assert hits(run_storage_conformance(broken(finalize_report=finalize_report)), "terminal")
+    assert hits(run_storage_conformance(broken(finalize_report=finalize_report)), "per-item")
 
 
 def test_catches_receipt_backfill_that_ignores_expected_digest():
