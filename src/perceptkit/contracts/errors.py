@@ -65,5 +65,21 @@ class UnsupportedRetractionIdentityError(ContractError):
                           "fallback identity needs an end-to-end canonical Fact reference"])
 
 
+class RuleStateAttributionIncompleteError(ContractError):
+    """Legacy state cannot be safely attributed; restore metadata before mutation."""
+
+    code = "rule_state_attribution_incomplete"
+    retryable = False
+    recovery_action = "restore_rule_state_attribution"
+
+    def __init__(self, subject_id: str, definition_id: str, scope: str) -> None:
+        self.subject_id = subject_id
+        self.definition_id = definition_id
+        self.scope = scope
+        super().__init__([f"{self.code}: {definition_id}/{scope}; restore archived "
+                          "definition or verified RuleState/Event signal and scope metadata"])
+
+
 __all__ = ["ContractError", "RetryableProjectionError", "RetryableMutationError",
-           "UnsupportedRetractionIdentityError", "LEGACY_REPORT_SEMANTICS_UNVERIFIABLE"]
+           "UnsupportedRetractionIdentityError", "RuleStateAttributionIncompleteError",
+           "LEGACY_REPORT_SEMANTICS_UNVERIFIABLE"]

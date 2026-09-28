@@ -140,6 +140,13 @@ def ingest_report(
             ))],
         )
 
+    # Fail closed on un-attributable pre-upgrade state before even claiming a
+    # Report. The owned planner repeats this check against fresh locked state.
+    from .rule_repair import repair_scopes
+    for signal in {o.signal for o in report.observations if o.signal in signals}:
+        repair_scopes(storage, subject=context.subject_id, signal=signal,
+                      definitions=definitions, definition_at=definition_at)
+
     # 🔴 【整批一个事务】。认领、全部观测、最终回执必须一起成功或一起不生效。
     #
     # 之前是"先认领、再逐条各自提交"：第 1 条提交后崩溃，重试会直接拿到

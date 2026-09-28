@@ -27,8 +27,11 @@ Retraction contract still rejects singleton/deterministic identities atomically.
 
 RuleState repair loads effective valid revisions, sorts by business `occurred_at`,
 canonical Fact identity, revision and observation ID, and evaluates the original
-definition version in its scope. Recorded surviving triggers occupy their scope;
-hypothetical replay crossings without a surviving event do not consume a slot.
+definition version in its scope. Recorded surviving triggers occupy their scope,
+even when a late Fact changes the replay path so that the original crossing no
+longer occurs. Cooldown uses the latest surviving Event's actual `detected_at`,
+never the Fact's business timestamp. Hypothetical replay crossings without a
+surviving event do not consume a slot.
 State stores `previous_fact`, `signal`, `completeness` and `incomplete_reason` in
 addition to evaluator state. Replay never calls WakePort or enqueues a correction
 notification. A corrected Fact moved to a new day establishes that day's baseline.
@@ -42,6 +45,15 @@ complete. Production archived-definition persistence belongs to Task 6/D12.
 Full scheduled replay requires retained tick/aggregate-generation evidence;
 Task 5 conservatively invalidates and marks incomplete instead. Aggregate
 retention/date completeness itself remains Task 6C's separate obligation.
+
+Legacy states without signal metadata must be attributed using their original
+definition version or exact-version/scope Outbox evidence. If attribution is
+missing or contradictory, mutation fails before writes with
+`rule_state_attribution_incomplete` and recovery action
+`restore_rule_state_attribution`. Hosts must restore trustworthy metadata/archive
+and then retry; Kit never guesses from the newest definition. This can block a
+subject mutation when Kit cannot prove that an old state belongs to another
+signal. Persisted archive recovery remains the host/Task 6 responsibility.
 
 ## Delivery states
 
@@ -89,3 +101,9 @@ order before mutation. Claim, start, invalidation and receipt serialize on
 prove sequential protocol behavior only. IO/Rokku must prove two-connection
 claim/invalidate races, crash recovery and Runtime receipt reconciliation before
 release. This Kit change alone is not an end-to-end delivery claim.
+
+Preflight includes every old Event scope that same-signal conservative
+invalidation can affect, even when it is outside the mutated Fact's day. Those
+RuleState keys are acquired before Event ownership and rebuilt in the same
+transaction. If fresh post-lock evidence expands the scope plan, retry the whole
+transaction; never acquire a lower-ranked RuleState key after an Event key.
