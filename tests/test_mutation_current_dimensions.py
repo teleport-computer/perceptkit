@@ -40,6 +40,14 @@ class InspectDimensions(InMemoryStorage):
         assert self.required <= self._mutation_locks.keys(), "Current dimensions missing before Fact write"
         return super().remember_identity(row)
 
+    def append_observation(self, row):
+        assert self.required <= self._mutation_locks.keys(), "Current dimensions missing before Observation write"
+        return super().append_observation(row)
+
+    def backfill_identity(self, row):
+        assert self.required <= self._mutation_locks.keys(), "Current dimensions missing before evidence write"
+        return super().backfill_identity(row)
+
     def record_retraction(self, row):
         assert self.required <= self._mutation_locks.keys(), "Current dimensions missing before tombstone"
         return super().record_retraction(row)
@@ -180,3 +188,67 @@ def test_conformance_catches_dropped_dimension_backfill():
         def backfill_identity(self, identity):
             return super().backfill_identity(replace(identity, dimension_key=None))
     assert any("dimension backfill" in p for p in run_storage_conformance(Broken))
+
+
+def test_default_fallback_fact_revision_owns_both_anchor_dimensions_before_writes():
+    s = InspectDimensions()
+    kit = PerceptionKit(s)  # Real MINIMAL_SIGNALS, including deterministic_digest.
+    assert kit.signals[SIGNAL].identity_strategy == "deterministic_digest"
+    assert anchor(kit, "A", eid=None, revision=1).applied
+    original_fact = next(iter(s.identity_records.values())).fact_key
+    s.required = {resource("A"), resource("B")}
+    s.requests.clear()
+    # Existing fallback Fact = subject/source/signal/occurred_at; revision and
+    # content belong to Delivery identity. Same time, higher revision is real.
+    assert anchor(kit, "B", eid=None, revision=2, at=T).applied
+    assert {row.fact_key for row in s.identity_records.values()} == {original_fact}
+    assert [key for batch in s.requests for key in batch if key[0] == "20_current"] == [resource("A"), resource("B")]
+
+
+def test_fallback_uses_durable_dimension_after_detail_and_current_expire():
+    s = InspectDimensions()
+    kit = PerceptionKit(s)
+    anchor(kit, "A", eid=None)
+    s.observations.clear()
+    s.current.clear()
+    s.required = {resource("A"), resource("B")}
+    assert anchor(kit, "B", eid=None, revision=2).applied
+
+
+@pytest.mark.parametrize("evidence", ["detail", "current", "missing"])
+def test_fallback_legacy_dimension_requires_matching_persisted_evidence(evidence):
+    s = InspectDimensions()
+    kit = PerceptionKit(s)
+    anchor(kit, "A", eid=None)
+    original_key = next(iter(s.identity_records))
+    s.identity_records[original_key] = replace(s.identity_records[original_key], dimension_key=None)
+    # Same source/event_id=None is not a Fact identity. This unrelated row must
+    # neither supply the missing partition nor expand this mutation's lock set.
+    anchor(kit, "unrelated", eid=None, at=T + timedelta(minutes=1))
+    original = s.identity_records[original_key]
+    s.identity_records[original_key] = replace(original, dimension_key=None)
+    if evidence != "detail":
+        s.observations = {k: row for k, row in s.observations.items() if row.occurred_at != T}
+    if evidence != "current":
+        s.current = {k: row for k, row in s.current.items() if row.observed_at != T}
+    s.requests.clear()
+    if evidence == "missing":
+        with pytest.raises(ContractError, match="current_dimension_evidence_incomplete"):
+            anchor(kit, "B", eid=None, revision=2)
+        assert s.identity_records[original_key].dimension_key is None
+    else:
+        s.required = {resource("A"), resource("B")}
+        assert anchor(kit, "B", eid=None, revision=2).applied
+        assert s.identity_records[original_key].dimension_key == f"{SIGNAL}\x1fA"
+        assert [key for batch in s.requests for key in batch if key[0] == "20_current"] == [resource("A"), resource("B")]
+
+
+def test_unrelated_unmapped_legacy_dimension_does_not_block_new_fallback_fact():
+    s = InspectDimensions()
+    kit = PerceptionKit(s)
+    s.remember_identity(DurableDedupeIdentity(
+        subject_id="u", signal=SIGNAL, source="ios", source_event_identity_digest="unrelated-opaque",
+        first_applied_at=T))
+    s.required = {resource("B")}
+    assert anchor(kit, "B", eid=None).applied
+    assert [key for batch in s.requests for key in batch if key[0] == "20_current"] == [resource("B")]

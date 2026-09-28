@@ -14,11 +14,11 @@ def persisted_current_dimensions(storage, sig, *, subject, source, event_id,
     cannot supply an old partition. An identified legacy revision with no provable
     dimension rejects the operation until evidence is restored/backfilled.
     """
-    from .normalize import _canonical, _digest
+    from ..contracts.context import IngestContext
+    from ..contracts.observation import Observation
+    from .normalize import _canonical, _digest, identity_for
     from .retract import _all_observations
 
-    if not event_id:
-        return set(), []
     if revisions is None:
         revisions = storage.list_identities(subject_id=subject, signal=sig.key,
                                             source=source, fact_key=fact_digest)
@@ -33,15 +33,31 @@ def persisted_current_dimensions(storage, sig, *, subject, source, event_id,
         return dimensions, [replace(r, dimension_key=dimension) for r in prior
                             if r.dimension_key is None]
 
+    def matches_fact(row):
+        if row.source != source:
+            return False
+        if event_id:
+            return row.source_event_id == event_id
+        # None is not an identity shared by every fallback Fact. Reconstruct
+        # the canonical Fact identity from THIS persisted row's own timestamp
+        # and manifest strategy, never the incoming correction's values/time.
+        when = row.observed_at if hasattr(row, "dimension_key") else row.occurred_at
+        evidence = Observation(sig.key, sig.schema_version, when, row.availability,
+                               source_event_id=row.source_event_id,
+                               source_revision=row.source_revision)
+        _, persisted_fact, _, _ = identity_for(
+            evidence, sig, IngestContext(subject, when), source=source, content_digest="")
+        return persisted_fact == fact_digest
+
     currents = [row for row in storage.get_current(subject_id=subject, signals=[sig.key]).get(sig.key, ())
-                if (row.source, row.source_event_id) == (source, event_id)]
+                if matches_fact(row)]
     dimensions.update(row.dimension_key for row in currents)
     missing = [r for r in prior if r.dimension_key is None]
     # Current metadata alone remains authoritative when details have expired.
     details = []
     if sig.stores_history and (not prior or missing or any(r.fact_key is None for r in revisions)):
         details = [row for row in _all_observations(storage, subject, sig.key)
-                   if (row.source, row.source_event_id) == (source, event_id)]
+                   if matches_fact(row)]
         dimensions.update(sig.dimension_key_for(row.typed_value) for row in details)
 
     evidence = {}

@@ -56,6 +56,17 @@ For a partitioned signal, an identified prior revision whose partition cannot be
 proved fails with `ContractError: current_dimension_evidence_incomplete`; restore
 or backfill evidence before retry. The operation leaves no partial writes.
 
+Durable partition evidence is queried by canonical Fact digest for **all** identity
+strategies, including observations with no source event ID. The default
+`proximity_anchor` deterministic fallback identifies its Fact by subject, source,
+signal and observation timestamp; revision/content distinguish deliveries. A
+higher revision at that same timestamp can therefore retain A's Fact key while
+reporting partition B, and must pre-own A+B. Missing event ID does not skip this
+lookup. Fallback legacy evidence is matched by reconstructing each persisted
+row's canonical Fact identity from its own timestamp/strategy; sharing a null
+event ID is not proof. Unrelated unmapped legacy identities cannot supply a
+partition or globally block a new Fact.
+
 This dimension repair does not repair `_affected_days` after detail retention:
 that existing helper still discovers aggregate days from retained observations.
 Task 6C must surface incomplete date evidence and ensure old aggregates cannot
