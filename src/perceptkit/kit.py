@@ -231,6 +231,11 @@ class PerceptionKit:
         默认**直接把受影响那几天的聚合重算并写回**（``recompute=False``
         可以关掉，由调用方自己按更大的范围重算）。重算那条路已经会排除
         被撤回的观测。
+
+        Only source_event_id and singleton identity strategies can resolve this
+        deletion envelope. Deterministic fallback/unknown strategies raise
+        UnsupportedRetractionIdentityError before any batch write; observed_at
+        is deletion audit time, never a substitute for the original Fact time.
         """
         # 🔴 受影响那几天的聚合**真的会重算并写回**，而且跟记撤回在同一个
         # 事务里。早先只返回一个"有几天受影响"的计数，调用方拿不到是哪几天，

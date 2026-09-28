@@ -46,4 +46,23 @@ class RetryableMutationError(RuntimeError):
     retryable = True
 
 
-__all__ = ["ContractError", "RetryableProjectionError", "RetryableMutationError", "LEGACY_REPORT_SEMANTICS_UNVERIFIABLE"]
+class UnsupportedRetractionIdentityError(ContractError):
+    """The wire deletion reference cannot identify canonical Fact ownership.
+
+    No writes occurred. Retrying the same payload cannot recover missing
+    identity information; the deletion-reference contract must be upgraded.
+    """
+
+    code = "retraction_identity_unsupported"
+    retryable = False
+    recovery_action = "upgrade_retraction_identity_contract"
+
+    def __init__(self, signal: str, identity_strategy: str) -> None:
+        self.signal = signal
+        self.identity_strategy = identity_strategy
+        super().__init__([f"{signal}: {self.code} ({identity_strategy}); "
+                          "Retraction has no canonical Fact reference; observed_at is not Fact time"])
+
+
+__all__ = ["ContractError", "RetryableProjectionError", "RetryableMutationError",
+           "UnsupportedRetractionIdentityError", "LEGACY_REPORT_SEMANTICS_UNVERIFIABLE"]

@@ -32,6 +32,13 @@ keys in that order. Only then may it decide retraction/revision status and write
 Observations, identities or projections. Report claims are atomic and roll back
 with this same operation. Batch input order never controls lock order.
 
+Fact resource selection follows the manifest identity strategy, not merely the
+presence of an optional wire `source_event_id`. Only `source_event_id` strategy
+with an actual ID uses a `source_id` resource. `deterministic_digest`, `singleton`
+and source-ID signals falling back because an ID is absent use the normalized
+canonical `fact_key` in the `fallback` resource. Optional IDs on fallback signals
+cannot split ownership or change persisted-evidence matching.
+
 Retraction acquires all Facts before discovering affected dates, then all Current
 dimensions and Aggregates before writing tombstones/reselect/recompute. Recompute
 starts at Aggregate ownership before reading Facts; it never requests Fact locks
@@ -71,6 +78,41 @@ This dimension repair does not repair `_affected_days` after detail retention:
 that existing helper still discovers aggregate days from retained observations.
 Task 6C must surface incomplete date evidence and ensure old aggregates cannot
 be silently omitted by a final retraction result.
+
+## Retraction identity capability
+
+The current `Retraction` envelope names a source reference and the time deletion
+was observed. That timestamp is not the original Fact's observation timestamp.
+The complete batch is therefore preflighted before any transaction or write:
+
+| Manifest strategy | Canonical mutation resource for retraction |
+| --- | --- |
+| `source_event_id` | Same subject/signal/source/source ID resource as ingest |
+| `singleton` | Same canonical fallback digest of subject/source/signal as ingest |
+| `deterministic_digest` | Typed unsupported: original Fact time/canonical reference is absent |
+| Unknown signal/strategy | Typed unsupported: identity contract is unavailable |
+
+Unsupported deletion raises public `UnsupportedRetractionIdentityError`, a
+`ContractError` with code `retraction_identity_unsupported`, `retryable=False`
+and `recovery_action=upgrade_retraction_identity_contract`. The entire batch,
+including any supported siblings, leaves no mutation. Hosts must expose this
+failure and retain the deletion for recovery, not acknowledge deletion or advance
+its ingestion cursor as though it succeeded. Repeating the unchanged request
+cannot create the missing identity.
+
+Product cost: default `proximity_anchor` and other deterministic fallback signals
+cannot currently use this source-reference-only deletion API. They previously
+could take a different lock from ingest and report unsafe success; this version
+explicitly refuses that operation. Their ingest/current/query behavior remains
+available. Source-ID health deletion and singleton deletion references remain
+supported with canonical ownership.
+
+Restoring deterministic deletion requires an explicit canonical Fact reference,
+or a durable optional-source-reference → canonical-Fact mapping protected by a
+lower-rank routing key shared by ingest and retraction. Such a protocol must also
+cover mapping after detail expiry, unmapped legacy evidence, deletion preceding
+upload, multiple aliases for one Fact and one alias spanning several Facts. This
+task does not add that mapping or silently synthesize a key from `observed_at`.
 
 ## Reentrancy, failures and database obligations
 

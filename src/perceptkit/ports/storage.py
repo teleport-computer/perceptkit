@@ -51,6 +51,10 @@ class StoragePort(Protocol):
         Aggregate and RuleState batches in
         global tuple order. All Fact/projection/rule writes follow acquisition
         of the complete set; the preceding atomic report claim rolls back too.
+        Fact resources use source_id only for that manifest strategy; optional
+        source IDs on deterministic/singleton signals do not replace canonical
+        fallback ownership. Retraction preflights this same identity contract;
+        unresolved deterministic deletion references fail before any write.
         Standalone recompute starts at Aggregate; it never acquires Fact later.
         Internal helpers reuse the explicit owner; do NOT infer reentrancy from
         a thread, connection, or Python RLock. Unrelated resources may proceed.

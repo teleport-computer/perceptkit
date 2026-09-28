@@ -31,7 +31,7 @@ from ..contracts.retraction import Retraction
 from ..manifest.types import SignalDefinition
 from ..ports.storage import StoragePort
 from ..contracts.errors import RetryableProjectionError
-from ..contracts.mutation import fact_key, current_key, aggregate_key, canonical_keys
+from ..contracts.mutation import current_key, aggregate_key, canonical_keys
 
 
 #: 当前值写入撞车时重读重判几次。和 ingest 那条路同一个数量级 ——
@@ -78,13 +78,14 @@ def apply_retractions(
     outcome = RetractionOutcome()
 
     from .pipeline import AGGREGATION_VERSION
-    from .mutation import persisted_current_dimensions
-    from .normalize import _digest
+    from .mutation import persisted_current_dimensions, retraction_fact_identity
+
+    # Preflight the complete batch before a transaction or any write. The
+    # current deletion envelope cannot name a deterministic fallback Fact.
+    identities = {r: retraction_fact_identity(r, signals.get(r.signal)) for r in retractions}
 
     with storage.mutation_transaction() as mutation:
-        mutation.acquire(canonical_keys([
-            fact_key(r.subject_id, r.signal, r.source, r.source_event_id) for r in retractions
-        ]))
+        mutation.acquire(canonical_keys([key for key, _ in identities.values()]))
         affected = {(r.subject_id, r.signal, r.source, r.source_event_id): _affected_days(storage, r)
                     for r in retractions}
         current_resources = set()
@@ -96,7 +97,7 @@ def apply_retractions(
             dimensions, updates = persisted_current_dimensions(
                 storage, sig, subject=r.subject_id, source=r.source,
                 event_id=r.source_event_id,
-                fact_digest=_digest(r.subject_id, r.source, r.signal, r.source_event_id))
+                fact_digest=identities[r][1])
             current_resources.update(current_key(r.subject_id, r.signal, dimension)
                                      for dimension in dimensions)
             for update in updates:

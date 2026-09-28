@@ -9,7 +9,6 @@ from perceptkit import IngestContext, PerceptionKit, RetryableMutationError
 from perceptkit.conformance import InMemoryStorage
 from perceptkit.contracts import ContractError
 from perceptkit.contracts.records import DurableDedupeIdentity
-from perceptkit.manifest import MINIMAL_SIGNALS
 from test_acceptance_regressions_0_9 import T, DAY, observation, ingest
 from perceptkit.contracts.retraction import Retraction
 
@@ -53,10 +52,8 @@ class InspectDimensions(InMemoryStorage):
         return super().record_retraction(row)
 
 
-def kit_for(storage, *, history=True):
-    sig = replace(MINIMAL_SIGNALS[SIGNAL], identity_strategy="source_event_id",
-                  history_retention_days=7 if history else 0)
-    return PerceptionKit(storage, signals={SIGNAL: sig})
+def kit_for(storage):
+    return PerceptionKit(storage)
 
 
 def anchor(kit, name, *, eid="fact", revision=1, at=T):
@@ -70,7 +67,7 @@ def test_different_anchor_owners_are_independent_and_use_exact_dimension_key():
     s.required = {resource("B")}
     with s.mutation_transaction() as first:
         first.acquire([resource("A")])
-        result = anchor(kit_for(s, history=False), "B")
+        result = anchor(kit_for(s), "B")
         assert len(result.applied) == 1
     assert ("20_current", "u", SIGNAL) not in {k for batch in s.requests for k in batch}
 
@@ -87,7 +84,7 @@ def test_same_anchor_dimension_contends_for_independent_facts():
 @pytest.mark.parametrize("evidence", ["details", "current", "identity"])
 def test_cross_dimension_correction_preplans_old_and_new_from_persisted_evidence(evidence):
     s = InspectDimensions()
-    kit = kit_for(s, history=False if evidence == "current" else True)
+    kit = kit_for(s)
     assert anchor(kit, "A").applied
     assert "dimension_key" in {f.name for f in fields(DurableDedupeIdentity)}, "missing durable dimension evidence"
     if evidence != "details":
@@ -100,37 +97,41 @@ def test_cross_dimension_correction_preplans_old_and_new_from_persisted_evidence
         s.current.clear()  # Old projection no longer carries the evidence.
     s.required = {resource("A"), resource("B")}
     s.requests.clear()
-    anchor(kit, "B", revision=2, at=T + timedelta(hours=1))
+    anchor(kit, "B", revision=2, at=T)
     acquired = [key for batch in s.requests for key in batch if key[0] == "20_current"]
     assert acquired == [resource("A"), resource("B")]
     assert all(row.dimension_key == f"{SIGNAL}\x1fA" for row in s.identity_records.values()
                if row.source_revision == 1)
 
 
-def test_retraction_locks_every_actual_dimension_even_when_details_expired():
+def test_unsupported_retraction_preserves_every_actual_dimension_when_details_expired():
+    from copy import deepcopy
     s = InspectDimensions()
-    kit = kit_for(s, history=False)
+    kit = kit_for(s)
     anchor(kit, "A")
     original = next(iter(s.current.values()))
-    anchor(kit, "B", revision=2, at=T + timedelta(hours=1))
+    anchor(kit, "B", revision=2, at=T)
     # Existing legacy/corrected Current rows may reference the same Fact across
     # dimensions. All rows being reselected must be owned before the tombstone.
     s.current[("u", SIGNAL, original.dimension_key)] = original
     assert {r.dimension_key for r in s.current.values()} == {f"{SIGNAL}\x1fA", f"{SIGNAL}\x1fB"}
+    s.observations.clear()
+    before = deepcopy((s.current, s.identity_records, s.retractions))
     s.required = {resource("A"), resource("B")}
     s.requests.clear()
-    kit.apply_retractions([Retraction("u", SIGNAL, "fact", "ios", T)], now=T)
-    acquired = [key for batch in s.requests for key in batch if key[0] == "20_current"]
-    assert acquired == [resource("A"), resource("B")]
-    assert all(row.typed_value is None for row in s.current.values())
+    with pytest.raises(ContractError, match="retraction_identity_unsupported"):
+        kit.apply_retractions([Retraction("u", SIGNAL, "fact", "ios", T)], now=T)
+    assert not s.requests
+    assert (s.current, s.identity_records, s.retractions) == before
 
 
 def test_legacy_unknown_dimension_is_explicit_and_never_guessed_from_correction():
     s = InspectDimensions()
-    kit = kit_for(s, history=False)
+    kit = kit_for(s)
     anchor(kit, "A")
     assert "dimension_key" in {f.name for f in fields(DurableDedupeIdentity)}, "missing durable dimension evidence"
     s.current.clear()
+    s.observations.clear()
     s.identity_records = {key: replace(row, dimension_key=None) for key, row in s.identity_records.items()}
     reports = dict(s.reports)
     with pytest.raises(ContractError, match="current_dimension_evidence_incomplete"):
@@ -138,17 +139,18 @@ def test_legacy_unknown_dimension_is_explicit_and_never_guessed_from_correction(
     assert s.reports == reports and not s.current
 
 
-def test_retraction_owns_retained_dimension_after_other_fact_replaces_current():
+def test_correction_owns_retained_dimension_after_other_fact_replaces_current():
     s = InspectDimensions()
-    kit = kit_for(s, history=False)
+    kit = kit_for(s)
     anchor(kit, "A")
     anchor(kit, "A", eid="replacement", at=T + timedelta(hours=1))
     assert all(row.source_event_id == "replacement" for row in s.current.values())
+    s.observations.clear()
     with s.mutation_transaction() as competing:
         competing.acquire([resource("A")])
         with pytest.raises(RetryableMutationError):
-            kit.apply_retractions([Retraction("u", SIGNAL, "fact", "ios", T)], now=T)
-    assert not s.retractions
+            anchor(kit, "B", eid="new-optional-ref", revision=2, at=T)
+    assert all(row.source_event_id == "replacement" for row in s.current.values())
 
 
 def test_dimension_backfill_only_fills_unknown_and_preserves_identity_content():
@@ -252,3 +254,91 @@ def test_unrelated_unmapped_legacy_dimension_does_not_block_new_fallback_fact():
     s.required = {resource("B")}
     assert anchor(kit, "B", eid=None).applied
     assert [key for batch in s.requests for key in batch if key[0] == "20_current"] == [resource("B")]
+
+
+def test_default_fallback_ignores_optional_source_ids_for_fact_ownership():
+    s = InspectDimensions()
+    kit = PerceptionKit(s)
+    anchor(kit, "A", eid="ignored-A")
+    first_fact = next(key for batch in s.requests for key in batch if key[0] == "10_fact")
+    canonical = next(iter(s.identity_records.values())).fact_key
+    assert first_fact == ("10_fact", "u", SIGNAL, "ios", "fallback", canonical)
+    s.required = {resource("A"), resource("B")}
+    s.requests.clear()
+    anchor(kit, "B", eid="ignored-B", revision=2, at=T)
+    assert {row.fact_key for row in s.identity_records.values()} == {canonical}
+    assert next(key for batch in s.requests for key in batch if key[0] == "10_fact") == first_fact
+
+
+@pytest.mark.parametrize("evidence", ["detail", "current"])
+def test_optional_id_changes_do_not_hide_canonical_fallback_legacy_evidence(evidence):
+    s = InspectDimensions()
+    kit = PerceptionKit(s)
+    anchor(kit, "A", eid="ignored-A")
+    original_key = next(iter(s.identity_records))
+    s.identity_records[original_key] = replace(s.identity_records[original_key], dimension_key=None)
+    if evidence == "detail":
+        s.current.clear()
+    else:
+        s.observations.clear()
+    s.required = {resource("A"), resource("B")}
+    assert anchor(kit, "B", eid="ignored-B", revision=2, at=T).applied
+    assert s.identity_records[original_key].dimension_key == f"{SIGNAL}\x1fA"
+
+
+@pytest.mark.parametrize("expired", [False, True])
+def test_deterministic_retraction_is_typed_unsupported_before_transaction_or_write(expired):
+    from copy import deepcopy
+    import perceptkit
+    s = InspectDimensions()
+    kit = PerceptionKit(s)
+    anchor(kit, "A", eid="optional-ref")
+    canonical = next(iter(s.identity_records.values())).fact_key
+    if expired:
+        s.observations.clear()
+    before = deepcopy((s.retractions, s.current, s.aggregates, s.identity_records))
+    # Holding canonical ownership must not allow deletion to sneak through
+    # under a different raw-source-ID key. Unsupported is explicit, not success.
+    with s.mutation_transaction() as owner:
+        owner.acquire([("10_fact", "u", SIGNAL, "ios", "fallback", canonical)])
+        depth = s.transactions_opened
+        with pytest.raises(ContractError) as caught:
+            kit.apply_retractions([Retraction("u", SIGNAL, "optional-ref", "ios", T + timedelta(days=1))],
+                                  now=T + timedelta(days=1))
+        assert type(caught.value) is getattr(perceptkit, "UnsupportedRetractionIdentityError", None)
+        assert type(caught.value) is perceptkit.contracts.UnsupportedRetractionIdentityError
+        assert caught.value.code == "retraction_identity_unsupported"
+        assert caught.value.retryable is False
+        assert caught.value.recovery_action == "upgrade_retraction_identity_contract"
+        assert s.transactions_opened == depth
+    assert (s.retractions, s.current, s.aggregates, s.identity_records) == before
+
+
+def test_real_singleton_ingest_and_retraction_share_canonical_fallback_key():
+    from perceptkit.processing.normalize import _digest
+    s = InspectDimensions()
+    kit = PerceptionKit(s)
+    out = ingest(kit, [observation({"changed": True}, signal="screen_change", eid="optional-ref")])
+    assert out.applied
+    canonical = next(iter(s.identity_records.values())).fact_key
+    expected = ("10_fact", "u", "screen_change", "ios", "fallback", _digest("u", "ios", "screen_change"))
+    assert expected[-1] == canonical
+    assert next(key for batch in s.requests for key in batch if key[0] == "10_fact") == expected
+    with s.mutation_transaction() as competitor:
+        competitor.acquire([expected])
+        with pytest.raises(RetryableMutationError):
+            kit.apply_retractions([Retraction("u", "screen_change", "optional-ref", "ios", T)], now=T)
+    s.requests.clear()
+    assert kit.apply_retractions([Retraction("u", "screen_change", "optional-ref", "ios", T)], now=T).recorded == 1
+    assert next(key for batch in s.requests for key in batch if key[0] == "10_fact") == expected
+    assert all(row.typed_value is None for row in s.current.values())
+
+
+def test_mixed_retraction_batch_rejects_unsupported_strategy_before_supported_sibling_write():
+    s = InspectDimensions()
+    kit = PerceptionKit(s)
+    before = s.transactions_opened
+    with pytest.raises(ContractError):
+        kit.apply_retractions([Retraction("u", "health_weight", "known", "ios", T),
+                               Retraction("u", SIGNAL, "unknown", "ios", T)], now=T)
+    assert not s.retractions and s.transactions_opened == before

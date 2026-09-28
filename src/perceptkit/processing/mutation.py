@@ -1,9 +1,28 @@
 """Kit's canonical resource planning; adapters implement ownership, not policy."""
 from dataclasses import replace
 
-from ..contracts.errors import ContractError
+from ..contracts.errors import ContractError, UnsupportedRetractionIdentityError
 from ..contracts.mutation import aggregate_key, canonical_keys, current_key, fact_key, rule_key
 from ..rules.engine import scope_key
+
+
+def retraction_fact_identity(retraction, sig):
+    """Resolve only identity strategies that the deletion envelope can prove.
+
+    Deterministic fallback needs the original Fact time, absent from Retraction.
+    Its observed_at is deletion audit time and must never be used to guess it.
+    """
+    from .normalize import _digest
+
+    r = retraction
+    strategy = sig.identity_strategy if sig is not None else "unknown"
+    if strategy == "source_event_id":
+        digest = _digest(r.subject_id, r.source, r.signal, r.source_event_id)
+        return fact_key(r.subject_id, r.signal, r.source, r.source_event_id), digest
+    if strategy == "singleton":
+        digest = _digest(r.subject_id, r.source, r.signal)
+        return fact_key(r.subject_id, r.signal, r.source, None, fallback=digest), digest
+    raise UnsupportedRetractionIdentityError(r.signal, strategy)
 
 
 def persisted_current_dimensions(storage, sig, *, subject, source, event_id,
@@ -36,7 +55,7 @@ def persisted_current_dimensions(storage, sig, *, subject, source, event_id,
     def matches_fact(row):
         if row.source != source:
             return False
-        if event_id:
+        if sig.identity_strategy == "source_event_id" and event_id:
             return row.source_event_id == event_id
         # None is not an identity shared by every fallback Fact. Reconstruct
         # the canonical Fact identity from THIS persisted row's own timestamp
@@ -100,7 +119,9 @@ def acquire_ingest(owner, storage, items, signals, definitions, version):
 
     owner.acquire(canonical_keys([
         fact_key(o.stored.subject_id, o.stored.signal, o.stored.source,
-                 o.stored.source_event_id, fallback=o.fact_key) for o in items
+                 (o.stored.source_event_id
+                  if signals[o.stored.signal].identity_strategy == "source_event_id" else None),
+                 fallback=o.fact_key) for o in items
     ]))
     # Old dates are discovered ONLY after every Fact in the batch is owned.
     # No writes or aggregate/rule/current decisions happen in this phase.
