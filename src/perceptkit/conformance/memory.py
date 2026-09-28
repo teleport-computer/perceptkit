@@ -227,12 +227,13 @@ class InMemoryStorage:
     def has_seen_identity(self, *, subject_id, signal, source, digest) -> bool:
         return (subject_id, signal, source, digest) in self.identities
 
-    def list_identities(self, *, subject_id, signal, source, fact_key):
+    def list_identities(self, *, subject_id, signal, source=None, fact_key=None):
         scoped = [self.identity_records.get(key) or DurableDedupeIdentity(
-            subject_id=subject_id, signal=signal, source=source,
+            subject_id=subject_id, signal=signal, source=key[2],
             source_event_identity_digest=key[3], first_applied_at=_EPOCH,
-        ) for key in sorted(self.identities) if key[:3] == (subject_id, signal, source)]
-        return [row for row in scoped if row.fact_key is None or row.fact_key == fact_key]
+        ) for key in sorted(self.identities) if key[:2] == (subject_id, signal)
+            and (source is None or key[2] == source)]
+        return [row for row in scoped if fact_key is None or row.fact_key is None or row.fact_key == fact_key]
 
     def backfill_identity(self, identity):
         key = (identity.subject_id, identity.signal, identity.source,
@@ -370,20 +371,39 @@ class InMemoryStorage:
         self.retractions[key] = retraction
         return True
 
-    def scrub_event_snapshots(self, *, subject_id, signal, source, source_event_id) -> int:
+    def scrub_event_snapshots(self, *, subject_id, signal, source, source_event_id,
+                              now, reason="fact_retracted", observation_ids=None,
+                              canonical_fact_key=None) -> int:
         hit = 0
         for event_id, entry in list(self.outbox.items()):
-            if (entry.subject_id, entry.source, entry.source_event_id) != (
-                    subject_id, source, source_event_id):
+            if entry.subject_id != subject_id or entry.fact_snapshot.get("signal") != signal:
                 continue
-            snap = dict(entry.fact_snapshot or {})
-            if snap.get("retracted"):
+            # Legacy missing provenance is not evidence of independence. Fail
+            # closed for that signal until adapters backfill canonical refs.
+            matches = not entry.fact_dependencies_complete or not entry.fact_dependencies or any(
+                (ref.get("subject_id"), ref.get("signal"), ref.get("source"), ref.get("source_event_id"))
+                == (subject_id, signal, source, source_event_id)
+                and (observation_ids is None or ref.get("observation_id") in observation_ids)
+                and (canonical_fact_key is None or ref.get("fact_key") == canonical_fact_key)
+                for ref in entry.fact_dependencies)
+            if not matches or entry.invalidated_at is not None:
                 continue
-            # 只抹数值，留下"触发过、而且触发它的数据已被删除"。
-            snap["previous"] = None
-            snap["current"] = None
-            snap["retracted"] = True
-            self.outbox[event_id] = replace(entry, fact_snapshot=snap)
+            audit_keys = ("event_id", "definition_id", "definition_version", "subject_id",
+                          "type", "signal", "field", "occurred_at", "received_at", "schema_version")
+            snap = {key: entry.fact_snapshot[key] for key in audit_keys if key in entry.fact_snapshot}
+            snap.update(previous=None, current=None, retracted=reason == "fact_retracted",
+                        invalidated=True, context={"scope": entry.fact_snapshot.get("context", {}).get("scope")})
+            state = entry.delivery_state
+            if state in (_delivery.PENDING, _delivery.CLAIMED):
+                state = _delivery.UNKNOWN if entry.dispatch_started_at else _delivery.INVALIDATED
+            self.outbox[event_id] = replace(
+                entry, fact_snapshot=snap, delivery_state=state,
+                invalidated_at=now, invalidation_reason=reason,
+                claim_token=entry.claim_token if state == _delivery.UNKNOWN else None,
+                lease_owner=entry.lease_owner if state == _delivery.UNKNOWN else None,
+                lease_expires_at=entry.lease_expires_at if state == _delivery.UNKNOWN else None,
+                budget_reservation_id=(entry.budget_reservation_id
+                                       if state in (_delivery.UNKNOWN, _delivery.DELIVERED) else None))
             hit += 1
         return hit
 
@@ -439,6 +459,10 @@ class InMemoryStorage:
     def get_rule_state(self, *, subject_id, definition_id, scope_key):
         return self.rule_state.get((subject_id, definition_id, scope_key))
 
+    def list_rule_states(self, *, subject_id):
+        return [(did, scope, deepcopy(raw)) for (sub, did, scope), raw in self.rule_state.items()
+                if sub == subject_id]
+
     def put_rule_state(self, *, subject_id, definition_id, scope_key, state) -> None:
         self.rule_state[(subject_id, definition_id, scope_key)] = dict(state)
 
@@ -454,6 +478,10 @@ class InMemoryStorage:
         from dataclasses import replace
         from datetime import timedelta
         for event_id, entry in sorted(self.outbox.items()):
+            if (entry.delivery_state == _delivery.CLAIMED and entry.dispatch_started_at
+                    and entry.lease_expires_at is not None and entry.lease_expires_at <= now):
+                self.mark_dispatch_unknown(event_id=event_id, claim_token=entry.claim_token)
+                continue
             claimable = (
                 entry.delivery_state == _delivery.PENDING
                 or (entry.delivery_state == _delivery.CLAIMED
@@ -464,39 +492,86 @@ class InMemoryStorage:
                 continue
             if entry.next_attempt_at is not None and entry.next_attempt_at > now:
                 continue
-            claimed = replace(
-                entry,
-                delivery_state=_delivery.CLAIMED,
-                attempt_count=entry.attempt_count + 1,
-                lease_owner=worker_id,
-                lease_expires_at=now + timedelta(seconds=lease_seconds),
-                # 额度只是占位，不是消耗 —— delivered 时才兑现。
-                budget_reservation_id=f"resv_{event_id}_{entry.attempt_count + 1}",
-                # 每次认领换一个新令牌 —— 旧 worker 回来时手里是旧的。
-                claim_token=f"{worker_id}:{entry.attempt_count + 1}",
-            )
-            self.outbox[event_id] = claimed
+            from ..contracts.mutation import event_key
+            with self.mutation_transaction() as owner:
+                owner.acquire((event_key(entry.subject_id, entry.fact_snapshot.get("signal", "")),))
+                entry = self.outbox[event_id]
+                if entry.invalidated_at or entry.dispatch_started_at or not (
+                    entry.delivery_state == _delivery.PENDING or
+                    entry.delivery_state == _delivery.CLAIMED and entry.lease_expires_at is not None
+                    and entry.lease_expires_at <= now
+                ) or entry.next_attempt_at is not None and entry.next_attempt_at > now:
+                    continue
+                claimed = replace(
+                    entry, delivery_state=_delivery.CLAIMED,
+                    attempt_count=entry.attempt_count + 1, lease_owner=worker_id,
+                    lease_expires_at=now + timedelta(seconds=lease_seconds),
+                    budget_reservation_id=f"resv_{event_id}_{entry.attempt_count + 1}",
+                    claim_token=f"{worker_id}:{entry.attempt_count + 1}")
+                self.outbox[event_id] = claimed
             return claimed
         return None
 
+    def begin_event_dispatch(self, *, event_id, claim_token, now):
+        from ..contracts.mutation import event_key
+        entry = self.outbox[event_id]
+        with self.mutation_transaction() as owner:
+            owner.acquire((event_key(entry.subject_id, entry.fact_snapshot.get("signal", "")),))
+            entry = self.outbox[event_id]
+            if (entry.delivery_state != _delivery.CLAIMED or not claim_token
+                    or entry.claim_token != claim_token or entry.invalidated_at
+                    or entry.dispatch_started_at or entry.lease_expires_at is None
+                    or entry.lease_expires_at <= now):
+                return None
+            started = replace(entry, dispatch_started_at=now)
+            self.outbox[event_id] = started
+            return started
+
+    def mark_dispatch_unknown(self, *, event_id, claim_token):
+        from ..contracts.mutation import event_key
+        entry = self.outbox[event_id]
+        with self.mutation_transaction() as owner:
+            owner.acquire((event_key(entry.subject_id, entry.fact_snapshot.get("signal", "")),))
+            entry = self.outbox[event_id]
+            if (entry.claim_token != claim_token or not claim_token or not entry.dispatch_started_at
+                    or entry.delivery_state not in (_delivery.CLAIMED, _delivery.UNKNOWN)):
+                return False
+            self.outbox[event_id] = replace(entry, delivery_state=_delivery.UNKNOWN)
+            return True
+
     def record_wake_receipt(self, *, receipt, next_state, claim_token=None,
-                            next_attempt_at=None) -> bool:
+                            next_attempt_at=None) -> str | bool:
+        from ..contracts.mutation import event_key
+        entry = self.outbox[receipt.event_id]
+        with self.mutation_transaction() as owner:
+            owner.acquire((event_key(entry.subject_id, entry.fact_snapshot.get("signal", "")),))
+            return self._record_wake_receipt(receipt=receipt, next_state=next_state,
+                                             claim_token=claim_token, next_attempt_at=next_attempt_at)
+
+    def _record_wake_receipt(self, *, receipt, next_state, claim_token=None,
+                             next_attempt_at=None) -> str | bool:
         from dataclasses import replace
         entry = self.outbox.get(receipt.event_id)
         if entry is None:
             raise KeyError(f"unknown event_id {receipt.event_id!r}")
-        if claim_token is not None and entry.claim_token != claim_token:
+        if (not claim_token or entry.claim_token != claim_token
+                or entry.delivery_state not in (_delivery.CLAIMED, _delivery.UNKNOWN)):
             # 令牌过期:这个事件已经被别人接管了。只记审计,不改状态。
-            self.receipts.append(receipt)
+            if receipt not in self.receipts:
+                self.receipts.append(receipt)
             return False
+        if entry.invalidated_at is not None and next_state in (_delivery.PENDING, _delivery.DEAD_LETTER):
+            next_state = _delivery.INVALIDATED
         _delivery.assert_transition(entry.delivery_state, next_state)
-        self.receipts.append(receipt)
+        if receipt not in self.receipts:
+            self.receipts.append(receipt)
         self.outbox[receipt.event_id] = replace(
             entry,
             delivery_state=next_state,
             next_attempt_at=next_attempt_at,
             lease_owner=None,
             lease_expires_at=None,
+            dispatch_started_at=None if next_state == _delivery.PENDING else entry.dispatch_started_at,
             # 兑现或释放：只有 delivered 会把占位变成真正的消耗。
             claim_token=None,
             budget_reservation_id=(
@@ -504,12 +579,13 @@ class InMemoryStorage:
                 if _delivery.consumes_budget(next_state) else None
             ),
         )
-        return True
+        return next_state
 
     def list_pending_events(self, *, subject_id=None, limit=100):
         return [
             e for e in self.outbox.values()
-            if not e.is_terminal and (subject_id is None or e.subject_id == subject_id)
+            if e.delivery_state in (_delivery.PENDING, _delivery.CLAIMED)
+            and (subject_id is None or e.subject_id == subject_id)
         ][:limit]
 
     def list_events(self, *, subject_id, delivery_states=None, event_type=None,

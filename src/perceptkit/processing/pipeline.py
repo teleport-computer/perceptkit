@@ -98,6 +98,7 @@ def ingest_report(
     timezone_fallback: str | None = None,
     max_observations: int = 200,
     max_payload_bytes: int = 256 * 1024,
+    definition_at=None,
 ) -> IngestOutcome:
     """把一批上报走完前七步。
 
@@ -173,7 +174,7 @@ def ingest_report(
             warnings=list(normalized.warnings),
         )
         acquire_ingest(mutation, storage, normalized.normalized, signals, definitions,
-                       AGGREGATION_VERSION)
+                       AGGREGATION_VERSION, definition_at=definition_at)
 
         # A batch is immutable: array order must never choose the winner among
         # two different contents claiming the same Fact revision. Preflight all
@@ -201,7 +202,7 @@ def ingest_report(
             sig = signals[item.stored.signal]
             _apply_one(item, sig, context=context, storage=storage, outcome=outcome,
                        definitions=definitions, extra_evaluators=extra_evaluators,
-                       mutation=mutation)
+                       mutation=mutation, definition_at=definition_at)
 
         status, code = _receipt.INGEST_ACCEPTED, None
         if outcome.conflicts:
@@ -270,6 +271,7 @@ def _apply_one(
     definitions: Sequence[EventDefinition] = (),
     extra_evaluators: Mapping[str, Callable[..., Any]] | None = None,
     mutation=None,
+    definition_at=None,
 ) -> None:
     """③~⑨：一条观测的落地，以及命中规则时写发件箱。
 
@@ -395,6 +397,20 @@ def _apply_one(
                 _rebuild_corrected_day(storage, sig, context=context, day=day)
         elif stored.availability == "observed":
             _update_aggregate(item, sig, context=context, storage=storage)
+
+    if prior_revisions:
+        from .rule_repair import rebuild_rules, repair_scopes
+        storage.scrub_event_snapshots(
+            subject_id=stored.subject_id, signal=stored.signal, source=stored.source,
+            source_event_id=stored.source_event_id, canonical_fact_key=item.fact_key,
+            now=context.received_at, reason="fact_corrected")
+        days = {stored.effective_local_date, *(r.effective_local_date for r in prior_revisions)}
+        scopes = repair_scopes(storage, subject=stored.subject_id, signal=stored.signal,
+                               definitions=definitions, definition_at=definition_at, days=days)
+        rebuild_rules(storage, subject=stored.subject_id, signal=sig, scopes=scopes,
+                      extra_evaluators=extra_evaluators)
+        outcome.applied.append(item)
+        return
 
     # ⑧⑨ 求值 + 写发件箱。和上面同事务 —— 事件落地了但观测没落地(或反过来)，
     #    都会让"为什么会有这个事件"永远解释不清。

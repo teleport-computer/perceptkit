@@ -36,6 +36,11 @@ def rule_key(subject: str, definition_id: str, scope_key: str) -> MutationKey:
     return ("40_rule", subject, definition_id, scope_key)
 
 
+def event_key(subject: str, signal: str) -> MutationKey:
+    """Serializes enqueue, invalidation, start and receipts, including phantoms."""
+    return ("50_events", subject, signal)
+
+
 def canonical_keys(keys: Sequence[MutationKey]) -> tuple[MutationKey, ...]:
     return tuple(sorted(set(keys)))
 
@@ -55,4 +60,4 @@ class MutationOwner(Protocol):
 
 
 __all__ = ["MutationKey", "MutationOwner", "RetryableMutationError", "fact_key",
-           "current_key", "aggregate_key", "rule_key", "canonical_keys"]
+           "current_key", "aggregate_key", "rule_key", "event_key", "canonical_keys"]

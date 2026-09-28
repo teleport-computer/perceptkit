@@ -135,6 +135,7 @@ class PerceptionKit:
             extra_evaluators=self.extra_evaluators,
             timezone_fallback=self.timezone_fallback,
             max_observations=self.max_observations,
+            definition_at=self.definition_at,
         )
         if dispatch and outcome.events:
             if self.wake is None:
@@ -259,6 +260,8 @@ class PerceptionKit:
             signals=dict(self.signals), now=now,
             # 重算跟着撤回走在**同一个事务**里，见 apply_retractions。
             on_affected_day=_rebuild if recompute else None,
+            definitions_for=self.definitions_for, definition_at=self.definition_at,
+            extra_evaluators=self.extra_evaluators,
         )
         return outcome
 

@@ -33,6 +33,7 @@ from ..rules.types import EventDefinition, RuleResult
 from .dispatch import RuleOutcome, definitions_for_signal, evaluate_and_enqueue
 from .normalize import NormalizedObservation
 from .mutation import rule_keys
+from ..contracts.mutation import canonical_keys, event_key
 
 #: 算连续天数时最多往回看多少天。不设上限的话，一条"连续 N 天"的规则
 #: 会在每次日聚合时把整个历史读一遍。
@@ -172,6 +173,7 @@ def evaluate_daily(
                  for d in definitions if d.condition_type == "streak"
                  and d.enabled and d.signal in signals]
         mutation.acquire(rule_keys(items, definitions))
+        mutation.acquire(canonical_keys([event_key(item.stored.subject_id, item.stored.signal) for item in items]))
         for definition in definitions:
             if definition.condition_type != "streak" or not definition.enabled:
                 continue
@@ -181,11 +183,19 @@ def evaluate_daily(
             length = streak_length(
                 storage, definition, signal, subject_id=subject_id, through=local_date,
             )
+            from .rule_repair import fact_reference
+            from .retract import _all_observations, canonical_revisions, drop_retracted
+            rows = drop_retracted(storage, canonical_revisions(
+                _all_observations(storage, subject_id, signal.key), signal),
+                subject_id=subject_id, signal=signal.key)
+            references = [fact_reference(row, signal, role="reference") for row in rows
+                          if local_date - timedelta(days=MAX_STREAK_LOOKBACK_DAYS - 1)
+                          <= row.effective_local_date <= local_date]
             item = _fake_observation(signal, subject_id=subject_id, when=now, day=local_date)
             rules: RuleOutcome = evaluate_and_enqueue(
                 item, context=context, storage=storage, definitions=[definition],
                 extra_evaluators=extra_evaluators,
-                extra_context={"streak_length": length},
+                extra_context={"streak_length": length, "fact_dependencies": references},
                 signal_definition=signal,
                 mutation=mutation,
             )
@@ -221,6 +231,7 @@ def evaluate_absence(
                  for d in definitions if d.condition_type == "absence"
                  and d.enabled and d.signal in signals]
         mutation.acquire(rule_keys(items, definitions))
+        mutation.acquire(canonical_keys([event_key(item.stored.subject_id, item.stored.signal) for item in items]))
         for definition in definitions:
             if definition.condition_type != "absence" or not definition.enabled:
                 continue
@@ -238,6 +249,17 @@ def evaluate_absence(
                 continue
 
             last = max(p.observed_at for p in projections)
+            from .rule_repair import fact_reference
+            references = []
+            for projection in projections:
+                row = StoredObservation(
+                    observation_id=projection.source_observation_id or "",
+                    subject_id=subject_id, signal=signal.key, signal_schema_version=signal.schema_version,
+                    source=projection.source or "", occurred_at=projection.observed_at,
+                    received_at=projection.received_at, availability=projection.availability,
+                    effective_local_date=projection.observed_at.date(),
+                    source_event_id=projection.source_event_id, source_revision=projection.source_revision)
+                references.append(fact_reference(row, signal, role="reference"))
             silent = (now - last).total_seconds()
             item = _fake_observation(
                 signal, subject_id=subject_id, when=now, day=now.date(),
@@ -245,7 +267,7 @@ def evaluate_absence(
             rules = evaluate_and_enqueue(
                 item, context=context, storage=storage, definitions=[definition],
                 extra_evaluators=extra_evaluators,
-                extra_context={"silent_seconds": silent},
+                extra_context={"silent_seconds": silent, "fact_dependencies": references},
                 signal_definition=signal,
                 mutation=mutation,
             )

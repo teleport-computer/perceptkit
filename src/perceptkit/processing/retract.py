@@ -31,7 +31,7 @@ from ..contracts.retraction import Retraction
 from ..manifest.types import SignalDefinition
 from ..ports.storage import StoragePort
 from ..contracts.errors import RetryableProjectionError
-from ..contracts.mutation import current_key, aggregate_key, canonical_keys
+from ..contracts.mutation import current_key, aggregate_key, canonical_keys, event_key
 
 
 #: 当前值写入撞车时重读重判几次。和 ingest 那条路同一个数量级 ——
@@ -54,7 +54,7 @@ class RetractionOutcome:
     #: back the entire retraction, rather than returning a partially applied job.
     contended: int = 0
     affected_days: set[tuple[str, str, date]] = field(default_factory=set)
-    #: 顺带抹掉了几条事件记录里的原值（宿主没实现那个可选端口时恒为 0）。
+    #: 同事务失效并脱敏的事件数；端口缺失/失败会回滚整个操作。
     scrubbed_events: int = 0
     #: 撤回记下了，但信号不在 manifest 里，没法重选。
     unknown_signals: list[str] = field(default_factory=list)
@@ -67,6 +67,7 @@ def apply_retractions(
     signals: dict[str, SignalDefinition],
     now: datetime,
     on_affected_day: Callable[[str, str, date], None] | None = None,
+    definitions_for=None, definition_at=None, extra_evaluators=None,
 ) -> RetractionOutcome:
     """记下撤回，重选当前值，报出受影响的日期。
 
@@ -109,6 +110,31 @@ def apply_retractions(
             for r in retractions
             for day in affected[(r.subject_id, r.signal, r.source, r.source_event_id)]
         ]))
+        from .rule_repair import repair_scopes, repair_keys, rebuild_rules
+        plans = {}
+        planned_days = {}
+        for r in retractions:
+            # Include durable dates for rule repair even if details expired.
+            # Aggregate incomplete-date recovery remains the Task 6C contract.
+            days = set(affected[(r.subject_id, r.signal, r.source, r.source_event_id)])
+            for identity in storage.list_identities(subject_id=r.subject_id, signal=r.signal,
+                                                     source=r.source, fact_key=identities[r][1]):
+                if identity.fact_key == identities[r][1] and identity.effective_local_date:
+                    days.add(identity.effective_local_date)
+            plans[r] = repair_scopes(storage, subject=r.subject_id, signal=r.signal,
+                                     definitions=definitions_for(r.subject_id) if definitions_for else (),
+                                     definition_at=definition_at, days=days or None)
+            planned_days[r] = days or None
+        mutation.acquire(canonical_keys([key for r, scopes in plans.items()
+                                          for key in repair_keys(r.subject_id, scopes)]))
+        mutation.acquire(canonical_keys([event_key(r.subject_id, r.signal) for r in retractions]))
+        from ..contracts.errors import RetryableMutationError
+        for r in retractions:
+            refreshed = repair_scopes(storage, subject=r.subject_id, signal=r.signal,
+                                       definitions=definitions_for(r.subject_id) if definitions_for else (),
+                                       definition_at=definition_at, days=planned_days[r])
+            if not set(repair_keys(r.subject_id, refreshed)) <= set(repair_keys(r.subject_id, plans[r])):
+                raise RetryableMutationError("RuleState scope set changed during retraction planning")
         for update in backfills.values():
             storage.backfill_identity(update)
         for r in retractions:
@@ -132,21 +158,27 @@ def apply_retractions(
                     # 🔴 **在同一个事务里重算。** 放到事务外面的话，撤回提交了、
                     #    重算崩了，两边就再也对不上，而下一轮以为上一轮成功了。
                     on_affected_day(r.subject_id, r.signal, day)
-            # 引用这条事实的提醒记录，里面的原值也抹掉。宿主没实现这个
-            # 可选端口时跳过 —— 那是已知缺口（事件里的旧值还留着），不是故障。
-            scrub = getattr(storage, "scrub_event_snapshots", None)
-            if callable(scrub) and r.source_event_id:
-                try:
-                    outcome.scrubbed_events += scrub(
-                        subject_id=r.subject_id, signal=r.signal,
-                        source=r.source, source_event_id=r.source_event_id,
-                    ) or 0
-                except NotImplementedError:
-                    pass
+            # Required: remove every previous/current dependency and prevent
+            # an unstarted event from escaping to WakePort in the same commit.
+            outcome.scrubbed_events += storage.scrub_event_snapshots(
+                subject_id=r.subject_id, signal=r.signal, source=r.source,
+                source_event_id=r.source_event_id, now=now,
+            )
 
             state = _reselect_current(storage, r, sig, now=now)
             if state == "reselected":
                 outcome.reselected += 1
+
+        # Batch tombstones land before replay, so order cannot change the result.
+        for subject, signal in {(r.subject_id, r.signal) for r in retractions}:
+            sig = signals.get(signal)
+            if sig is None:
+                continue
+            scopes = {(did, scope): (did, scope, definition)
+                      for r, plan in plans.items() if (r.subject_id, r.signal) == (subject, signal)
+                      for did, scope, definition in plan}
+            rebuild_rules(storage, subject=subject, signal=sig, scopes=list(scopes.values()),
+                          extra_evaluators=extra_evaluators)
 
     return outcome
 

@@ -775,6 +775,44 @@ def _g15_mutation_and_aggregate_cas(new: StorageFactory) -> list[str]:
     return problems
 
 
+def _g16_dispatch_fence_and_invalidation(factory: StorageFactory) -> list[str]:
+    """Sequential executable adapter obligations, not database race evidence."""
+    from ..contracts.mutation import event_key
+    problems = []
+    s = factory()
+    ref = dict(subject_id="u1", signal="weight", source="ios", source_event_id="a",
+               fact_key="fact-a", observation_id="obs-a", source_revision=1, role="previous")
+    s.enqueue_event(_entry(event_id="revocable", fact_snapshot={
+        "signal": "weight", "previous": 70, "current": 72,
+        "context": {"reason": "70 -> 72", "scope": "forever@v1"}},
+        fact_dependencies=(ref,), fact_dependencies_complete=True))
+    first = s.claim_pending_event(worker_id="a", now=T0, lease_seconds=1)
+    second = s.claim_pending_event(worker_id="b", now=T0 + timedelta(seconds=2), lease_seconds=60)
+    if s.begin_event_dispatch(event_id=first.event_id, claim_token=first.claim_token,
+                               now=T0 + timedelta(seconds=2)) is not None:
+        problems.append("dispatch fence: stale token started external delivery")
+    started = s.begin_event_dispatch(event_id=second.event_id, claim_token=second.claim_token,
+                                     now=T0 + timedelta(seconds=2))
+    if started is None or not started.dispatch_started_at:
+        problems.append("dispatch fence: current owner did not persist start")
+    if s.begin_event_dispatch(event_id=second.event_id, claim_token=second.claim_token,
+                               now=T0 + timedelta(seconds=2)) is not None:
+        problems.append("dispatch fence: one claim started twice")
+    with s.mutation_transaction() as owner:
+        owner.acquire((event_key("u1", "weight"),))
+        s.scrub_event_snapshots(subject_id="u1", signal="weight", source="ios",
+                                 source_event_id="a", now=T0 + timedelta(seconds=3))
+    entry = s.list_events(subject_id="u1")[0]
+    if (entry.delivery_state != _delivery.UNKNOWN or not entry.invalidated_at
+            or entry.fact_snapshot.get("previous") is not None
+            or entry.fact_snapshot.get("current") is not None
+            or entry.fact_snapshot.get("context", {}).get("reason")):
+        problems.append("event invalidation: started previous-dependency event was not scrubbed/unknown")
+    if s.claim_pending_event(worker_id="c", now=T0 + timedelta(days=1), lease_seconds=60) is not None:
+        problems.append("dispatch fence: unknown attempt was automatically reclaimed")
+    return problems
+
+
 GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
     "①上报与观测幂等": _g1_report_and_observation_idempotency,
     "②旧数据不覆盖新当前值": _g2_old_does_not_overwrite_new,
@@ -791,6 +829,7 @@ GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
     "⑬删除只命中自己的范围": _g13_deletes_hit_exactly_their_own_scope,
     "⑭同一跳变再发生是新事件": _g14_a_repeated_transition_is_a_new_event_a_replay_is_not,
     "⑮mutation ownership与aggregate CAS": _g15_mutation_and_aggregate_cas,
+    "⑯dispatch fence与event invalidation": _g16_dispatch_fence_and_invalidation,
 }
 
 #: 这几条在内存实现上**永远是绿的**，因为内存天然原子、天然无并发。
@@ -799,7 +838,7 @@ NOT_PROVABLE_IN_MEMORY: frozenset[str] = frozenset({"⑤提供原子边界"})
 
 
 def run_storage_conformance(factory: StorageFactory) -> list[str]:
-    """跑全部十五条，返回问题清单（空 = 通过）。
+    """跑全部十六条，返回问题清单（空 = 通过）。
 
     返回列表而不是抛异常：一次看到全部缺口，比逐个修再重跑快得多。
     """

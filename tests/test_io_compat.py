@@ -185,7 +185,22 @@ def test_host_reports_produce_byte_identical_results_to_v070():
     其余 diff 一律当成回归，别顺手重新生成 golden。
     """
     golden = (FIXTURES / "golden_v0.7.0.json").read_text()
-    now = _canonical_json(run_sequence()) + "\n"
+    result = run_sequence()
+    # D04-D06 add storage-only provenance/audit metadata. Validate it explicitly
+    # then compare ALL pre-existing behavior to the untouched golden.
+    for entry in result["storage"]["outbox"].values():
+        refs = entry.pop("fact_dependencies")
+        assert entry.pop("fact_dependencies_complete") is True
+        assert refs and all(ref["fact_key"] and ref["observation_id"] for ref in refs)
+        assert any(ref["role"] == "current" for ref in refs)
+        for key in ("dispatch_started_at", "invalidated_at", "invalidation_reason"):
+            assert entry.pop(key) is None
+    for raw in result["storage"]["rule_state"].values():
+        assert raw.pop("signal")
+        assert raw.pop("previous_fact")["fact_key"]
+        assert raw.pop("completeness") == "complete"
+        assert raw.pop("incomplete_reason") is None
+    now = _canonical_json(result) + "\n"
     if now != golden:
         import difflib
         diff = "\n".join(list(difflib.unified_diff(

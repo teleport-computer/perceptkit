@@ -139,10 +139,12 @@ def evaluate_and_enqueue(
     才会重新武装。
     """
     from .mutation import rule_keys
+    from ..contracts.mutation import event_key
 
     if mutation is None:
         with storage.mutation_transaction() as owner:
             owner.acquire(rule_keys([item], definitions))
+            owner.acquire((event_key(item.stored.subject_id, item.stored.signal),))
             return evaluate_and_enqueue(
                 item, context=context, storage=storage, definitions=definitions,
                 extra_evaluators=extra_evaluators, extra_context=extra_context,
@@ -151,6 +153,7 @@ def evaluate_and_enqueue(
     # The explicit owner is the only supported reentrant path. Acquire verifies
     # the subset is already held by an outer ingest/scheduled transaction.
     mutation.acquire(rule_keys([item], definitions))
+    mutation.acquire((event_key(item.stored.subject_id, item.stored.signal),))
     outcome = RuleOutcome()
     stored = item.stored
     relevant = definitions_for_signal(
@@ -201,11 +204,24 @@ def evaluate_and_enqueue(
 
         # 状态**每次都要写回**，哪怕没触发 —— 不推进 previous_value 的话，
         # threshold_crossing 永远拿不到正确的前值，规则就成了死的。
+        from .rule_repair import fact_reference
+        current_ref = (fact_reference(stored, signal_definition)
+                       if signal_definition is not None and stored.source != "scheduler" else None)
+        previous_ref = (raw_state or {}).get("previous_fact")
+        dependencies = ([dict(previous_ref, role="previous")]
+                        if previous_ref and definition.condition_type != "occurrence" else [])
+        if current_ref:
+            dependencies.append(current_ref)
+        dependencies.extend((extra_context or {}).get("fact_dependencies", ()))
+        next_raw = result.state.to_dict()
+        next_raw.update(signal=stored.signal, previous_fact=current_ref,
+                        completeness=(raw_state or {}).get("completeness", "complete"),
+                        incomplete_reason=(raw_state or {}).get("incomplete_reason"))
         storage.put_rule_state(
             subject_id=context.subject_id,
             definition_id=definition.definition_id,
             scope_key=scope,
-            state=result.state.to_dict(),
+            state=next_raw,
         )
 
         if not result.fired:
@@ -260,6 +276,10 @@ def evaluate_and_enqueue(
             dedupe_key=event.event_id,
             source=stored.source,
             source_event_id=stored.source_event_id,
+            fact_dependencies=tuple(dependencies),
+            fact_dependencies_complete=(stored.source != "scheduler" and current_ref is not None
+                                        and (state.previous_value is None or previous_ref is not None
+                                             or definition.condition_type == "occurrence")),
             created_at=stored.received_at,
             delivery_state=(_delivery.PENDING if definition.wake_enabled
                             else _delivery.NOT_DISPATCHED),
@@ -284,6 +304,8 @@ class DispatchOutcome:
     dead: list[str] = field(default_factory=list)
     suppressed: list[str] = field(default_factory=list)
     rejected: list[str] = field(default_factory=list)
+    invalidated: list[str] = field(default_factory=list)
+    unknown: list[str] = field(default_factory=list)
 
 
 def _backoff(attempt: int) -> timedelta:
@@ -315,9 +337,8 @@ def dispatch_once(
 ) -> DispatchOutcome | None:
     """领一个待投递事件、投出去、存回执。没有可领的返回 ``None``。
 
-    ``WakePort.wake`` 抛异常时按 ``enqueue_failed`` 处理 —— **不能当成功**。
-    "结果未知"和"失败"要走同一条路（重试 + 靠 ``event_id`` 幂等兜底），
-    因为盲目当成功会让事件永远送不到。
+    The durable gate competes with invalidation before WakePort. A thrown call
+    has an uncertain external outcome: persist unknown, reconcile a real receipt.
     """
     entry = storage.claim_pending_event(
         worker_id=worker_id, now=now, lease_seconds=lease_seconds
@@ -326,6 +347,12 @@ def dispatch_once(
         return None
 
     outcome = DispatchOutcome()
+    started = storage.begin_event_dispatch(event_id=entry.event_id,
+                                           claim_token=entry.claim_token, now=now)
+    if started is None:
+        outcome.invalidated.append(entry.event_id)
+        return outcome
+    entry = started
     event = PerceptionEvent(
         event_id=entry.event_id,
         definition_id=entry.definition_id,
@@ -353,12 +380,12 @@ def dispatch_once(
 
     try:
         receipt = wake.wake(event, attempt)
-    except Exception as exc:                       # noqa: BLE001 —— 见 docstring
-        receipt = WakeReceipt(
-            event_id=entry.event_id, attempt_id=attempt.attempt_id,
-            status="enqueue_failed", received_at=now,
-            reason=f"{type(exc).__name__}: {exc}",
-        )
+        if receipt.event_id != entry.event_id or receipt.attempt_id != attempt.attempt_id:
+            raise ValueError("WakeReceipt does not belong to this delivery attempt")
+    except Exception:                              # no invented failure receipt
+        storage.mark_dispatch_unknown(event_id=entry.event_id, claim_token=entry.claim_token)
+        outcome.unknown.append(entry.event_id)
+        return outcome
 
     attempts_left = entry.attempt_count < max_attempts
     next_state = _delivery.next_state_for_receipt(
@@ -378,12 +405,18 @@ def dispatch_once(
         outcome.retrying.append(entry.event_id)
         return outcome
 
+    # Adapter returns the committed state: invalidation may have won while the
+    # external call ran, converting an explicit failed receipt to invalidated.
+    next_state = accepted
+
     bucket = {
         _delivery.DELIVERED: outcome.delivered,
         _delivery.PENDING: outcome.retrying,
         _delivery.DEAD_LETTER: outcome.dead,
         _delivery.SUPPRESSED: outcome.suppressed,
         _delivery.REJECTED: outcome.rejected,
+        _delivery.INVALIDATED: outcome.invalidated,
+        _delivery.UNKNOWN: outcome.unknown,
     }[next_state]
     bucket.append(entry.event_id)
     return outcome
@@ -406,7 +439,7 @@ def drain(
         )
         if one is None:
             break
-        for name in ("delivered", "retrying", "dead", "suppressed", "rejected"):
+        for name in ("delivered", "retrying", "dead", "suppressed", "rejected", "invalidated", "unknown"):
             getattr(total, name).extend(getattr(one, name))
     return total
 

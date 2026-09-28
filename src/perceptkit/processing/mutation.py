@@ -2,7 +2,7 @@
 from dataclasses import replace
 
 from ..contracts.errors import ContractError, UnsupportedRetractionIdentityError
-from ..contracts.mutation import aggregate_key, canonical_keys, current_key, fact_key, rule_key
+from ..contracts.mutation import aggregate_key, canonical_keys, current_key, fact_key, rule_key, event_key
 from ..rules.engine import scope_key
 
 
@@ -112,7 +112,7 @@ def rule_keys(items, definitions):
     ])
 
 
-def acquire_ingest(owner, storage, items, signals, definitions, version):
+def acquire_ingest(owner, storage, items, signals, definitions, version, definition_at=None):
     from .retract import _all_observations
 
     owner.acquire(canonical_keys([
@@ -125,21 +125,25 @@ def acquire_ingest(owner, storage, items, signals, definitions, version):
     # No writes or aggregate/rule/current decisions happen in this phase.
     days = {(o.stored.subject_id, o.stored.signal, o.stored.effective_local_date)
             for o in items if signals[o.stored.signal].stores_history}
+    replay_days = {(o.stored.subject_id, o.stored.signal, o.stored.effective_local_date) for o in items}
     currents = set()
     backfills = {}
     for o in items:
         row = o.stored
         sig = signals[row.signal]
         revisions = None
-        if sig.stores_history and sig.identity_strategy == "source_event_id" and row.source_event_id:
+        if sig.identity_strategy == "source_event_id" and row.source_event_id:
             revisions = storage.list_identities(subject_id=row.subject_id, signal=row.signal,
                                                  source=row.source, fact_key=o.fact_key)
-            days.update((row.subject_id, row.signal, old.effective_local_date)
-                        for old in revisions if old.fact_key == o.fact_key
-                        and old.effective_local_date is not None)
+            prior_days = {(row.subject_id, row.signal, old.effective_local_date)
+                          for old in revisions if old.fact_key == o.fact_key
+                          and old.effective_local_date is not None}
+            replay_days.update(prior_days)
+            if sig.stores_history:
+                days.update(prior_days)
             # Legacy evidence may not have a date yet. Recover from retained
             # rows, never infer an old date from the incoming correction.
-            if any(old.fact_key is None or old.effective_local_date is None for old in revisions):
+            if sig.stores_history and any(old.fact_key is None or old.effective_local_date is None for old in revisions):
                 days.update((row.subject_id, row.signal, old.effective_local_date)
                             for old in _all_observations(storage, row.subject_id, row.signal)
                             if (old.source, old.source_event_id) == (row.source, row.source_event_id))
@@ -155,6 +159,27 @@ def acquire_ingest(owner, storage, items, signals, definitions, version):
     owner.acquire(canonical_keys(list(currents)))
     owner.acquire(canonical_keys([aggregate_key(subject, signal, day, "daily", version)
                                   for subject, signal, day in days]))
-    owner.acquire(rule_keys(items, definitions))
+    replay_days.update(days)  # Includes legacy dates recovered from persisted detail.
+    from .rule_repair import repair_scopes, repair_keys
+    scopes = []
+    for subject, signal in {(o.stored.subject_id, o.stored.signal) for o in items}:
+        scopes.extend(repair_keys(subject, repair_scopes(
+            storage, subject=subject, signal=signal, definitions=definitions,
+            definition_at=definition_at,
+            days={day for sub, sig, day in replay_days if (sub, sig) == (subject, signal)})))
+    owner.acquire(canonical_keys([*rule_keys(items, definitions), *scopes]))
+    owner.acquire(canonical_keys([event_key(o.stored.subject_id, o.stored.signal) for o in items]))
+    # Scheduled evaluation can create a previously absent RuleState between
+    # planning and the Event lock. Revalidate the key set after serialization;
+    # retry the transaction rather than acquiring a lower-ranked key now.
+    from ..contracts.errors import RetryableMutationError
+    planned = set(scopes) | set(rule_keys(items, definitions))
+    for subject, signal in {(o.stored.subject_id, o.stored.signal) for o in items}:
+        refreshed = repair_keys(subject, repair_scopes(
+            storage, subject=subject, signal=signal, definitions=definitions,
+            definition_at=definition_at,
+            days={day for sub, sig, day in replay_days if (sub, sig) == (subject, signal)}))
+        if not set(refreshed) <= planned:
+            raise RetryableMutationError("RuleState scope set changed during mutation planning")
     for update in backfills.values():
         storage.backfill_identity(update)

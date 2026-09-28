@@ -384,6 +384,14 @@ class EventOutboxEntry:
     claim_token: str | None = None
     budget_reservation_id: str | None = None
     created_at: datetime | None = None
+    #: Value-free canonical Fact revision references, including previous inputs.
+    fact_dependencies: tuple[dict[str, Any], ...] = ()
+    #: False for legacy/scheduled history with unproved complete lineage.
+    #: A same-signal mutation invalidates conservatively when False.
+    fact_dependencies_complete: bool = False
+    dispatch_started_at: datetime | None = None
+    invalidated_at: datetime | None = None
+    invalidation_reason: str | None = None
 
     def __post_init__(self) -> None:
         if self.delivery_state not in delivery.DELIVERY_STATES:

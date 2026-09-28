@@ -48,7 +48,7 @@ class StoragePort(Protocol):
         Every invocation is a distinct operation/owner, including nested calls.
         Kit acquires all Fact keys first, discovers old revision dates under
         those locks, then acquires Current (subject/signal/dimension_key),
-        Aggregate and RuleState batches in
+        Aggregate, RuleState and Event (subject/signal) batches in
         global tuple order. All Fact/projection/rule writes follow acquisition
         of the complete set; the preceding atomic report claim rolls back too.
         Fact resources use source_id only for that manifest strategy; optional
@@ -56,6 +56,8 @@ class StoragePort(Protocol):
         fallback ownership. Retraction preflights this same identity contract;
         unresolved deterministic deletion references fail before any write.
         Standalone recompute starts at Aggregate; it never acquires Fact later.
+        After Event ownership, revalidate planned RuleState keys; a newly
+        visible scope requires whole-transaction retry, never descending locks.
         Internal helpers reuse the explicit owner; do NOT infer reentrancy from
         a thread, connection, or Python RLock. Unrelated resources may proceed.
 
@@ -245,7 +247,8 @@ class StoragePort(Protocol):
         ...
 
     def list_identities(
-        self, *, subject_id: str, signal: str, source: str, fact_key: str,
+        self, *, subject_id: str, signal: str, source: str | None = None,
+        fact_key: str | None = None,
     ) -> Sequence[DurableDedupeIdentity]:
         """Return this Fact's revisions plus unmapped legacy identities in scope.
 
@@ -253,6 +256,7 @@ class StoragePort(Protocol):
         have fact_key=None; never silently omit them or infer their source time
         from an incoming upload. Adapters should index fact_key and the unmapped
         subset, not scan all permanent identities for every new observation.
+        Omit source/fact_key for completeness checking during signal replay.
         """
         ...
 
@@ -334,6 +338,9 @@ class StoragePort(Protocol):
     def scrub_event_snapshots(
         self, *, subject_id: str, signal: str,
         source: str, source_event_id: str,
+        now: datetime, reason: str = "fact_retracted",
+        observation_ids: Sequence[str] | None = None,
+        canonical_fact_key: str | None = None,
     ) -> int:
         """把被撤回那条事实触发过的事件里的**原值**抹掉，返回改了几条。
 
@@ -345,9 +352,45 @@ class StoragePort(Protocol):
         整条删掉的话"这条提醒当初为什么发"就再也解释不清了。
         已经投递出去的消息不回收 —— 那是已经发生的事。
 
-        ⚠️ **可选方法。** 宿主没实现时 kit 跳过并照常完成撤回的其余部分 ——
-        那等于"事件记录里的旧值还留着"，是个已知缺口，不是故障。
+        REQUIRED, in the Fact mutation transaction under (50_events, subject,
+        signal). Match ALL fact_dependencies by subject/signal/source/source ID;
+        observation_ids restricts to superseded revisions; canonical_fact_key
+        restricts correction to the canonical Fact. Corrections invalidate all
+        existing references before any new revision Event can be enqueued. Legacy
+        entries without provenance must be conservatively invalidated for the
+        signal, never guessed by parsing reason text. Scrub to an audit allowlist
+        (no raw/nested values, derived reason or unrecognized extensions).
+        Pending/claimed before durable start -> invalidated; started -> unknown;
+        delivered stays delivered with invalidated_at/reason. Preserve receipts.
         """
+        ...
+
+    def list_rule_states(self, *, subject_id: str) -> Sequence[tuple[str, str, dict]]:
+        """Return (definition_id, scope_key, state) including archived versions.
+
+        Used to plan all replay resources BEFORE writes. State metadata must
+        retain signal even when the archived definition is unavailable.
+        """
+        ...
+
+    def begin_event_dispatch(self, *, event_id: str, claim_token: str,
+                             now: datetime) -> EventOutboxEntry | None:
+        """Atomic durable pre-wake gate, sharing the 50_events invalidation lock.
+
+        Require live current claim token, unexpired lease, no invalidation and
+        no previous start. Commit dispatch_started_at BEFORE returning the
+        current snapshot. Return None if lost; never call WakePort then.
+        Crashed/expired started attempts enter unknown, not a fresh claim.
+        """
+        ...
+
+    def mark_dispatch_unknown(self, *, event_id: str, claim_token: str) -> bool:
+        """Persist uncertain outcome under the same event key; no invented receipt.
+
+        UNKNOWN is not claimable. External receipt reconciliation is required
+        to resolve it; a missing response never proves enqueue_failed.
+        """
+        ...
         ...
 
     def list_retractions(
@@ -445,6 +488,8 @@ class StoragePort(Protocol):
 
         租约过期能被别人接管，是因为原持有者可能已经死了；而"到期才接管"
         保证了正常情况下同一个事件同时只有一个 worker 在处理。
+        Only unstarted claimed entries are reclaimable. An expired started
+        attempt becomes unknown/reconcile. Unknown is never automatically claimed.
         """
         ...
 
@@ -452,8 +497,8 @@ class StoragePort(Protocol):
         self, *, receipt: WakeReceipt, next_state: str,
         claim_token: str | None = None,
         next_attempt_at: datetime | None = None,
-    ) -> None:
-        """存回执并推进投递状态。返回 ``False`` 表示令牌过期、状态未改。
+    ) -> str | bool:
+        """Return the committed delivery state, or False for a stale/missing token.
 
         **必须和"兑现或释放冷却额度占位"在同一个事务里。** 分开的话，
         "已送达但额度没扣"和"额度扣了但状态还是 pending"两种错都会出现，
@@ -462,6 +507,12 @@ class StoragePort(Protocol):
         **``claim_token`` 对不上时只能记审计，不能改状态。** 旧 worker 租约
         过期、事件被别人接管之后它才返回 —— 让它推进状态，等于一次超时
         变成一次错误的覆盖，而且看起来完全正常。
+        Preserve immutable receipts idempotently, independent of Outbox scrub.
+        Serialize against invalidation on 50_events. Unknown may become delivered
+        only with a genuine accepted/duplicate receipt. An invalidated attempt's
+        explicit enqueue_failed becomes invalidated, never pending. Stale or
+        missing tokens cannot overwrite invalidated/unknown. Do not invent a
+        receipt for timeouts; mark_dispatch_unknown owns that case.
         """
         ...
 
@@ -472,6 +523,7 @@ class StoragePort(Protocol):
 
         **只给 worker 用。** 排查要看的是 suppressed / rejected 这些终态，
         那些事件按定义不在这里 —— 排查走 :meth:`list_events`。
+        Unknown/reconcile is excluded as well; list_events is its audit surface.
         """
         ...
 

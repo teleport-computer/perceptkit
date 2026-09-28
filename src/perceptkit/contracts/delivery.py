@@ -53,21 +53,29 @@ DEAD_LETTER = "dead_letter"
 #: 这个是压根没打算投。两者混用会让"到底送没送到"说不清。
 NOT_DISPATCHED = "not_dispatched"
 
+# Revoked before external start; independent of Runtime's SUPPRESSED receipt.
+INVALIDATED = "invalidated"
+# Request may have reached Runtime. Never automatically claimable or retryable.
+UNKNOWN = "unknown"
+
 DELIVERY_STATES: frozenset[str] = frozenset({
     PENDING, CLAIMED, DELIVERED, SUPPRESSED, REJECTED, DEAD_LETTER, NOT_DISPATCHED,
+    INVALIDATED, UNKNOWN,
 })
 
 #: 终态：不会再变，也不再占用额度占位。
 TERMINAL_STATES: frozenset[str] = frozenset({
-    DELIVERED, SUPPRESSED, REJECTED, DEAD_LETTER, NOT_DISPATCHED,
+    DELIVERED, SUPPRESSED, REJECTED, DEAD_LETTER, NOT_DISPATCHED, INVALIDATED,
 })
 
 #: 合法的状态转移。任何不在这里的转移都是 bug，不是"边界情况"。
 _TRANSITIONS: dict[str, frozenset[str]] = {
-    PENDING: frozenset({CLAIMED}),
+    PENDING: frozenset({CLAIMED, INVALIDATED}),
     # claimed → pending 有两条路：主动放回（投递失败，等下次重试），
     # 或租约到期被别人接管。两条都合法。
-    CLAIMED: frozenset({PENDING, DELIVERED, SUPPRESSED, REJECTED, DEAD_LETTER}),
+    CLAIMED: frozenset({PENDING, DELIVERED, SUPPRESSED, REJECTED, DEAD_LETTER, INVALIDATED, UNKNOWN}),
+    UNKNOWN: frozenset({DELIVERED, SUPPRESSED, REJECTED, INVALIDATED, PENDING, DEAD_LETTER}),
+    INVALIDATED: frozenset(),
     DELIVERED: frozenset(),
     SUPPRESSED: frozenset(),
     REJECTED: frozenset(),
@@ -160,7 +168,7 @@ class DeliveryAttempt:
 
 __all__ = [
     "PENDING", "CLAIMED", "DELIVERED", "SUPPRESSED", "REJECTED", "DEAD_LETTER",
-    "NOT_DISPATCHED",
+    "NOT_DISPATCHED", "INVALIDATED", "UNKNOWN",
     "DELIVERY_STATES", "TERMINAL_STATES",
     "IllegalTransition", "can_transition", "assert_transition", "is_terminal",
     "next_state_for_receipt", "consumes_budget", "DeliveryAttempt",

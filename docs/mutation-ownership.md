@@ -19,6 +19,7 @@ An adapter cannot release locks when `acquire` returns or before commit.
 | `20_current` | subject, signal, dimension_key | Current advancement and reselect |
 | `30_aggregate` | subject, signal, ISO local date, kind, algorithm version | incremental fold, correction, retract, recompute |
 | `40_rule` | subject, definition ID, scope including definition version | ingest and scheduled rules |
+| `50_events` | subject, signal | enqueue, invalidation, durable start, receipts |
 
 Tuples and rank strings are public canonical keys; use unambiguous serialization.
 Never concatenate fields with an unescaped delimiter. Kit orders the canonical
@@ -28,7 +29,7 @@ keys contain subject identity, including when two subjects share all other IDs.
 Ingest acquires **all Facts in the report** first. Under Fact ownership it reads
 durable revision metadata to find old dates, using retained evidence for legacy
 unknown dates. It then acquires all Current, all Aggregate and all RuleState
-keys in that order. Only then may it decide retraction/revision status and write
+keys followed by the signal's Event key in that order. Only then may it decide retraction/revision status and write
 Observations, identities or projections. Report claims are atomic and roll back
 with this same operation. Batch input order never controls lock order.
 
@@ -171,6 +172,23 @@ IO and Rokku must additionally use **two real database connections** and barrier
 5. Owners for different subjects and disjoint keys remain independent; a stale
    owner cannot write, commit, reacquire, or release a successor's ownership.
 
-Event invalidation and rebuilding RuleState after deletion/correction are a
-separate protocol step (Task 5). This contract provides serialization, not those
-semantic repairs. Dispatch delivery leases retain their own event fencing.
+Event invalidation and RuleState replay now share the mutation transaction.
+Old/new scopes are planned before writes, including archived definition versions.
+After the Event lock, Kit re-reads the planned scope set: newly visible scopes
+require transaction retry, never acquiring a lower-ranked RuleState key late.
+The signal-level Event key deliberately covers phantom inserts as well as old
+events. Distinct Current dimensions still have independent Current keys but can
+contend at Event serialization. Adapters must preserve this tradeoff until an
+equally safe finer-grained phantom protocol exists.
+
+`begin_event_dispatch` owns the same Event key, reads the current claim under
+that ownership, and durably commits `dispatch_started_at` before WakePort runs.
+Retraction before start -> invalidated; start before retraction -> unknown;
+accepted receipt -> delivered audit retained with invalidation metadata. Claim
+lease expiry after start requires reconciliation and cannot reset pending.
+`record_wake_receipt` requires the current token, preserves immutable receipts,
+and returns the actually committed state (or False for a stale/missing token).
+
+Host evidence also needs both serial orders of begin-dispatch vs invalidation,
+receipt vs invalidation, and a new scheduled scope inserted between resource
+planning and Event ownership. See `docs/event-repair.md` for the full protocol.

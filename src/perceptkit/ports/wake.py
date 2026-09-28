@@ -24,7 +24,8 @@ class WakePort(Protocol):
         """把一个事件交给 runtime,返回它的应答。
 
         **实现必须按 ``event.event_id`` 幂等。** 崩溃重投是常态不是异常:
-        投出去之后、回执存下来之前进程挂掉,重启后一定会再投一次。
+        明确 enqueue_failed 后可重试；投出去之后、回执存下来之前进程挂掉，
+        必须先对账（unknown/reconcile），不能仅因租约过期再次外发。
         runtime 认得这个 id 就返回 ``duplicate``,不要真的再处理一遍 ——
         否则用户会被同一件事提醒两次。
 
@@ -34,8 +35,9 @@ class WakePort(Protocol):
 
         **不要在这里抛异常表示"runtime 拒绝"** —— 拒绝是一种正常应答,
         用 ``rejected`` / ``conversation_suppressed`` 表达。异常留给
-        真正的意外(连接断了、序列化失败),调用方会把它当作
-        ``enqueue_failed`` 处理并安排重试。
+        真正的意外(连接断了、序列化失败),调用方会持久化 ``unknown``，
+        等宿主用真实回执对账。只有明确证明没有入队的失败，才返回
+        ``enqueue_failed`` 并安排退避重试。回执必须匹配 event_id 和 attempt_id。
         """
         ...
 
