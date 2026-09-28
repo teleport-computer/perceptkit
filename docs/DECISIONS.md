@@ -22,10 +22,11 @@
 ### 共同边界
 
 Observation、Revision、Retraction 是权威事实；Current、DailyAggregate、RuleState
-是可重建投影；EventOutbox 是效果意图与审计；Query/Export/Agent context 只读投影，
-不得反过来作为事实来源。一次接受返回 `accepted`/`applied` 时，要求同步的投影必须
-和权威事实一起提交；否则只能留下带稳定身份、可重试、可观察的 durable rebuild，且
-查询不得把未完成投影当成完整最新结果。
+是可重建投影；EventOutbox 只是可失效的效果意图（可记录投递状态及
+`invalidated_at`/reason）；独立、持久化的 delivery receipt / WakeReceipt 才是不可抹除的
+外部效果审计事实。Query/Export/Agent context 只读投影，不得反过来作为事实来源。一次
+接受返回 `accepted`/`applied` 时，要求同步的投影必须和权威事实一起提交；否则只能留下
+带稳定身份、可重试、可观察的 durable rebuild，且查询不得把未完成投影当成完整最新结果。
 
 | ID | 最终决定 | 正常 / 失败与并发 | 迁移与用户可见结果 |
 |---|---|---|---|
@@ -33,7 +34,7 @@ Observation、Revision、Retraction 是权威事实；Current、DailyAggregate�
 | D02 | **Report 不可变，最新版属于 Fact。** 同 `report_id` 且 canonical semantic payload 完全相同才是 duplicate；同 ID、不同语义是 report conflict。修订使用新 `report_id`、相同 `source_event_id`、更高 `source_revision`。 | 重传不再更新 Aggregate、RuleState 或生成新 Event；同一 Fact identity + 同 revision + 不同内容持久化 conflict，不推进依赖候选的投影。 | 旧 producer 的重传仍可重复；修订和 timezone 变化不再被误杀为 duplicate，旧批次中未携带的其他事实不会被误删。 |
 | D03 | **Current CAS 重试耗尽时整次同步事实变更回滚并返回 retryable error。** 当前不以异步 rebuild 替代这个合同。 | Observation、identity、Aggregate、RuleState、Outbox 不得留下半成功；竞争耗尽后客户端可安全重试。 | Adapter 必须提供原子事务/等价保证；用户不会看到“事实收到了但当前值或统计没更新”的永久分叉。 |
 | D04 | **`pending` 和尚未外发的 `claimed` Event 可进入独立 `invalidated` 终态。** worker 在外发前强制复核 trigger validity；请求已发但回执未知进入 `unknown/reconcile`。 | retraction/correction 与 claim 竞争时由 validity check 和 claim token/fence 保证失效事实不能外发；`invalidated` 不等于静默策略的 `suppressed`。 | 旧 pending/claimed event 需可失效；用户不会收到依据已经删除或修正事实生成、但尚未真正送达的提醒。 |
-| D05 | **已 delivered Event 保留审计，不回收聊天，不自动发纠正消息。** 快照清理直接/派生失效原值，并记录 `invalidated_at`/reason。 | 外部效果不可假装未发生；若未来要主动纠正，必须是独立产品功能，不能由 Kit 隐式补发。 | 需迁移/清理 delivered snapshot 的失效值；用户已见消息保持原样，之后的查询不会继续泄露已删除值。 |
+| D05 | **已 delivered Event 对应的 delivery receipt / WakeReceipt 保留审计，不回收聊天，不自动发纠正消息。** receipt 必须独立持久化，并以稳定 event/effect identity 记录已经产生的外部效果；EventOutbox 本身只保留投递状态和 `invalidated_at`/reason。快照清理直接/派生失效原值。 | 外部效果不可假装未发生，且其权威事实不得仅由 Event 状态表达；若未来要主动纠正，必须是独立产品功能，不能由 Kit 隐式补发。 | 需迁移/清理 receipt 审计快照中的失效值，并保持它与 Event 的稳定关联；用户已见消息保持原样，之后的查询不会继续泄露已删除值。 |
 | D06 | **RuleState 按有效事实、definition version、scope 和稳定顺序确定性重放。** invalidated trigger 不占 fired 状态；历史不足标记 `incomplete`，不猜 previous。 | correction/retraction 与 ingest 共享 Fact lock/version；重建失败不得以手改 `previous_value` 冒充完成。 | 旧 RuleState 可从完整明细重建；明细不足时明确 `incomplete`。删除 72 后再上报 73 会按 70→73 正确判断，而不是被旧状态吞掉。 |
 | D07 | **Conflict 是 durable `ConflictRecord`，有 `pending`/`resolved` 状态。** 同 Fact identity、同 revision、不同 canonical content 保留候选和来源证据；更高 revision 可自动解决，人工 resolution 接口后置。 | conflict 不能只留在一次 IngestOutcome；未解决前不能标为 fully applied，也不能推进依赖候选的投影（或标相关 projection conflicted）。并发候选通过同一 Fact key 串行化/版本检查收敛。 | 旧内存型冲突结果不视为已修复；需要持久迁移和查询/审计入口。用户看到可解释的待解决数据，而不是错误值静默冒充 Current。 |
 | D08 | **单位合同：未声明单位视为 canonical；支持可选 per-field units，先转换再校验，并保留 source unit metadata。** `accepted_units` 必须进入运行链。 | 未知或不被 signal 接受的单位拒收，转换/值域/跳变校验失败不得污染事实或投影；同一语义的重传仍按 canonical payload 去重。 | 老 producer 不带单位继续按 canonical；升级 producer 可逐字段带单位。用户输入 lb/g 等声明支持的单位后得到正确统一数值，而不是被当作 canonical 错算。 |
