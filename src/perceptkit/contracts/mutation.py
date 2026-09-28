@@ -1,7 +1,7 @@
 """Transaction-owned mutation resources, shared by every Kit write path.
 
 Keys are tuples, never delimiter-concatenated strings. Kit sorts/deduplicates
-each acquisition phase: Fact -> Current signal -> Aggregate -> RuleState.
+each acquisition phase: Fact -> Current dimension -> Aggregate -> RuleState.
 An adapter must preserve that order (do not re-sort hashes used by a DB lock).
 """
 from __future__ import annotations
@@ -23,10 +23,8 @@ def fact_key(subject: str, signal: str, source: str, source_event_id: str | None
             source_event_id if source_event_id is not None else fallback)
 
 
-def current_key(subject: str, signal: str) -> MutationKey:
-    # Reselection may discover multiple dimensions. The signal-wide projection
-    # guard protects that discovery without serializing unrelated signals/users.
-    return ("20_current", subject, signal)
+def current_key(subject: str, signal: str, dimension_key: str) -> MutationKey:
+    return ("20_current", subject, signal, dimension_key)
 
 
 def aggregate_key(subject: str, signal: str, day: date, kind: str,

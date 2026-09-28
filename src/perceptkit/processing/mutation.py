@@ -1,6 +1,72 @@
 """Kit's canonical resource planning; adapters implement ownership, not policy."""
+from dataclasses import replace
+
+from ..contracts.errors import ContractError
 from ..contracts.mutation import aggregate_key, canonical_keys, current_key, fact_key, rule_key
 from ..rules.engine import scope_key
+
+
+def persisted_current_dimensions(storage, sig, *, subject, source, event_id,
+                                 fact_digest, revisions=None):
+    """Plan old partitions under Fact ownership, without writing/backfilling yet.
+
+    Current rows and retained revisions are authority. Incoming corrected values
+    cannot supply an old partition. An identified legacy revision with no provable
+    dimension rejects the operation until evidence is restored/backfilled.
+    """
+    from .normalize import _canonical, _digest
+    from .retract import _all_observations
+
+    if not event_id:
+        return set(), []
+    if revisions is None:
+        revisions = storage.list_identities(subject_id=subject, signal=sig.key,
+                                            source=source, fact_key=fact_digest)
+    prior = [r for r in revisions if r.fact_key == fact_digest]
+    dimensions = {r.dimension_key for r in prior if r.dimension_key is not None}
+    updates = []
+    if not sig.dimension_fields and sig.current_policy == "latest":
+        # A dimension-free manifest makes the partition structural, independent
+        # of the historical value. This is proof, not a guess from the correction.
+        dimension = sig.dimension_key_for(None)
+        dimensions.add(dimension)
+        return dimensions, [replace(r, dimension_key=dimension) for r in prior
+                            if r.dimension_key is None]
+
+    currents = [row for row in storage.get_current(subject_id=subject, signals=[sig.key]).get(sig.key, ())
+                if (row.source, row.source_event_id) == (source, event_id)]
+    dimensions.update(row.dimension_key for row in currents)
+    missing = [r for r in prior if r.dimension_key is None]
+    # Current metadata alone remains authoritative when details have expired.
+    details = []
+    if sig.stores_history and (not prior or missing or any(r.fact_key is None for r in revisions)):
+        details = [row for row in _all_observations(storage, subject, sig.key)
+                   if (row.source, row.source_event_id) == (source, event_id)]
+        dimensions.update(sig.dimension_key_for(row.typed_value) for row in details)
+
+    evidence = {}
+    for row in [*details, *currents]:
+        if hasattr(row, "dimension_key"):
+            dimension, when, content = row.dimension_key, row.observed_at, row.content_digest
+        else:
+            dimension, when = sig.dimension_key_for(row.typed_value), row.occurred_at
+            content = _digest(_canonical(row.typed_value), row.availability)
+        if not content:
+            continue
+        revision = "" if row.source_revision is None else str(row.source_revision)
+        for digest in (_digest(fact_digest, revision, content),
+                       _digest(fact_digest, when.isoformat(), revision, content)):
+            evidence.setdefault(digest, set()).add(dimension)
+    for record in missing:
+        known = evidence.get(record.source_event_identity_digest, set())
+        if len(known) == 1:
+            dimension = next(iter(known))
+            dimensions.add(dimension)
+            updates.append(replace(record, dimension_key=dimension))
+        elif sig.current_policy == "latest":
+            raise ContractError([f"{sig.key}: current_dimension_evidence_incomplete; "
+                                 "restore persisted revision evidence before mutation"])
+    return dimensions, updates
 
 
 def rule_keys(items, definitions):
@@ -24,9 +90,12 @@ def acquire_ingest(owner, storage, items, signals, definitions, version):
     # No writes or aggregate/rule/current decisions happen in this phase.
     days = {(o.stored.subject_id, o.stored.signal, o.stored.effective_local_date)
             for o in items if signals[o.stored.signal].stores_history}
+    currents = set()
+    backfills = {}
     for o in items:
         row = o.stored
         sig = signals[row.signal]
+        revisions = None
         if sig.stores_history and sig.identity_strategy == "source_event_id" and row.source_event_id:
             revisions = storage.list_identities(subject_id=row.subject_id, signal=row.signal,
                                                  source=row.source, fact_key=o.fact_key)
@@ -39,10 +108,18 @@ def acquire_ingest(owner, storage, items, signals, definitions, version):
                 days.update((row.subject_id, row.signal, old.effective_local_date)
                             for old in _all_observations(storage, row.subject_id, row.signal)
                             if (old.source, old.source_event_id) == (row.source, row.source_event_id))
-    owner.acquire(canonical_keys([
-        current_key(o.stored.subject_id, o.stored.signal) for o in items
-        if signals[o.stored.signal].current_policy == "latest"
-    ]))
+        if sig.current_policy == "latest":
+            dimensions, updates = persisted_current_dimensions(
+                storage, sig, subject=row.subject_id, source=row.source,
+                event_id=row.source_event_id, fact_digest=o.fact_key, revisions=revisions)
+            dimensions.add(sig.dimension_key_for(row.typed_value))
+            currents.update(current_key(row.subject_id, row.signal, dimension) for dimension in dimensions)
+            for update in updates:
+                backfills[(update.subject_id, update.signal, update.source,
+                           update.source_event_identity_digest)] = update
+    owner.acquire(canonical_keys(list(currents)))
     owner.acquire(canonical_keys([aggregate_key(subject, signal, day, "daily", version)
                                   for subject, signal, day in days]))
     owner.acquire(rule_keys(items, definitions))
+    for update in backfills.values():
+        storage.backfill_identity(update)

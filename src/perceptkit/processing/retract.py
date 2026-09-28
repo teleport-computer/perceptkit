@@ -78,6 +78,8 @@ def apply_retractions(
     outcome = RetractionOutcome()
 
     from .pipeline import AGGREGATION_VERSION
+    from .mutation import persisted_current_dimensions
+    from .normalize import _digest
 
     with storage.mutation_transaction() as mutation:
         mutation.acquire(canonical_keys([
@@ -85,13 +87,29 @@ def apply_retractions(
         ]))
         affected = {(r.subject_id, r.signal, r.source, r.source_event_id): _affected_days(storage, r)
                     for r in retractions}
-        mutation.acquire(canonical_keys([current_key(r.subject_id, r.signal)
-                                         for r in retractions]))
+        current_resources = set()
+        backfills = {}
+        for r in retractions:
+            sig = signals.get(r.signal)
+            if sig is None:
+                continue
+            dimensions, updates = persisted_current_dimensions(
+                storage, sig, subject=r.subject_id, source=r.source,
+                event_id=r.source_event_id,
+                fact_digest=_digest(r.subject_id, r.source, r.signal, r.source_event_id))
+            current_resources.update(current_key(r.subject_id, r.signal, dimension)
+                                     for dimension in dimensions)
+            for update in updates:
+                backfills[(update.subject_id, update.signal, update.source,
+                           update.source_event_identity_digest)] = update
+        mutation.acquire(canonical_keys(list(current_resources)))
         mutation.acquire(canonical_keys([
             aggregate_key(r.subject_id, r.signal, day, "daily", AGGREGATION_VERSION)
             for r in retractions
             for day in affected[(r.subject_id, r.signal, r.source, r.source_event_id)]
         ]))
+        for update in backfills.values():
+            storage.backfill_identity(update)
         for r in retractions:
             # 🔴 已经记过**不等于收尾做完了**。
             #

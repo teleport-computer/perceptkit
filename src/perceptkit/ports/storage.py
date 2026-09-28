@@ -47,7 +47,8 @@ class StoragePort(Protocol):
 
         Every invocation is a distinct operation/owner, including nested calls.
         Kit acquires all Fact keys first, discovers old revision dates under
-        those locks, then acquires Current, Aggregate and RuleState batches in
+        those locks, then acquires Current (subject/signal/dimension_key),
+        Aggregate and RuleState batches in
         global tuple order. All Fact/projection/rule writes follow acquisition
         of the complete set; the preceding atomic report claim rolls back too.
         Standalone recompute starts at Aggregate; it never acquires Fact later.
@@ -259,6 +260,11 @@ class StoragePort(Protocol):
         For partial legacy evidence, restored persisted detail may fill an
         unknown effective_local_date only if all other metadata stays identical;
         a previously known date must never be overwritten.
+        An unknown dimension_key may be filled from persisted Observation or
+        Current evidence (or a dimension-free manifest's structural key), even
+        for identities with semantic_digest. Preserve every other known field;
+        a known dimension cannot be overwritten. Keep dimension metadata after
+        detail expiry so future corrections/retractions can preplan old locks.
         """
         ...
 

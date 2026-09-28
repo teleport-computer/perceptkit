@@ -10,7 +10,7 @@ from .normalize import _canonical, _digest
 from .retract import _all_observations
 
 
-def identity_evidence(storage, item):
+def identity_evidence(storage, item, sig):
     """Backfill only identities demonstrably tied to persisted old facts.
 
     Current may retain evidence after details expire. An exact match against
@@ -32,12 +32,13 @@ def identity_evidence(storage, item):
         if row.source == stored.source and row.source_event_id:
             evidence.append((row.source_event_id, row.source_revision, row.occurred_at,
                              _digest(_canonical(row.typed_value), row.availability),
-                             row.effective_local_date))
+                             row.effective_local_date, sig.dimension_key_for(row.typed_value)
+                             if sig.current_policy == "latest" else None))
     for row in storage.get_current(subject_id=stored.subject_id, signals=[stored.signal]).get(stored.signal, ()):
         if row.source == stored.source and row.source_event_id and row.content_digest:
             evidence.append((row.source_event_id, row.source_revision, row.observed_at,
-                             row.content_digest, None))
-    for event_id, revision, occurred_at, content, day in evidence:
+                             row.content_digest, None, row.dimension_key))
+    for event_id, revision, occurred_at, content, day, dimension in evidence:
         fact = _digest(stored.subject_id, stored.source, stored.signal, event_id)
         rev = "" if revision is None else str(revision)
         # Recognize both released layouts, using the old row's timestamp.
@@ -50,6 +51,7 @@ def identity_evidence(storage, item):
             storage.backfill_identity(replace(
                 original, fact_key=fact, source_revision=revision,
                 legacy_content_digest=content, effective_local_date=day,
+                dimension_key=dimension,
             ))
     for digest in (item.identity_digest, item.legacy_identity_digest):
         if digest in missing:
@@ -64,9 +66,9 @@ def identity_evidence(storage, item):
     return list(storage.list_identities(**scope))
 
 
-def decide_fact(storage, item):
+def decide_fact(storage, item, sig):
     """Return (decision, prior revisions, reason) before any projection writes."""
-    identities = identity_evidence(storage, item)
+    identities = identity_evidence(storage, item, sig)
     prior = [row for row in identities if row.fact_key == item.fact_key]
     for row in prior:
         order = _compare_revisions(item.stored.source_revision, row.source_revision)
@@ -88,7 +90,7 @@ def decide_fact(storage, item):
     return "accept", prior, warning
 
 
-def durable_identity(item, *, received_at, aggregate_scope):
+def durable_identity(item, *, received_at, aggregate_scope, dimension_key):
     return DurableDedupeIdentity(
         subject_id=item.stored.subject_id, signal=item.stored.signal,
         source=item.stored.source, source_event_identity_digest=item.identity_digest,
@@ -96,6 +98,7 @@ def durable_identity(item, *, received_at, aggregate_scope):
         fact_key=item.fact_key, source_revision=item.stored.source_revision,
         semantic_digest=item.semantic_digest,
         effective_local_date=item.stored.effective_local_date,
+        dimension_key=dimension_key,
     )
 
 

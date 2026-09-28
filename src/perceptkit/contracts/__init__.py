@@ -30,7 +30,7 @@ from .availability import (
 )
 from . import delivery, records
 from .context import IngestContext
-from .errors import ContractError
+from .errors import ContractError, RetryableMutationError
 from .event import EventCondition, PerceptionEvent
 from .observation import Observation
 from .receipt import (
@@ -94,4 +94,5 @@ __all__ = [
     "delivery", "records",
     # errors
     "ContractError",
+    "RetryableMutationError",
 ]

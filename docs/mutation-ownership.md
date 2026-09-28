@@ -16,7 +16,7 @@ An adapter cannot release locks when `acquire` returns or before commit.
 | Rank | Resource tuple after rank | Used by |
 | --- | --- | --- |
 | `10_fact` | subject, signal, source, `source_id`/`fallback`, identity | ingest, correction, retraction |
-| `20_current` | subject, signal | Current advancement and reselect |
+| `20_current` | subject, signal, dimension_key | Current advancement and reselect |
 | `30_aggregate` | subject, signal, ISO local date, kind, algorithm version | incremental fold, correction, retract, recompute |
 | `40_rule` | subject, definition ID, scope including definition version | ingest and scheduled rules |
 
@@ -33,18 +33,33 @@ Observations, identities or projections. Report claims are atomic and roll back
 with this same operation. Batch input order never controls lock order.
 
 Retraction acquires all Facts before discovering affected dates, then all Current
-signals and Aggregates before writing tombstones/reselect/recompute. Recompute
+dimensions and Aggregates before writing tombstones/reselect/recompute. Recompute
 starts at Aggregate ownership before reading Facts; it never requests Fact locks
 afterwards. A writer cannot append a Fact and then wait for its Aggregate lock.
 RuleState advancement owns the scope from before reading state until Outbox and
 state commit together. Scheduled evaluation pre-acquires the entire batch of
 scope keys so reversed definition order cannot deadlock.
 
-Current ownership is deliberately signal-wide: retraction can discover and
-reselect several dimension rows. Per-dimension CAS still protects each write.
-This serializes Current-producing mutations of the same subject and signal,
-while different signals/subjects and Current-free Facts with disjoint aggregates
-remain independent. It does not impose a per-subject global mutex.
+Current ownership uses exactly subject + signal + dimension_key. Under Fact
+ownership, Kit discovers every old partition from retained Observations, matching
+Current rows and durable identity metadata, and combines them with incoming
+partitions. It acquires this full sorted set before writes. A correction moving
+an anchor from A to B therefore owns both; independent A/B Current resources do
+not contend (they may still share an Aggregate or RuleState resource).
+
+`DurableDedupeIdentity.dimension_key` preserves each accepted revision's partition
+after detail expiry. Legacy None means unknown. Backfill may only fill an unknown
+partition using persisted evidence, without changing identity/content/known date.
+Incoming correction fields are never treated as the old partition. A manifest
+with no dimension fields proves its structural signal-only dimension directly.
+For a partitioned signal, an identified prior revision whose partition cannot be
+proved fails with `ContractError: current_dimension_evidence_incomplete`; restore
+or backfill evidence before retry. The operation leaves no partial writes.
+
+This dimension repair does not repair `_affected_days` after detail retention:
+that existing helper still discovers aggregate days from retained observations.
+Task 6C must surface incomplete date evidence and ensure old aggregates cannot
+be silently omitted by a final retraction result.
 
 ## Reentrancy, failures and database obligations
 

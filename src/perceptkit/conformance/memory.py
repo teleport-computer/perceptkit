@@ -242,11 +242,15 @@ class InMemoryStorage:
         existing = self.identity_records.get(key)
         if existing is not None and existing.fact_key is not None:
             # An exact opaque match may have established identity but not date.
-            # Restored persisted detail may fill that single unknown field; no
-            # existing identity, content or known attribution may be replaced.
+            # Restored persisted detail may fill date/Current partition only
+            # when unknown; no identity/content/known attribution is replaced.
+            candidate = existing
+            if existing.dimension_key is None and identity.dimension_key is not None:
+                candidate = replace(candidate, dimension_key=identity.dimension_key)
             if (existing.semantic_digest is None and existing.effective_local_date is None
-                    and identity.effective_local_date is not None
-                    and replace(existing, effective_local_date=identity.effective_local_date) == identity):
+                    and identity.effective_local_date is not None):
+                candidate = replace(candidate, effective_local_date=identity.effective_local_date)
+            if candidate == identity:
                 self.identity_records[key] = identity
                 return
             if existing != identity:

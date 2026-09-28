@@ -754,6 +754,24 @@ def _g15_mutation_and_aggregate_cas(new: StorageFactory) -> list[str]:
         pass
     else:
         problems.append("mutation ownership: owner remained usable after transaction exit")
+    identity = DurableDedupeIdentity(
+        subject_id="u1", signal="anchor", source="ios", source_event_identity_digest="partition-evidence",
+        first_applied_at=T0, fact_key="fact", source_revision=1, semantic_digest="content")
+    s.remember_identity(identity)
+    proven = replace(identity, dimension_key="anchor\x1fA")
+    s.backfill_identity(proven)
+    def identities():
+        return list(s.list_identities(subject_id="u1", signal="anchor", source="ios", fact_key="fact"))
+    if identities() != [proven]:
+        problems.append("dimension backfill: fill unknown partition without changing Fact metadata")
+    try:
+        s.backfill_identity(replace(proven, dimension_key="anchor\x1fB"))
+    except ValueError:
+        pass
+    else:
+        problems.append("dimension backfill: refuse replacing a known partition")
+    if identities() != [proven]:
+        problems.append("dimension backfill: rejected metadata change must leave original evidence intact")
     return problems
 
 

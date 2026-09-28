@@ -47,7 +47,7 @@ class AuditedStorage(InMemoryStorage):
         return super().append_observation(row)
 
     def compare_and_put_current(self, projection, *, expected_version):
-        assert api().current_key(projection.subject_id, projection.signal) in self.held
+        assert api().current_key(projection.subject_id, projection.signal, projection.dimension_key) in self.held
         return super().compare_and_put_current(projection, expected_version=expected_version)
 
     def compare_and_put_aggregate(self, aggregate, *, expected_version):

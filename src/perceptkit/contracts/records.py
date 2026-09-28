@@ -331,6 +331,9 @@ class DurableDedupeIdentity:
     #: v0.8 compatibility evidence: persisted value/availability fingerprint.
     legacy_content_digest: str | None = None
     effective_local_date: date | None = None
+    #: Proven Current partition for this accepted revision, retained after detail
+    #: expiry. None is unknown legacy evidence (or a Current-free signal).
+    dimension_key: str | None = None
 
 
 # ---------------------------------------------------------------------------

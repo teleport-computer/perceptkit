@@ -299,7 +299,7 @@ def _apply_one(
     # Legacy identities are migrated from persisted rows, never this upload time.
     prior_revisions = []
     if sig.identity_strategy == "source_event_id" and stored.source_event_id:
-        fact_decision, prior_revisions, reason = decide_fact(storage, item)
+        fact_decision, prior_revisions, reason = decide_fact(storage, item, sig)
         if fact_decision == "conflict":
             outcome.conflicts.append(item)
             return
@@ -367,6 +367,8 @@ def _apply_one(
         #   之后一次重传就把永久聚合多加一遍，**加完没法回滚**。
         #   产品规范 §14-2 点名的正是这个场景。
         aggregate_scope=sig.key if sig.keeps_aggregates_forever else None,
+        dimension_key=(sig.dimension_key_for(stored.typed_value)
+                       if sig.current_policy == "latest" else None),
         # 永久聚合依赖的身份必须永久保留：明细删了之后，
         # 它是唯一还能挡住重放的东西。
     )):
