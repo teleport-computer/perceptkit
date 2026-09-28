@@ -81,3 +81,42 @@ def test_sleep_reference_mapping_does_not_promise_current_storage():
     row = next(row for row in reference_mapping(MINIMAL_SIGNALS)
                if row["signal"] == "health_sleep")
     assert row["objects"] == ("StoredObservation", "DailyAggregate")
+
+
+@pytest.mark.parametrize("condition", [
+    {"type": "changed"},
+    {"type": "threshold_crossing", "operator": "lt", "value": 40},
+    {"type": "delta", "value": 10},
+    {"type": "enters", "value": 30},
+    {"type": "leaves", "value": 45},
+], ids=["changed", "threshold_crossing", "delta", "enters", "leaves"])
+def test_sleep_without_current_does_not_invent_ordered_rule_transitions(condition):
+    ordered = EventDefinition.parse({
+        "id": "sleep.transition", "version": 1,
+        "source": {"signal": "health_sleep", "field": "duration_minutes"},
+        "condition": condition,
+        "lifecycle": {"scope": "forever", "fire": "every"},
+        "event": {"type": "sleep.transition"},
+    })
+    occurrence = EventDefinition.parse({
+        "id": "sleep.recorded", "version": 1,
+        "source": {"signal": "health_sleep"},
+        "condition": {"type": "occurrence"},
+        "event": {"type": "sleep.recorded"},
+    })
+    storage = InMemoryStorage()
+    kit = PerceptionKit(storage, definitions=[ordered, occurrence])
+    outcomes = []
+    # Arrival order is 10:00/45 then 09:00/30. Independent segments do not
+    # define a Current transition of 45 -> 30, even though both are valid facts.
+    for eid, at, minutes in [("later", T + timedelta(hours=1), 45), ("earlier", T, 30)]:
+        outcomes.append(ingest(kit, [observation(
+            {"stage": "core", "duration_minutes": minutes,
+             "start_at": at.isoformat(),
+             "end_at": (at + timedelta(minutes=minutes)).isoformat()},
+            signal="health_sleep", eid=eid, at=at)], report_id=eid))
+    assert [event.type for out in outcomes for event in out.events] == [
+        "sleep.recorded", "sleep.recorded"]
+    assert not any(key[1] == "sleep.transition" for key in storage.rule_state)
+    assert len(storage.observations) == 2
+    assert next(iter(storage.aggregates.values())).typed_aggregate["duration_minutes"]["total"] == 75

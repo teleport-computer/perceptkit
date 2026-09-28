@@ -332,7 +332,8 @@ def _apply_one(
     #    都会让"为什么会有这个事件"永远解释不清。
     #
     #    值变化规则仍要求 Current 推进；occurrence 只依赖独立事实身份，
-    #    不能因为迟到或 Current 冲突漏掉。无 Current 的信号可直接对事实求值。
+    #    不能因为迟到或 Current 冲突漏掉。无 Current 的信号只求值 occurrence，
+    #    原始片段到达顺序不能充当 changed/threshold/delta 等规则的事实顺序。
     #    拿 no_data 去喂 `changed`，会把"100 → 没数据"当成一次变化，
     #    还会把 previous 推成 None，之后的 threshold_crossing 全废。
     #    迟到数据(IGNORE)同理 —— 它的 previous/current 讲的不是当前故事。
@@ -340,7 +341,7 @@ def _apply_one(
         definition for definition in definitions
         if stored.availability == "observed" and (
             definition.condition_type == "occurrence"
-            or sig.current_policy == "none" or decision == REPLACE
+            or decision == REPLACE
         )
     ]
     if eligible_definitions:
