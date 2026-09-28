@@ -81,7 +81,7 @@ def apply_retractions(
     from .mutation import persisted_current_dimensions, retraction_fact_identity
 
     # Preflight the complete batch before a transaction or any write. The
-    # current deletion envelope cannot name a deterministic fallback Fact.
+    # raw-source-ID deletion protocol cannot operate on fallback Fact identity.
     identities = {r: retraction_fact_identity(r, signals.get(r.signal)) for r in retractions}
 
     with storage.mutation_transaction() as mutation:

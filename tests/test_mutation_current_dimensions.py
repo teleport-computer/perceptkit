@@ -314,31 +314,46 @@ def test_deterministic_retraction_is_typed_unsupported_before_transaction_or_wri
     assert (s.retractions, s.current, s.aggregates, s.identity_records) == before
 
 
-def test_real_singleton_ingest_and_retraction_share_canonical_fallback_key():
-    from perceptkit.processing.normalize import _digest
+@pytest.mark.parametrize("deletion_ref", ["optional-A", "optional-B"])
+def test_singleton_retraction_cannot_create_raw_id_tombstone_or_change_current(deletion_ref):
+    from copy import deepcopy
+    from perceptkit import UnsupportedRetractionIdentityError
     s = InspectDimensions()
     kit = PerceptionKit(s)
-    out = ingest(kit, [observation({"changed": True}, signal="screen_change", eid="optional-ref")])
+    out = ingest(kit, [observation({"changed": True}, signal="screen_change",
+                                  eid="optional-A", revision=1)], report_id="singleton-1")
     assert out.applied
     canonical = next(iter(s.identity_records.values())).fact_key
-    expected = ("10_fact", "u", "screen_change", "ios", "fallback", _digest("u", "ios", "screen_change"))
-    assert expected[-1] == canonical
-    assert next(key for batch in s.requests for key in batch if key[0] == "10_fact") == expected
-    with s.mutation_transaction() as competitor:
-        competitor.acquire([expected])
-        with pytest.raises(RetryableMutationError):
-            kit.apply_retractions([Retraction("u", "screen_change", "optional-ref", "ios", T)], now=T)
+    before = deepcopy((s.retractions, s.current, s.aggregates, s.identity_records))
+    transactions = s.transactions_opened
     s.requests.clear()
-    assert kit.apply_retractions([Retraction("u", "screen_change", "optional-ref", "ios", T)], now=T).recorded == 1
-    assert next(key for batch in s.requests for key in batch if key[0] == "10_fact") == expected
-    assert all(row.typed_value is None for row in s.current.values())
+    with pytest.raises(UnsupportedRetractionIdentityError) as caught:
+        kit.apply_retractions([Retraction("u", "screen_change", deletion_ref, "ios", T)], now=T)
+    assert caught.value.identity_strategy == "singleton"
+    assert caught.value.code == "retraction_identity_unsupported"
+    assert caught.value.retryable is False
+    assert s.transactions_opened == transactions and not s.requests
+    assert (s.retractions, s.current, s.aggregates, s.identity_records) == before
+    revised = ingest(kit, [observation({"changed": False}, signal="screen_change",
+                                      eid="optional-B", revision=2)], report_id="singleton-2")
+    assert len(revised.applied) == 1 and not revised.retracted
+    assert not s.retractions
+    assert {row.fact_key for row in s.identity_records.values()} == {canonical}
+    assert next(iter(s.current.values())).typed_value == {"changed": False}
 
 
-def test_mixed_retraction_batch_rejects_unsupported_strategy_before_supported_sibling_write():
+@pytest.mark.parametrize("unsupported_signal", [SIGNAL, "screen_change"])
+def test_mixed_retraction_batch_rejects_unsupported_strategy_before_supported_sibling_write(unsupported_signal):
+    from copy import deepcopy
+    from perceptkit import UnsupportedRetractionIdentityError
     s = InspectDimensions()
     kit = PerceptionKit(s)
-    before = s.transactions_opened
-    with pytest.raises(ContractError):
+    assert ingest(kit, [observation({"weight_kg": 70}, eid="known")]).applied
+    before = deepcopy((s.retractions, s.current, s.aggregates, s.identity_records))
+    transactions = s.transactions_opened
+    s.requests.clear()
+    with pytest.raises(UnsupportedRetractionIdentityError):
         kit.apply_retractions([Retraction("u", "health_weight", "known", "ios", T),
-                               Retraction("u", SIGNAL, "unknown", "ios", T)], now=T)
-    assert not s.retractions and s.transactions_opened == before
+                               Retraction("u", unsupported_signal, "unknown", "ios", T)], now=T)
+    assert (s.retractions, s.current, s.aggregates, s.identity_records) == before
+    assert s.transactions_opened == transactions and not s.requests

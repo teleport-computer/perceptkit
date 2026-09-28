@@ -7,21 +7,19 @@ from ..rules.engine import scope_key
 
 
 def retraction_fact_identity(retraction, sig):
-    """Resolve only identity strategies that the deletion envelope can prove.
+    """Resolve only identities supported end-to-end by the deletion protocol.
 
-    Deterministic fallback needs the original Fact time, absent from Retraction.
-    Its observed_at is deletion audit time and must never be used to guess it.
+    Retraction/tombstone/reselect/drop_retracted all use raw source event IDs.
+    Deriving a singleton fallback lock alone cannot change that identity model.
+    Deterministic fallback also lacks original Fact time; observed_at is audit.
     """
     from .normalize import _digest
 
     r = retraction
     strategy = sig.identity_strategy if sig is not None else "unknown"
-    if strategy == "source_event_id":
+    if strategy == "source_event_id" and r.source_event_id and r.source_event_id.strip():
         digest = _digest(r.subject_id, r.source, r.signal, r.source_event_id)
         return fact_key(r.subject_id, r.signal, r.source, r.source_event_id), digest
-    if strategy == "singleton":
-        digest = _digest(r.subject_id, r.source, r.signal)
-        return fact_key(r.subject_id, r.signal, r.source, None, fallback=digest), digest
     raise UnsupportedRetractionIdentityError(r.signal, strategy)
 
 

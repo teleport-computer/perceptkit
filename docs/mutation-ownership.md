@@ -87,8 +87,8 @@ The complete batch is therefore preflighted before any transaction or write:
 
 | Manifest strategy | Canonical mutation resource for retraction |
 | --- | --- |
-| `source_event_id` | Same subject/signal/source/source ID resource as ingest |
-| `singleton` | Same canonical fallback digest of subject/source/signal as ingest |
+| `source_event_id` with valid ID | Same subject/signal/source/source ID resource as ingest |
+| `singleton` | Typed unsupported: raw-ID tombstone/reselection cannot express canonical singleton deletion |
 | `deterministic_digest` | Typed unsupported: original Fact time/canonical reference is absent |
 | Unknown signal/strategy | Typed unsupported: identity contract is unavailable |
 
@@ -100,19 +100,24 @@ failure and retain the deletion for recovery, not acknowledge deletion or advanc
 its ingestion cursor as though it succeeded. Repeating the unchanged request
 cannot create the missing identity.
 
-Product cost: default `proximity_anchor` and other deterministic fallback signals
+Product cost: default `screen_change` (singleton), `proximity_anchor` and other fallback signals
 cannot currently use this source-reference-only deletion API. They previously
 could take a different lock from ingest and report unsafe success; this version
 explicitly refuses that operation. Their ingest/current/query behavior remains
-available. Source-ID health deletion and singleton deletion references remain
-supported with canonical ownership.
+available. Only source-ID signals such as health measurements retain deletion
+support with canonical ownership. Even a singleton deletion whose optional ID
+matches the current row is unsupported: accidental matching cannot establish
+the end-to-end identity contract.
 
-Restoring deterministic deletion requires an explicit canonical Fact reference,
-or a durable optional-source-reference → canonical-Fact mapping protected by a
-lower-rank routing key shared by ingest and retraction. Such a protocol must also
-cover mapping after detail expiry, unmapped legacy evidence, deletion preceding
-upload, multiple aliases for one Fact and one alias spanning several Facts. This
-task does not add that mapping or silently synthesize a key from `observed_at`.
+Restoring singleton or deterministic deletion requires canonical Fact identity
+end-to-end in Retraction, durable tombstones, Current reselection and
+`drop_retracted`; changing only the lock key is insufficient. This belongs to
+Task 5 or a future breaking contract. If optional source references remain the
+wire API, a durable reference → canonical-Fact mapping also needs a lower-rank
+routing key shared by ingest and retraction. The protocol must cover mapping
+after detail expiry, unmapped legacy evidence, deletion preceding upload,
+multiple aliases for one Fact and one alias spanning several Facts. This task
+does not add that mapping or synthesize a key from `observed_at`.
 
 ## Reentrancy, failures and database obligations
 

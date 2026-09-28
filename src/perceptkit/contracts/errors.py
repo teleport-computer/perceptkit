@@ -47,7 +47,7 @@ class RetryableMutationError(RuntimeError):
 
 
 class UnsupportedRetractionIdentityError(ContractError):
-    """The wire deletion reference cannot identify canonical Fact ownership.
+    """The deletion protocol cannot apply this canonical Fact identity safely.
 
     No writes occurred. Retrying the same payload cannot recover missing
     identity information; the deletion-reference contract must be upgraded.
@@ -61,7 +61,8 @@ class UnsupportedRetractionIdentityError(ContractError):
         self.signal = signal
         self.identity_strategy = identity_strategy
         super().__init__([f"{signal}: {self.code} ({identity_strategy}); "
-                          "Retraction has no canonical Fact reference; observed_at is not Fact time"])
+                          "Retraction/tombstone/reselection require source-event identity; "
+                          "fallback identity needs an end-to-end canonical Fact reference"])
 
 
 __all__ = ["ContractError", "RetryableProjectionError", "RetryableMutationError",

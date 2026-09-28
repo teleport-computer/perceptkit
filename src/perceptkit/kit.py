@@ -232,8 +232,8 @@ class PerceptionKit:
         可以关掉，由调用方自己按更大的范围重算）。重算那条路已经会排除
         被撤回的观测。
 
-        Only source_event_id and singleton identity strategies can resolve this
-        deletion envelope. Deterministic fallback/unknown strategies raise
+        Only source_event_id identity strategy with a valid ID supports this
+        deletion envelope end-to-end. Singleton/deterministic/unknown strategies raise
         UnsupportedRetractionIdentityError before any batch write; observed_at
         is deletion audit time, never a substitute for the original Fact time.
         """
