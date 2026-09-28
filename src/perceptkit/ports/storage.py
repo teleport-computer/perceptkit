@@ -71,6 +71,31 @@ class StoragePort(Protocol):
 
     # -- 观测 ------------------------------------------------------------
 
+    def finalize_report(self, receipt: IngestReceipt) -> None:
+        """Persist terminal status/count/code in the same transaction as Facts.
+
+        Match the claimed identity AND digest; mismatches must raise/roll back.
+        Replays of finalized rejected/conflict reports return that terminal
+        failure, never successful duplicate. Accepted replays remain duplicate.
+        Partial batches retain accepted siblings but expose their failed report
+        status on every retry. Restored evidence is submitted under a new ID.
+        """
+        ...
+
+    def backfill_report_digest(
+        self, *, subject_id: str, producer: str, report_id: str,
+        expected_digest: str, payload_digest: str,
+    ) -> bool:
+        """CAS-migrate a receipt when host holds the ORIGINAL immutable envelope.
+
+        Host must compute expected_digest with the released algorithm and the
+        v2 payload_digest from that same trusted original, never from a retry.
+        Preserve status, time and applied count. Return False for missing/wrong
+        old digest or any overwrite of an already-v2 digest; same target digest
+        is idempotent. This is a one-way legacy migration, not a report update.
+        """
+        ...
+
     def append_observation(self, observation: StoredObservation) -> bool:
         """追加一条观测。已经存在（同一去重身份）时返回 ``False`` 且不重复写。
 

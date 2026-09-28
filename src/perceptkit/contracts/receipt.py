@@ -57,6 +57,28 @@ class IngestReceipt:
             )
         parse_timestamp(self.received_at, field="received_at")
 
+    @property
+    def retryable(self) -> bool:
+        """Returned receipts are committed terminal decisions, never retry hints.
+
+        Transient transaction/CAS failures raise and roll back instead of
+        returning a receipt. Repeating a failed immutable Report cannot fix it.
+        """
+        return False
+
+    @property
+    def recovery_action(self) -> str | None:
+        """Machine-readable recovery contract for producer/host adapters."""
+        if self.error_code == "legacy_report_semantics_unverifiable":
+            return "migrate_original_envelope_or_use_new_report_id"
+        if self.error_code == "fact_revision_details_incomplete":
+            return "restore_fact_evidence_and_use_new_report_id"
+        if self.error_code == "fact_conflict":
+            return "resolve_fact_conflict_and_use_new_report_id"
+        if self.status in (INGEST_REJECTED, INGEST_CONFLICT):
+            return "correct_payload_and_use_new_report_id"
+        return None
+
 
 # ---------------------------------------------------------------------------
 # 唤醒回执

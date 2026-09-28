@@ -40,6 +40,21 @@ def test_the_suite_covers_every_guarantee():
     assert len(GUARANTEES) == 14
 
 
+def test_catches_report_finalization_that_loses_terminal_failures():
+    def finalize_report(self, receipt):
+        pass
+    assert hits(run_storage_conformance(broken(finalize_report=finalize_report)), "terminal")
+
+
+def test_catches_receipt_backfill_that_ignores_expected_digest():
+    def backfill_report_digest(self, **kwargs):
+        from dataclasses import replace
+        key = (kwargs["subject_id"], kwargs["producer"], kwargs["report_id"])
+        self.reports[key] = replace(self.reports[key], payload_digest=kwargs["payload_digest"])
+        return True
+    assert hits(run_storage_conformance(broken(backfill_report_digest=backfill_report_digest)), "backfill")
+
+
 # ---------------------------------------------------------------------------
 # 每条保证配一个真实会犯的错
 # ---------------------------------------------------------------------------

@@ -61,8 +61,9 @@ class NormalizedObservation:
     content_digest: str
     #: 跨午夜的区间会摊到多天：``[(本地日期, 分钟数), ...]``。其余为空。
     day_slices: tuple[tuple[str, float], ...] = ()
-    #: Deprecated diagnostic: how the old layout hashes this payload. Ingest
-    #: must not use it as migration evidence; use persisted rows in facts.py.
+    #: Released-layout fingerprint. Only an exact match with an actually
+    #: persisted digest proves replay; a nonmatch proves nothing about legacy
+    #: timestamps. Broader backfill uses persisted Fact evidence in facts.py.
     legacy_identity_digest: str | None = None
     #: Full Fact revision semantics, separate from stable historical IDs.
     semantic_digest: str | None = None
@@ -348,9 +349,9 @@ def identity_for(
         delivery = _digest(fact, rev, content_digest)
     else:
         delivery = legacy
-    # Retain the old-layout output for callers inspecting normalization. It is
-    # NOT proof of a pre-upgrade Fact: this timestamp may be a new upload time.
-    # Ingest's migration path reconstructs only from persisted old evidence.
+    # A matching remembered digest proves this exact released-layout payload;
+    # a nonmatch cannot reconstruct the old time. Ingest may additionally
+    # recover the old identity from persisted Observation/Current evidence.
     return delivery, fact, (legacy if legacy != delivery else None), problems
 
 

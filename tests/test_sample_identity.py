@@ -156,11 +156,10 @@ def test_a_real_revision_still_gets_through():
 # 升级兼容：旧数据记的是旧身份，不许因此再加一遍
 # ---------------------------------------------------------------------------
 
-def test_a_bare_legacy_digest_blocks_unproven_replay_as_incomplete():
-    """只剩不透明旧摘要时，不能用本次上报时间猜原始身份。
+def test_an_exact_released_digest_still_blocks_replay_without_details():
+    """逐字节命中已持久化旧摘要就是证据，不需要从hash逆推原始时间。
 
-    这是旧的 synthetic fixture，不含任何可恢复的 Fact 证据；应明确报告
-    incomplete。真实 v0.8 状态存在明细或 Current 的迁移由 A03 验证。
+    不命中的新Fact不得被无关旧hash锁住；真实v0.8状态迁移另由A03验证。
     """
     from perceptkit.contracts.observation import Observation
     from perceptkit.contracts.records import DurableDedupeIdentity
@@ -196,9 +195,5 @@ def test_a_bare_legacy_digest_blocks_unproven_replay_as_incomplete():
             "value": value,
         }],
     }, context=IngestContext("u", report_at))
-    # D02/I10: this old synthetic fixture has no persisted Fact evidence.
-    # It cannot prove a safe migration. Do not guess its timestamp from the
-    # incoming payload; report the irrecoverable gap and preserve the aggregate.
-    assert out.rejected and "legacy_identity_incomplete" in str(out.rejected)
-    assert not out.duplicates
+    assert out.duplicates and not out.rejected
     assert not out.applied

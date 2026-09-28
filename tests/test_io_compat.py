@@ -178,6 +178,10 @@ def test_host_reports_produce_byte_identical_results_to_v070():
     Report payload_digest 为 v2 全语义摘要。迁移脚本递归拒绝其他任何差异；
     未重录事实/投影/事件/身份，仍逐字节检查原有产品行为。
 
+    D02 review fix：Report finalization 持久化19份最终回执；1份含拒绝项的
+    report终态改为rejected。仅从旧golden已有applied/rejected推导新回执，
+    事实、事件和投影全部仍逐字节一致。
+
     其余 diff 一律当成回归，别顺手重新生成 golden。
     """
     golden = (FIXTURES / "golden_v0.7.0.json").read_text()

@@ -109,6 +109,17 @@ def _g1_report_and_observation_idempotency(new: StorageFactory) -> list[str]:
         problems.append("①: 第一次写观测应该返回 True")
     if s2.append_observation(_obs()):
         problems.append("①: 同一个 observation_id 重复写应该返回 False 且不重复落库")
+    from dataclasses import replace
+    for status, code in (("conflict", "fact_conflict"),
+                         ("rejected", "fact_revision_details_incomplete")):
+        terminal_store = new()
+        claim = terminal_store.claim_report(subject_id="u1", producer="ios", report_id="terminal",
+                                            payload_digest="v2:terminal", received_at=T0)
+        terminal_store.finalize_report(replace(claim, status=status, error_code=code))
+        retry = terminal_store.claim_report(subject_id="u1", producer="ios", report_id="terminal",
+                                            payload_digest="v2:terminal", received_at=T0)
+        if retry.status != status or retry.error_code != code:
+            problems.append("①: terminal report failure must survive identical retry")
     return problems
 
 
@@ -142,6 +153,19 @@ def _g3_same_identity_different_content_conflicts(new: StorageFactory) -> list[s
             "③: 同 report_id 不同内容必须 conflict —— 静默挑一个覆盖会让"
             "「到底哪份数据生效了」永远说不清"
         )
+    migrate = new()
+    key = dict(subject_id="u1", producer="ios", report_id="legacy")
+    migrate.claim_report(**key, payload_digest="old", received_at=T0)
+    if migrate.backfill_report_digest(**key, expected_digest="wrong", payload_digest="v2:new"):
+        problems.append("③: receipt backfill must reject wrong expected digest")
+    if migrate.claim_report(**key, payload_digest="old", received_at=T0).status != "duplicate":
+        problems.append("③: failed receipt backfill must not mutate original receipt")
+    if not migrate.backfill_report_digest(**key, expected_digest="old", payload_digest="v2:new"):
+        problems.append("③: receipt backfill must accept the matching original digest")
+    if not migrate.backfill_report_digest(**key, expected_digest="old", payload_digest="v2:new"):
+        problems.append("③: identical receipt backfill must be idempotent")
+    if migrate.backfill_report_digest(**key, expected_digest="v2:new", payload_digest="v2:other"):
+        problems.append("③: receipt backfill must not overwrite migrated semantic content")
     return problems
 
 

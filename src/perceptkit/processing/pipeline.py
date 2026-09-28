@@ -33,6 +33,7 @@ from ..contracts.records import (
     REPLACE,
     CurrentProjection,
     DailyAggregate,
+    _compare_revisions,
 )
 from ..contracts.report import ReportEnvelope, canonical_semantics
 from ..manifest.types import SignalDefinition
@@ -42,7 +43,7 @@ from ..rules.types import EventDefinition
 from . import aggregate as _aggregate
 from .dispatch import evaluate_and_enqueue
 from .normalize import NormalizedObservation, _canonical, normalize_observations
-from .facts import decide_fact, durable_identity
+from .facts import decide_fact, durable_identity, detail_proves_revision
 
 #: 聚合算法的版本。改了口径就加这个数并重算，**不原地改写旧统计的语义** ——
 #: 否则同一张表里一半是老口径一半是新口径，而且看不出来。
@@ -171,17 +172,39 @@ def ingest_report(
             warnings=list(normalized.warnings),
         )
 
+        # A batch is immutable: array order must never choose the winner among
+        # two different contents claiming the same Fact revision. Preflight all
+        # candidates before any Observation/projection writes; unrelated siblings
+        # retain their original processing order and independent outcome.
+        blocked = set()
+        fact_candidates: dict[str, list[NormalizedObservation]] = {}
         for item in normalized.normalized:
+            if signals[item.stored.signal].identity_strategy != "source_event_id" or not item.stored.source_event_id:
+                continue
+            siblings = fact_candidates.setdefault(item.fact_key, [])
+            if any(_compare_revisions(item.stored.source_revision, other.stored.source_revision) == 0
+                   and item.semantic_digest != other.semantic_digest for other in siblings):
+                blocked.add(item.fact_key)
+            siblings.append(item)
+
+        for item in normalized.normalized:
+            if item.fact_key in blocked:
+                outcome.conflicts.append(item)
+                continue
             sig = signals[item.stored.signal]
             _apply_one(item, sig, context=context, storage=storage, outcome=outcome,
                        definitions=definitions, extra_evaluators=extra_evaluators)
 
-    outcome.receipt = _receipt.IngestReceipt(
-        subject_id=claim.subject_id, producer=claim.producer,
-        report_id=claim.report_id, payload_digest=claim.payload_digest,
-        received_at=claim.received_at, status=claim.status,
-        observations_applied=len(outcome.applied),
-    )
+        status, code = _receipt.INGEST_ACCEPTED, None
+        if outcome.conflicts:
+            status, code = _receipt.INGEST_CONFLICT, "fact_conflict"
+        elif outcome.rejected:
+            status, code = _receipt.INGEST_REJECTED, "observations_rejected"
+            if any("fact_revision_details_incomplete" in str(reasons) for _, reasons in outcome.rejected):
+                code = "fact_revision_details_incomplete"
+        outcome.receipt = replace(claim, status=status, error_code=code,
+                                  observations_applied=len(outcome.applied))
+        storage.finalize_report(outcome.receipt)
     return outcome
 
 
@@ -274,6 +297,8 @@ def _apply_one(
         if fact_decision == "duplicate":
             outcome.duplicates.append(item)
             return
+        if reason:
+            outcome.warnings.append(f"{stored.signal}: {reason}")
         if fact_decision in ("incomplete", "stale"):
             outcome.rejected.append((-1, (f"{stored.signal}: {reason}",)))
             return
@@ -282,9 +307,9 @@ def _apply_one(
             # previous active revision. Expired details cannot be manufactured.
             from .retract import _all_observations, canonical_revisions, drop_retracted
             details = _all_observations(storage, stored.subject_id, stored.signal)
-            detail_ids = {r.observation_id for r in details}
-            if any(r.effective_local_date is None or r.source_event_identity_digest not in detail_ids
-                   for r in prior_revisions):
+            if any(r.effective_local_date is None or not any(
+                detail_proves_revision(detail, r, item) for detail in details
+            ) for r in prior_revisions):
                 outcome.rejected.append((-1, (f"{stored.signal}: fact_revision_details_incomplete",)))
                 return
             active = drop_retracted(storage, canonical_revisions(details, sig),

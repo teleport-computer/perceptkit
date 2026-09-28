@@ -91,6 +91,8 @@ class InMemoryStorage:
         key = (subject_id, producer, report_id)
         prior = self.reports.get(key)
         if prior is not None:
+            if prior.payload_digest == payload_digest and prior.status != INGEST_ACCEPTED:
+                return replace(prior, observations_applied=0)
             status = (INGEST_DUPLICATE if prior.payload_digest == payload_digest
                       else INGEST_CONFLICT)
             return IngestReceipt(
@@ -107,6 +109,29 @@ class InMemoryStorage:
         )
         self.reports[key] = fresh
         return fresh
+
+    def finalize_report(self, receipt):
+        key = (receipt.subject_id, receipt.producer, receipt.report_id)
+        prior = self.reports.get(key)
+        if prior is None or prior.payload_digest != receipt.payload_digest:
+            raise ValueError("report finalization requires matching claim")
+        if prior.status != INGEST_ACCEPTED and prior != receipt:
+            raise ValueError("cannot overwrite a terminal report failure")
+        self.reports[key] = receipt
+
+    def backfill_report_digest(self, *, subject_id, producer, report_id,
+                               expected_digest, payload_digest):
+        key = (subject_id, producer, report_id)
+        prior = self.reports.get(key)
+        if prior is None:
+            return False
+        if prior.payload_digest == payload_digest:
+            return True
+        if (prior.payload_digest != expected_digest or prior.payload_digest.startswith("v2:")
+                or not payload_digest.startswith("v2:")):
+            return False
+        self.reports[key] = replace(prior, payload_digest=payload_digest)
+        return True
 
     # -- 观测 ------------------------------------------------------------
 

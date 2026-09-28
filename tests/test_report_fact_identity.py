@@ -129,16 +129,17 @@ def test_legacy_replay_uses_persisted_evidence_and_remains_durable(v080_storage)
 
 
 @pytest.mark.parametrize("v080_storage", ["details_expired"], indirect=True)
-def test_legacy_digest_without_recoverable_fact_evidence_is_explicitly_incomplete(v080_storage):
+def test_unmapped_legacy_changed_timestamp_replay_exposes_migration_gap(v080_storage):
     storage, payload = v080_storage
     storage.current.clear()
     payload = deepcopy(payload)
     payload["report_id"] = "unknown-legacy"
     payload["observations"][0]["occurred_at"] = (T + timedelta(hours=1)).isoformat()
     out = PerceptionKit(storage).ingest(payload, context=IngestContext("u", T + timedelta(hours=1)))
-    assert not out.applied and not out.duplicates
-    assert out.rejected and "legacy_identity_incomplete" in str(out.rejected)
-    assert aggregate(storage, "health_workout").typed_aggregate["duration_minutes"]["total"] == 30
+    # With only an opaque hash, this is observationally indistinguishable from
+    # a new Fact. It must not lock the whole source. Hosts must complete legacy
+    # evidence backfill before claiming arbitrary changed-timestamp replay safety.
+    assert any("changed_timestamp_replay_unverifiable" in w for w in out.warnings)
 
 
 def test_revision_that_moves_day_removes_the_old_days_contribution():

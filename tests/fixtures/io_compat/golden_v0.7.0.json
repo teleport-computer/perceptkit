@@ -1235,13 +1235,13 @@
    "duplicates": [],
    "events": [],
    "receipt": {
-    "error_code": null,
+    "error_code": "observations_rejected",
     "observations_applied": 1,
     "payload_digest": "v2:63db1d10a26b6b4c29f84d863a084fb7a14cd01aae8da330b8ba2602ad0f6323",
     "producer": "ios",
     "received_at": "2026-09-01T08:09:05+08:00",
     "report_id": "ios-64dfacde99da00fd",
-    "status": "accepted",
+    "status": "rejected",
     "subject_id": "u-compat"
    },
    "rejected": [
@@ -6453,7 +6453,7 @@
   "reports": {
    "u-compat\u001fios\u001fios-1c58ae8e96d1f974": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 2,
     "payload_digest": "v2:2e37b52f96a8fd728f9cd11989708cd1259a7e9dfbe2856cfc4758d113f94c63",
     "producer": "ios",
     "received_at": "2026-09-01T08:08:05+08:00",
@@ -6463,7 +6463,7 @@
    },
    "u-compat\u001fios\u001fios-5f8593e36f2e5536": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 25,
     "payload_digest": "v2:6f399a9d3471dd8092e5355cc7a7a2f3710dacda2f05819e1caded95b81ebc52",
     "producer": "ios",
     "received_at": "2026-09-02T08:00:05+08:00",
@@ -6472,18 +6472,18 @@
     "subject_id": "u-compat"
    },
    "u-compat\u001fios\u001fios-64dfacde99da00fd": {
-    "error_code": null,
-    "observations_applied": 0,
+    "error_code": "observations_rejected",
+    "observations_applied": 1,
     "payload_digest": "v2:63db1d10a26b6b4c29f84d863a084fb7a14cd01aae8da330b8ba2602ad0f6323",
     "producer": "ios",
     "received_at": "2026-09-01T08:09:05+08:00",
     "report_id": "ios-64dfacde99da00fd",
-    "status": "accepted",
+    "status": "rejected",
     "subject_id": "u-compat"
    },
    "u-compat\u001fios\u001fios-72211f4d6df0e322": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 2,
     "payload_digest": "v2:f8dcb50164129f35bd936bfcf424bb2e8a718be71d9250489b622e3d8fb1bb50",
     "producer": "ios",
     "received_at": "2026-09-01T08:03:05+08:00",
@@ -6493,7 +6493,7 @@
    },
    "u-compat\u001fios\u001fios-c8ca2459087b977d": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 25,
     "payload_digest": "v2:8b930869f6d80b32fe76f8f648971839a58f8e6447afaec5db9bb685a605deee",
     "producer": "ios",
     "received_at": "2026-09-01T08:00:05+08:00",
@@ -6503,7 +6503,7 @@
    },
    "u-compat\u001fios\u001fios-f3ba4d0e54f1ad67": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 3,
     "payload_digest": "v2:044beddf8370b8adb1214c842fadc864879ea5287e4e14d1407e1829550577b6",
     "producer": "ios",
     "received_at": "2026-09-01T08:05:05+08:00",
@@ -6513,7 +6513,7 @@
    },
    "u-compat\u001fios\u001fios-fe7a107e6d387959": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 3,
     "payload_digest": "v2:3c327ef1dc56b4a931a4ee93906814b172ff971af0e65670c319eed61af1e464",
     "producer": "ios",
     "received_at": "2026-09-01T08:02:05+08:00",
@@ -6523,7 +6523,7 @@
    },
    "u-compat\u001fios_app_shortcut\u001fapp-9634a97b3ed19ac4": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 1,
     "payload_digest": "v2:576d924ae0530eba43507e821837f015e60286d876de24a54b3fc8eab84b8c79",
     "producer": "ios_app_shortcut",
     "received_at": "2026-09-01T08:41:05+08:00",
@@ -6533,7 +6533,7 @@
    },
    "u-compat\u001fios_app_shortcut\u001fapp-b1b10513da3b3383": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 1,
     "payload_digest": "v2:3b33a4ab4d9874d984ca86ec1f20f376e0872466836729bc0c3a1a735102bc4d",
     "producer": "ios_app_shortcut",
     "received_at": "2026-09-01T08:45:05+08:00",
@@ -6543,7 +6543,7 @@
    },
    "u-compat\u001fios_device_event\u001fdevevt-12b218959aa36036": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 1,
     "payload_digest": "v2:0d31c56b57705bc308de0c1c86e69937e0df00727ef01f1a0f1bda6315ed3101",
     "producer": "ios_device_event",
     "received_at": "2026-09-01T08:43:05+08:00",
@@ -6553,7 +6553,7 @@
    },
    "u-compat\u001fios_device_event\u001fdevevt-2d4c93e1a2235e8d": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 1,
     "payload_digest": "v2:fc539727a15c3dfb82c52a75d186f09bbb989c22ba1e28721ec4d0e25364656f",
     "producer": "ios_device_event",
     "received_at": "2026-09-01T08:40:05+08:00",
@@ -6563,7 +6563,7 @@
    },
    "u-compat\u001fios_device_event\u001fdevevt-a579c31c4409cda6": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 1,
     "payload_digest": "v2:a4ae1ab8f118915bd62804a18663332b07ae00d9baa0d9ad97f3a6ee58d95d29",
     "producer": "ios_device_event",
     "received_at": "2026-09-01T08:42:05+08:00",
@@ -6573,7 +6573,7 @@
    },
    "u-compat\u001fios_device_event\u001fdevevt-cce90ea297b1cb88": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 1,
     "payload_digest": "v2:ee213adeec18e7b87d7569c07805d58775d10809cc812fe3b452243cd01fc344",
     "producer": "ios_device_event",
     "received_at": "2026-09-01T08:33:05+08:00",
@@ -6583,7 +6583,7 @@
    },
    "u-compat\u001fios_location\u001floc-4bd794f38bf2c4b8": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 2,
     "payload_digest": "v2:ad103e46424d49cf40e94a8a15ea29465baed7d47c1ffa31221815d43a01fce1",
     "producer": "ios_location",
     "received_at": "2026-09-01T08:10:05+08:00",
@@ -6593,7 +6593,7 @@
    },
    "u-compat\u001fios_location\u001floc-875efc2136eb36be": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 2,
     "payload_digest": "v2:5153f69bd8f023597243ce5dfbce70ed8cda1c9d6ef8362dc2041aafcb00f50f",
     "producer": "ios_location",
     "received_at": "2026-09-01T08:20:05+08:00",
@@ -6603,7 +6603,7 @@
    },
    "u-compat\u001fios_location\u001floc-db846a649bfec0b1": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 2,
     "payload_digest": "v2:8d88c92b0ba28e6938f3820ddfa1b7bd403374bb44283c0912b2e8c4c61e44a5",
     "producer": "ios_location",
     "received_at": "2026-09-01T08:15:05+08:00",
@@ -6613,7 +6613,7 @@
    },
    "u-compat\u001fios_location\u001floc-df80a149f0b1e3da": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 2,
     "payload_digest": "v2:57884e358eb1cc6c4fcd7dd98e0e7a2168dad6cd12e06d39aab916981ddbc334",
     "producer": "ios_location",
     "received_at": "2026-09-01T08:25:05+08:00",
@@ -6623,7 +6623,7 @@
    },
    "u-compat\u001fios_photo\u001fphoto-c446cfa8eb2dfb82": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 1,
     "payload_digest": "v2:166942fe5e457d3c5d1e3741fe0b9f1d057b6b8dc82c17d11c69299c19558d57",
     "producer": "ios_photo",
     "received_at": "2026-09-01T08:32:05+08:00",
@@ -6633,7 +6633,7 @@
    },
    "u-compat\u001fios_photo\u001fphoto-d4a5ec13fa721d9c": {
     "error_code": null,
-    "observations_applied": 0,
+    "observations_applied": 1,
     "payload_digest": "v2:9f109b19978964cb32014280cb19a93b8c994b959c65922faa04c7a1fe8f84ff",
     "producer": "ios_photo",
     "received_at": "2026-09-01T08:31:05+08:00",
