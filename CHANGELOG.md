@@ -1,6 +1,28 @@
 # 变更记录
 
-In development (not released) — v0.10 Current/export cutover:
+## 0.10.0 — 2026-09-29
+
+This release closes the D01–D14 consistency contract. User-visible outcomes:
+
+- Multiple real facts no longer disappear because they share a timestamp or
+  signal. Current, timeline and daily aggregates each keep their own declared
+  meaning.
+- Reports are immutable delivery batches; corrections belong to fact revisions.
+  Exact retries are durable duplicates, while changed content under the same
+  report ID fails as a typed conflict.
+- Ingest, correction and retraction use one transactional ownership protocol.
+  A failed projection cannot leave an accepted fact with stale Current,
+  aggregate, rule state or outbox state.
+- Retracting or correcting a trigger rebuilds RuleState, invalidates unsent
+  effects, and removes stale values from delivered-event snapshots while
+  retaining the external-delivery audit.
+- Aggregate generations publish only after complete coverage is proven and an
+  atomic active-generation switch succeeds. Irrecoverable history is explicitly
+  incomplete and excluded from trend baselines.
+- Definition history is a production persistence contract, so a restarted Kit
+  can still explain events produced by an older rule version.
+
+### Current/export cutover
 
 - Public Current has one shape: `signal -> entries[]`, ordered by dimension key;
   TTL, availability and privacy remain independent per dimension. Last-known also
@@ -19,7 +41,7 @@ In development (not released) — v0.10 Current/export cutover:
   over the same durable backend, so module/global caches cannot create a false
   durability result.
 
-In development (not released) — consistency contract D07–D09:
+### Conflict, units and timezone contract
 
 - Pending Fact/anomaly conflicts now persist as queryable ConflictRecords;
   strictly higher valid source revisions resolve them atomically with acceptance.
