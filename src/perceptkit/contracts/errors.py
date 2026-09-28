@@ -19,4 +19,19 @@ class ContractError(ValueError):
         super().__init__("; ".join(self.errors))
 
 
-__all__ = ["ContractError"]
+class RetryableProjectionError(RuntimeError):
+    """Projection contention exhausted; the whole transaction must roll back.
+
+    The caller may retry the unchanged report. No accepted receipt is returned.
+    """
+
+    retryable = True
+
+    def __init__(self, projection: str, signal: str, attempts: int) -> None:
+        self.projection = projection
+        self.signal = signal
+        self.attempts = attempts
+        super().__init__(f"{signal}: {projection} CAS exhausted after {attempts} attempts")
+
+
+__all__ = ["ContractError", "RetryableProjectionError"]

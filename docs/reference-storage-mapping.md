@@ -26,7 +26,7 @@
 | `health_oxygen` | CurrentProjection + StoredObservation + DailyAggregate | 3600s | 永久 | 同明细 | source_event_id | instant |
 | `health_respiratory` | CurrentProjection + StoredObservation + DailyAggregate | 3600s | 永久 | 同明细 | source_event_id | instant |
 | `health_resting_hr` | CurrentProjection + StoredObservation + DailyAggregate | 3600s | 永久 | 同明细 | source_event_id | instant |
-| `health_sleep` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | episode_end |
+| `health_sleep` | StoredObservation + DailyAggregate | — | 永久 | 同明细 | source_event_id | episode_end |
 | `health_vo2max` | CurrentProjection + StoredObservation + DailyAggregate | 3600s | 永久 | 同明细 | source_event_id | instant |
 | `health_weight` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | instant |
 | `health_workout` | CurrentProjection + StoredObservation + DailyAggregate | 86400s | 永久 | 同明细 | source_event_id | episode_end |

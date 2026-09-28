@@ -2900,7 +2900,8 @@
       "total": 1.0
      }
     },
-    "updated_at": "2026-09-01T08:45:05+08:00"
+    "updated_at": "2026-09-01T08:45:05+08:00",
+    "version": 1
    },
    "u-compat\u001faudio_route\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -2917,7 +2918,8 @@
      "_last_ts": 1788220800.0,
      "minutes": {}
     },
-    "updated_at": "2026-09-01T08:00:05+08:00"
+    "updated_at": "2026-09-01T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001faudio_route\u001f2026-09-02\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -2934,7 +2936,8 @@
      "_last_ts": 1788307200.0,
      "minutes": {}
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fbroadcast\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -2954,7 +2957,8 @@
       "unfocused": 5.0
      }
     },
-    "updated_at": "2026-09-01T08:08:05+08:00"
+    "updated_at": "2026-09-01T08:08:05+08:00",
+    "version": 4
    },
    "u-compat\u001fbroadcast\u001f2026-09-02\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -2971,7 +2975,8 @@
      "_last_ts": 1788307200.0,
      "minutes": {}
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001ffocus_state\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -2988,7 +2993,8 @@
      "_last_ts": 1788220800.0,
      "minutes": {}
     },
-    "updated_at": "2026-09-01T08:00:05+08:00"
+    "updated_at": "2026-09-01T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001ffocus_state\u001f2026-09-02\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3005,7 +3011,8 @@
      "_last_ts": 1788307200.0,
      "minutes": {}
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fhealth_activity\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3031,7 +3038,8 @@
       "total": 300.0
      }
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 1
    },
    "u-compat\u001fhealth_blood_pressure\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3057,7 +3065,8 @@
       "sum": 118.0
      }
     },
-    "updated_at": "2026-09-01T08:00:05+08:00"
+    "updated_at": "2026-09-01T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fhealth_blood_pressure\u001f2026-09-02\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3083,7 +3092,8 @@
       "sum": 118.0
      }
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fhealth_bmi\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3099,7 +3109,8 @@
      "_at": 1788220800.0,
      "bmi": 22.1
     },
-    "updated_at": "2026-09-01T08:00:05+08:00"
+    "updated_at": "2026-09-01T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fhealth_bmi\u001f2026-09-02\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3115,7 +3126,8 @@
      "_at": 1788307200.0,
      "bmi": 22.1
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fhealth_body_fat\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3131,7 +3143,8 @@
      "_at": 1788220800.0,
      "body_fat_ratio": 0.184
     },
-    "updated_at": "2026-09-01T08:00:05+08:00"
+    "updated_at": "2026-09-01T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fhealth_body_fat\u001f2026-09-02\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3147,7 +3160,8 @@
      "_at": 1788307200.0,
      "body_fat_ratio": 0.184
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fhealth_hrv\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3167,7 +3181,8 @@
       "sum": 42.5
      }
     },
-    "updated_at": "2026-09-01T08:00:05+08:00"
+    "updated_at": "2026-09-01T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fhealth_hrv\u001f2026-09-02\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3187,7 +3202,8 @@
       "sum": 42.5
      }
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fhealth_oxygen\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3207,7 +3223,8 @@
       "sum": 97.0
      }
     },
-    "updated_at": "2026-09-01T08:00:05+08:00"
+    "updated_at": "2026-09-01T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fhealth_oxygen\u001f2026-09-02\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3227,7 +3244,8 @@
       "sum": 97.0
      }
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fhealth_resting_hr\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3247,7 +3265,8 @@
       "sum": 58.0
      }
     },
-    "updated_at": "2026-09-01T08:00:05+08:00"
+    "updated_at": "2026-09-01T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fhealth_resting_hr\u001f2026-09-02\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3267,7 +3286,8 @@
       "sum": 58.0
      }
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fhealth_sleep\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3289,7 +3309,8 @@
       "rem": 110.0
      }
     },
-    "updated_at": "2026-09-01T08:00:05+08:00"
+    "updated_at": "2026-09-01T08:00:05+08:00",
+    "version": 2
    },
    "u-compat\u001fhealth_sleep\u001f2026-09-02\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3311,7 +3332,8 @@
       "rem": 110.0
      }
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 2
    },
    "u-compat\u001fhealth_weight\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3327,7 +3349,8 @@
      "_at": 1788220800.0,
      "weight_kg": 68.2
     },
-    "updated_at": "2026-09-01T08:00:05+08:00"
+    "updated_at": "2026-09-01T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fhealth_weight\u001f2026-09-02\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3343,7 +3366,8 @@
      "_at": 1788307200.0,
      "weight_kg": 68.2
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fhealth_workout\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3366,7 +3390,8 @@
       }
      ]
     },
-    "updated_at": "2026-09-01T08:00:05+08:00"
+    "updated_at": "2026-09-01T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fhealth_workout\u001f2026-09-02\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3389,7 +3414,8 @@
       }
      ]
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001flocation_city\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3408,7 +3434,8 @@
       "Shanghai": 15.0
      }
     },
-    "updated_at": "2026-09-01T08:25:05+08:00"
+    "updated_at": "2026-09-01T08:25:05+08:00",
+    "version": 3
    },
    "u-compat\u001fmotion_state\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3425,7 +3452,8 @@
      "_last_ts": 1788220800.0,
      "minutes": {}
     },
-    "updated_at": "2026-09-01T08:00:05+08:00"
+    "updated_at": "2026-09-01T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fmotion_state\u001f2026-09-02\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3442,7 +3470,8 @@
      "_last_ts": 1788307200.0,
      "minutes": {}
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fmusic_playback\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3462,7 +3491,8 @@
       "playing": 2.0
      }
     },
-    "updated_at": "2026-09-01T08:05:05+08:00"
+    "updated_at": "2026-09-01T08:05:05+08:00",
+    "version": 2
    },
    "u-compat\u001fmusic_playback\u001f2026-09-02\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3479,7 +3509,8 @@
      "_last_ts": 1788307200.0,
      "minutes": {}
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fphoto_library_added\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3496,7 +3527,8 @@
       "total": 2.0
      }
     },
-    "updated_at": "2026-09-01T08:32:05+08:00"
+    "updated_at": "2026-09-01T08:32:05+08:00",
+    "version": 1
    },
    "u-compat\u001fproximity_anchor\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3515,7 +3547,8 @@
       "focused": 15.0
      }
     },
-    "updated_at": "2026-09-01T08:25:05+08:00"
+    "updated_at": "2026-09-01T08:25:05+08:00",
+    "version": 3
    },
    "u-compat\u001fsteps\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3533,7 +3566,8 @@
       "total": 4211.0
      }
     },
-    "updated_at": "2026-09-01T08:00:05+08:00"
+    "updated_at": "2026-09-01T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fsteps\u001f2026-09-02\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3551,7 +3585,8 @@
       "total": 4211.0
      }
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001ftime_context\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3566,7 +3601,8 @@
     "typed_aggregate": {
      "events": []
     },
-    "updated_at": "2026-09-01T08:09:05+08:00"
+    "updated_at": "2026-09-01T08:09:05+08:00",
+    "version": 5
    },
    "u-compat\u001ftime_context\u001f2026-09-02\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3581,7 +3617,8 @@
     "typed_aggregate": {
      "events": []
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fweather\u001f2026-09-01\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3601,7 +3638,8 @@
       "sum": 27.4
      }
     },
-    "updated_at": "2026-09-01T08:00:05+08:00"
+    "updated_at": "2026-09-01T08:00:05+08:00",
+    "version": 0
    },
    "u-compat\u001fweather\u001f2026-09-02\u001fdaily\u001f2": {
     "aggregation_kind": "daily",
@@ -3621,7 +3659,8 @@
       "sum": 27.4
      }
     },
-    "updated_at": "2026-09-02T08:00:05+08:00"
+    "updated_at": "2026-09-02T08:00:05+08:00",
+    "version": 0
    }
   },
   "current": {
@@ -3916,63 +3955,6 @@
     "subject_id": "u-compat",
     "typed_value": {
      "resting_heart_rate": 58
-    },
-    "version": 1
-   },
-   "u-compat\u001fhealth_sleep\u001fhealth_sleep\u001fcore": {
-    "availability": "observed",
-    "content_digest": "2fd429aee776f27eb4aa30b5c664b271f07856f609f999c97e4692e2e8031261",
-    "dimension_key": "health_sleep\u001fcore",
-    "expires_at": "2026-09-03T08:00:00+08:00",
-    "observed_at": "2026-09-02T08:00:00+08:00",
-    "received_at": "2026-09-02T08:00:05+08:00",
-    "signal": "health_sleep",
-    "source": "ios",
-    "source_event_id": null,
-    "source_observation_id": "9d4c74f0f61c32445c6d743b2bfdccfc0679947a06a8e78cc7059bbd370b337d",
-    "source_revision": null,
-    "subject_id": "u-compat",
-    "typed_value": {
-     "duration_minutes": 250,
-     "stage": "core"
-    },
-    "version": 1
-   },
-   "u-compat\u001fhealth_sleep\u001fhealth_sleep\u001fdeep": {
-    "availability": "observed",
-    "content_digest": "88af43df621de92e364cd7b4a4ab83e14c70783344008f56888c45188da65fb7",
-    "dimension_key": "health_sleep\u001fdeep",
-    "expires_at": "2026-09-03T08:00:00+08:00",
-    "observed_at": "2026-09-02T08:00:00+08:00",
-    "received_at": "2026-09-02T08:00:05+08:00",
-    "signal": "health_sleep",
-    "source": "ios",
-    "source_event_id": null,
-    "source_observation_id": "40155aff1b1b37ef4a9ff86c76f58939c85503dcb2b2751d0cb385b4fabd7090",
-    "source_revision": null,
-    "subject_id": "u-compat",
-    "typed_value": {
-     "duration_minutes": 70,
-     "stage": "deep"
-    },
-    "version": 1
-   },
-   "u-compat\u001fhealth_sleep\u001fhealth_sleep\u001frem": {
-    "availability": "observed",
-    "content_digest": "601a9c67cb7795b0d3e6878d5f5e7a4e187bbd71b598d199781c428d7789ebc4",
-    "dimension_key": "health_sleep\u001frem",
-    "expires_at": "2026-09-03T08:00:00+08:00",
-    "observed_at": "2026-09-02T08:00:00+08:00",
-    "received_at": "2026-09-02T08:00:05+08:00",
-    "signal": "health_sleep",
-    "source": "ios",
-    "source_event_id": null,
-    "source_observation_id": "69ebffec81a6572a9b0319cbbdcc6d4ad078e142bd6a7a9830a16f1c5e888b4e",
-    "source_revision": null,
-    "subject_id": "u-compat",
-    "typed_value": {
-     "duration_minutes": 110,
-     "stage": "rem"
     },
     "version": 1
    },

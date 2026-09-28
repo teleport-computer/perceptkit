@@ -3,9 +3,9 @@
 它存在的意义是让宿主在写自己的 adapter 之前，先有一个能跑通的参照，
 以及让 kit 自己的管线测试不依赖任何数据库。
 
-🔴 **它验不出真正的事务边界和隔离级别。** 内存实现天然是原子的、天然没有
-并发 —— "RuleState 和 Outbox 必须同事务"这类保证，在这里永远是绿的，
-不代表真实数据库上也绿。宿主必须另外用真实数据库、两条独立连接、
+🔴 **它验不出数据库事务边界和隔离级别。** 这里以快照实现异常回滚，
+提供同步 reference CAS，不提供多线程或独立连接隔离保证。
+宿主必须另外用真实数据库、两条独立连接、
 在关键写操作之间打断点，才能证明那条保证成立。
 
 在这里绿 = 端口语义、调用顺序、确定性没问题。
@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import replace
 from datetime import date, datetime, timezone
 
@@ -66,14 +67,19 @@ class InMemoryStorage:
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
-        """内存里没有真正的回滚 —— 只记录边界，供测试断言"该包起来的确实包了"。
-
-        **不要把这里的绿当成"原子性验过了"。** 见模块开头。
-        """
+        """嵌套边界使用快照回滚；仅作同步端口参照，不证明数据库隔离。"""
+        collections = ("reports", "observations", "identities", "current", "aggregates",
+                       "calendar", "reminders", "sync_state", "rule_state", "outbox",
+                       "receipts", "retractions")
+        before = {key: deepcopy(getattr(self, key)) for key in collections}
         self.transaction_depth += 1
         self.transactions_opened += 1
         try:
             yield
+        except BaseException:
+            for key, value in before.items():
+                setattr(self, key, value)
+            raise
         finally:
             self.transaction_depth -= 1
 
@@ -185,10 +191,21 @@ class InMemoryStorage:
         ]
 
     def put_aggregate(self, aggregate: DailyAggregate) -> None:
-        self.aggregates[(
+        key = (
             aggregate.subject_id, aggregate.signal, aggregate.local_date,
             aggregate.aggregation_kind, aggregate.aggregation_version,
-        )] = aggregate
+        )
+        existing = self.aggregates.get(key)
+        self.aggregates[key] = replace(aggregate, version=existing.version + 1 if existing else 0)
+
+    def compare_and_put_aggregate(self, aggregate, *, expected_version) -> bool:
+        key = (aggregate.subject_id, aggregate.signal, aggregate.local_date,
+               aggregate.aggregation_kind, aggregate.aggregation_version)
+        existing = self.aggregates.get(key)
+        if (existing.version if existing else -1) != expected_version:
+            return False
+        self.put_aggregate(aggregate)
+        return True
 
     # -- 来源镜像 --------------------------------------------------------
 

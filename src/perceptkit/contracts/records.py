@@ -215,6 +215,8 @@ class DailyAggregate:
     #: 这个聚合覆盖了哪些观测（数量、时间范围）。重算时用来判断完整性。
     source_coverage: dict[str, Any] = field(default_factory=dict)
     updated_at: datetime | None = None
+    #: 写入并发版本，独立于算法语义版本 aggregation_version。首次写入为 0。
+    version: int = 0
 
 
 # ---------------------------------------------------------------------------

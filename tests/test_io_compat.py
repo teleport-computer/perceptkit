@@ -170,7 +170,11 @@ def test_host_reports_produce_byte_identical_results_to_v070():
     靠它找到"这条提醒是被哪条数据触发的"）。**刻意没进投出去的信封** ——
     信封是宿主接的公开契约，多一个键所有接入方都得改。纯新增，没有行为变化。
 
-    再有 diff 一律当成回归，别顺手重新生成 golden。
+    2026-09-28 D01/D03：删除 3 条原始 sleep 片段 Current；aggregate 新增
+    独立写入 version（该 fixture 全为增量写，值为 observations - 1）。
+    除这两项外保持逐字节不变；不是重算或改变 aggregation_version 算法口径。
+
+    其余 diff 一律当成回归，别顺手重新生成 golden。
     """
     golden = (FIXTURES / "golden_v0.7.0.json").read_text()
     now = _canonical_json(run_sequence()) + "\n"

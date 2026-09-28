@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from perceptkit import IngestContext, PerceptionKit
+from perceptkit import IngestContext, PerceptionKit, RetryableProjectionError
 from perceptkit.conformance import InMemoryStorage
 from perceptkit.manifest import MINIMAL_SIGNALS
 from perceptkit.contracts import delivery
@@ -92,8 +92,10 @@ def test_a_crash_midway_through_a_batch_does_not_mark_it_processed():
         kit.ingest(payload, context=ctx("10:01"))
 
     # 关键断言：认领必须和工作在同一个事务里。真实数据库会回滚它；
-    # 内存实现没有回滚，所以这里退而验证"认领发生在事务【内部】"。
+    # Reference 现在也执行异常回滚；这仍不是数据库隔离证明。
     assert boom.transactions_opened == 1
+    assert not boom.reports and not boom.observations and not boom.identities
+    assert not boom.current and not boom.aggregates
 
 
 def test_the_whole_batch_shares_one_transaction():
@@ -198,12 +200,15 @@ def test_a_lost_cas_race_is_retried_not_silently_dropped():
     assert next(iter(s.current.values())).typed_value["level_ratio"] == 0.5
 
 
-def test_giving_up_after_repeated_cas_failures_is_reported_not_silent():
+def test_repeated_cas_failure_raises_retryable_error_and_rolls_back():
     s = InMemoryStorage()
     s.compare_and_put_current = lambda projection, *, expected_version: False
-    out = PerceptionKit(storage=s).ingest(battery(0.5, "09:00", "r1"),
-                                          context=ctx("09:00"))
-    assert any("写入竞争失败" in w for w in out.warnings)
+    with pytest.raises(RetryableProjectionError) as caught:
+        PerceptionKit(storage=s).ingest(battery(0.5, "09:00", "r1"),
+                                       context=ctx("09:00"))
+    assert caught.value.retryable and caught.value.projection == "current"
+    assert caught.value.attempts == 3
+    assert not s.reports and not s.current and not s.identities
 
 
 # ---------------------------------------------------------------------------
@@ -321,16 +326,16 @@ def test_late_arriving_data_enters_history_but_does_not_fire_rules():
     assert len(s.observations) == 2             # 但历史里有它
 
 
-def test_a_conflicting_current_value_suspends_all_derived_work():
-    """"到底哪份数据生效了"都说不清的时候，再去更新聚合、推进规则状态、
-    产生事件，只会把错误扩散。"""
+def test_current_conflict_does_not_discard_an_independent_fact_from_aggregate():
+    """D01：Current 不选新候选，独立事实仍进入聚合；变化规则不假造顺序。"""
     s = InMemoryStorage()
     kit = PerceptionKit(storage=s, definitions=[CHANGED_RULE])
     kit.ingest(steps(100, "10:00", "r1", sample="hk-x"), context=ctx("10:00"))
-    before = len(s.aggregates)
     out = kit.ingest(steps(999, "10:00", "r2", sample="hk-y"), context=ctx("10:01"))
     assert out.conflicts and not out.events
-    assert len(s.aggregates) == before
+    assert next(iter(s.current.values())).typed_value["step_count"] == 100
+    assert next(iter(s.aggregates.values())).typed_aggregate["step_count"]["total"] == 999
+    assert len(s.observations) == 2
 
 
 # ---------------------------------------------------------------------------

@@ -26,6 +26,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from ..contracts import receipt as _receipt
 from ..contracts.context import IngestContext
+from ..contracts.errors import RetryableProjectionError
 from ..contracts.records import (
     CONFLICT,
     IGNORE,
@@ -199,7 +200,7 @@ def _repeats_declared_state(
     或者这条不是 observed，都照常写明细 —— 宁可多写一条，不可漏掉一次真正的
     状态变化。
     """
-    if item.stored.availability != "observed":
+    if item.stored.availability != "observed" or sig.current_policy == "none":
         return False
     # 🔴 来源给了这条事实自己的身份，它就是**一件独立的事**，不是保活重复。
     #
@@ -319,30 +320,33 @@ def _apply_one(
     #    还在说「fresh，8000 步」—— 把一个已经读不到的值当成当前事实报出去。
     #    规范 §12-12 要的是两件事：不覆盖最后可靠数值，**并且**查询时能表达
     #    当前不可用。
-    decision = _update_current(item, sig, context=context, storage=storage,
-                               outcome=outcome)
+    decision = (_update_current(item, sig, context=context, storage=storage,
+                                outcome=outcome)
+                if sig.current_policy == "latest" else None)
 
-    # 🔴 冲突时暂停一切派生。"到底哪份数据生效了"都说不清的时候，
-    #    再去更新聚合、推进规则状态、产生事件，只会把错误扩散。
-    if decision == CONFLICT:
-        outcome.applied.append(item)
-        return
-
-    # ⑦ 聚合。迟到的旧数据(IGNORE)【要】进历史 —— 它只是不该改当前值。
+    # ⑦ 已接受事实独立参与聚合；Current 同时刻冲突不否定另一个 Fact。
     if sig.stores_history and stored.availability == "observed":
         _update_aggregate(item, sig, context=context, storage=storage)
 
     # ⑧⑨ 求值 + 写发件箱。和上面同事务 —— 事件落地了但观测没落地(或反过来)，
     #    都会让"为什么会有这个事件"永远解释不清。
     #
-    #    只在 observed 且当前值真的推进了(REPLACE)时才跑值变化型规则：
+    #    值变化规则仍要求 Current 推进；occurrence 只依赖独立事实身份，
+    #    不能因为迟到或 Current 冲突漏掉。无 Current 的信号可直接对事实求值。
     #    拿 no_data 去喂 `changed`，会把"100 → 没数据"当成一次变化，
     #    还会把 previous 推成 None，之后的 threshold_crossing 全废。
     #    迟到数据(IGNORE)同理 —— 它的 previous/current 讲的不是当前故事。
-    if definitions and decision == REPLACE and stored.availability == "observed":
+    eligible_definitions = [
+        definition for definition in definitions
+        if stored.availability == "observed" and (
+            definition.condition_type == "occurrence"
+            or sig.current_policy == "none" or decision == REPLACE
+        )
+    ]
+    if eligible_definitions:
         rules = evaluate_and_enqueue(
             item, context=context, storage=storage,
-            definitions=definitions, extra_evaluators=extra_evaluators,
+            definitions=eligible_definitions, extra_evaluators=extra_evaluators,
             signal_definition=sig,
         )
         outcome.events.extend(rules.events)
@@ -435,10 +439,7 @@ def _update_current(
             return REPLACE
         # 有人在我们读之后写了。重读、重新判断 —— 说不定这次该 IGNORE 了。
 
-    outcome.warnings.append(
-        f"{stored.signal}: 当前值连续 {MAX_CAS_RETRIES} 次写入竞争失败，本次放弃"
-    )
-    return IGNORE
+    raise RetryableProjectionError("current", stored.signal, MAX_CAS_RETRIES)
 
 
 def _update_aggregate(
@@ -454,37 +455,40 @@ def _update_aggregate(
     # 按当前算法版本挑。算法升级后旧版本的文档要留着(供对照/回滚),
     # 但绝不能拿旧口径的文档继续 fold 新数据 —— 那会得到一份两种口径混合的统计,
     # 而且看不出来。
-    existing = [
-        a for a in storage.get_aggregate(
-            subject_id=context.subject_id, signal=stored.signal,
-            start_date=day, end_date=day, aggregation_kind=kind,
-        )
-        if a.aggregation_version == AGGREGATION_VERSION
-    ]
-    prev = existing[0].typed_aggregate if existing else None
     # 计数器纪元由生产方在载荷里给（来源重置了计数就换一个）。它是 manifest
     # 声明的普通字段，这里只是把它当上下文取出来 —— 累计型靠它区分
     # 「重置」和「修订」，混了的话「重置到 0」会被当成错值吃掉。
     typed = stored.typed_value or {}
     epoch = typed.get("counter_epoch_id")
-    doc = _aggregate.fold_into_day(
-        prev, sig, typed, ts=_epoch(stored.occurred_at),
-        revision=stored.source_revision,
-        counter_epoch=str(epoch) if epoch is not None else None,
-    )
-    coverage = dict((existing[0].source_coverage if existing else {}) or {})
-    coverage["observations"] = int(coverage.get("observations", 0)) + 1
-    storage.put_aggregate(DailyAggregate(
-        subject_id=context.subject_id,
-        signal=stored.signal,
-        local_date=day,
-        aggregation_kind=kind,
-        aggregation_version=AGGREGATION_VERSION,
-        typed_aggregate=doc,
-        timezone_attribution=stored.timezone,
-        source_coverage=coverage,
-        updated_at=stored.received_at,
-    ))
+    for _ in range(MAX_CAS_RETRIES):
+        existing = next((
+            a for a in storage.get_aggregate(
+                subject_id=context.subject_id, signal=stored.signal,
+                start_date=day, end_date=day, aggregation_kind=kind,
+            ) if a.aggregation_version == AGGREGATION_VERSION
+        ), None)
+        doc = _aggregate.fold_into_day(
+            existing.typed_aggregate if existing else None, sig, typed,
+            ts=_epoch(stored.occurred_at), revision=stored.source_revision,
+            counter_epoch=str(epoch) if epoch is not None else None,
+        )
+        coverage = dict((existing.source_coverage if existing else {}) or {})
+        coverage["observations"] = int(coverage.get("observations", 0)) + 1
+        version = existing.version if existing else -1
+        if storage.compare_and_put_aggregate(DailyAggregate(
+            subject_id=context.subject_id,
+            signal=stored.signal,
+            local_date=day,
+            aggregation_kind=kind,
+            aggregation_version=AGGREGATION_VERSION,
+            typed_aggregate=doc,
+            timezone_attribution=stored.timezone,
+            source_coverage=coverage,
+            updated_at=stored.received_at,
+            version=version + 1,
+        ), expected_version=version):
+            return
+    raise RetryableProjectionError("aggregate", stored.signal, MAX_CAS_RETRIES)
 
 
 def _batch_digest(report: ReportEnvelope) -> str:

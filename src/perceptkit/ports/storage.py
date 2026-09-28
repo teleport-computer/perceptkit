@@ -45,11 +45,10 @@ class StoragePort(Protocol):
         """一个原子边界。
 
         kit 会把"写规则状态 + 写待发件箱"这类**必须一起成功**的操作包在
-        同一个 ``with`` 里。宿主如果做不到真正的单事务，必须提供可证明的
-        补偿/对账机制，并在一致性测试里证明它 —— 不能默认它不会出问题。
-
-        产品规范这里留了活口（"处于同一原子边界，**或有可证明的恢复机制**"），
-        所以不强制单事务，但强制"能证明"。
+        同一个 ``with`` 里。异常（包括 RetryableProjectionError）退出时，
+        本次 report、Observation、identity、Current、Aggregate、RuleState、
+        Outbox 必须全部回滚；其他事务不能看到部分提交。调用方重试整个 report。
+        当前同步协议没有 durable rebuild，因此不能用 warning 或补偿承诺代替回滚。
         """
         ...
 
@@ -153,7 +152,19 @@ class StoragePort(Protocol):
 
         按 ``(subject, signal, date, kind, aggregation_version)`` 覆盖 ——
         换了 ``aggregation_version`` 就是新的一份，旧的留着，**不原地改写
-        旧统计的语义**。
+        旧统计的语义**。每次写入必须将写入 version 从现存值加一（新行为 0），
+        使已读旧值的增量 CAS 失败并重读。重算与事实变更仍须由调用方序列化。
+        """
+        ...
+
+    def compare_and_put_aggregate(
+        self, aggregate: DailyAggregate, *, expected_version: int,
+    ) -> bool:
+        """原子比较同一 aggregate key 的写入 version 并写入。
+
+        不存在以 -1 比较；成功写入 version=expected_version+1。
+        失败返回 False 且不得改写；Kit 重读后重新 fold，耗尽则回滚整个事务。
+        aggregation_version 是算法口径，不能当作并发 version。
         """
         ...
 

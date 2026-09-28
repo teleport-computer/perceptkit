@@ -196,6 +196,12 @@ class SignalDefinition:
     #: 写进数据结构而不是注释,是为了让它跟着 manifest 一起被读到。
     note: str | None = None
     extensions: dict[str, Any] = field(default_factory=dict)
+    #: latest = 每个 dimension 的最近状态；none = 只有事实与聚合，不发布 Current。
+    current_policy: str = "latest"
+
+    def __post_init__(self) -> None:
+        if self.current_policy not in {"latest", "none"}:
+            raise ValueError(f"Unknown current_policy: {self.current_policy!r}")
 
     def field_map(self) -> dict[str, FieldDefinition]:
         return {f.key: f for f in self.fields}

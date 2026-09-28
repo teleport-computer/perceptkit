@@ -129,7 +129,7 @@ def get_current(
     for signal in signals:
         sig = manifest.get(signal)
         projections = raw.get(signal) or []
-        if sig is None or not projections:
+        if sig is None or sig.current_policy == "none" or not projections:
             out[signal] = CurrentView(signal, "no_data", None)
             continue
         proj = max(projections, key=lambda p: p.observed_at)
@@ -160,7 +160,7 @@ def get_last_known(
     """
     sig = manifest.get(signal)
     projections = storage.get_current(subject_id=subject_id, signals=[signal]).get(signal)
-    if sig is None or not projections:
+    if sig is None or sig.current_policy == "none" or not projections:
         return CurrentView(signal, "no_data", None)
     proj = max(projections, key=lambda p: p.observed_at)
     return CurrentView(
