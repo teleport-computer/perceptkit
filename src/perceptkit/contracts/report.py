@@ -21,12 +21,52 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import json
 from typing import Any, Iterable
 
 from . import versioning
 from ._time import TimestampError, parse_timestamp
 from .errors import ContractError
 from .observation import Observation
+
+
+def canonical_semantics(value: Any) -> str:
+    """JSON canonicalization, with the contract's explicit datetime support.
+
+    Arbitrary Python objects have no wire meaning; hashing their str/repr would
+    invent an unstable protocol. Fail before claiming or applying a report.
+    """
+    def encode(raw):
+        if isinstance(raw, datetime):
+            return parse_timestamp(raw).isoformat()
+        raise TypeError(f"unsupported semantic value type: {type(raw).__name__}")
+    try:
+        return json.dumps(value, sort_keys=True, ensure_ascii=False,
+                          separators=(",", ":"), allow_nan=False, default=encode)
+    except (TypeError, ValueError) as exc:
+        raise ContractError([f"report semantic payload: {exc}"]) from exc
+
+
+def observation_semantics(observation: Observation) -> dict[str, Any]:
+    """Canonical wire semantics; map ordering and diagnostic extensions do not count.
+
+    Units already have a declared wire spelling (D08), before conversion ships.
+    Report/Observation currently have no coverage fields. Any future coverage
+    contract must extend this inventory before it can influence processing.
+    """
+    return {
+        "signal": observation.signal,
+        "signal_schema_version": observation.signal_schema_version,
+        "occurred_at": observation.occurred_at.isoformat(),
+        "timezone": observation.timezone,
+        "availability": observation.availability,
+        "value": observation.value,
+        "source_event_id": observation.source_event_id,
+        "source_revision": observation.source_revision,
+        "reason": observation.reason,
+        "units": ({} if observation.extensions.get("units") is None
+                  else observation.extensions["units"]),
+    }
 
 
 @dataclass(frozen=True)
@@ -122,6 +162,19 @@ class ReportEnvelope:
             if obs.signal not in seen:
                 seen.add(obs.signal)
                 yield obs.signal
+
+    def semantic_payload(self) -> dict[str, Any]:
+        """Immutable content; reported/received times and diagnostics are transport.
+
+        Observation order is significant for ordered rules. Instance ID is
+        provenance, so changing it under the same report ID is a conflict.
+        """
+        return {
+            "schema_version": self.schema_version,
+            "producer": self.producer,
+            "producer_instance_id": self.producer_instance_id,
+            "observations": [observation_semantics(o) for o in self.observations],
+        }
 
 
 __all__ = ["ContractError", "ReportEnvelope"]

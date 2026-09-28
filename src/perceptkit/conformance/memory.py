@@ -49,6 +49,7 @@ class InMemoryStorage:
         self.reports: dict[tuple[str, str, str], IngestReceipt] = {}
         self.observations: dict[str, StoredObservation] = {}
         self.identities: set[tuple[str, str, str, str]] = set()
+        self.identity_records: dict[tuple[str, str, str, str], DurableDedupeIdentity] = {}
         self.current: dict[tuple[str, str, str], CurrentProjection] = {}
         self.aggregates: dict[tuple[str, str, date, str, int], DailyAggregate] = {}
         self.calendar: dict[tuple, CalendarEventMirror] = {}
@@ -68,7 +69,7 @@ class InMemoryStorage:
     @contextmanager
     def transaction(self) -> Iterator[None]:
         """嵌套边界使用快照回滚；仅作同步端口参照，不证明数据库隔离。"""
-        collections = ("reports", "observations", "identities", "current", "aggregates",
+        collections = ("reports", "observations", "identities", "identity_records", "current", "aggregates",
                        "calendar", "reminders", "sync_state", "rule_state", "outbox",
                        "receipts", "retractions")
         before = {key: deepcopy(getattr(self, key)) for key in collections}
@@ -148,10 +149,30 @@ class InMemoryStorage:
         if key in self.identities:
             return False
         self.identities.add(key)
+        self.identity_records[key] = identity
         return True
 
     def has_seen_identity(self, *, subject_id, signal, source, digest) -> bool:
         return (subject_id, signal, source, digest) in self.identities
+
+    def list_identities(self, *, subject_id, signal, source, fact_key):
+        scoped = [self.identity_records.get(key) or DurableDedupeIdentity(
+            subject_id=subject_id, signal=signal, source=source,
+            source_event_identity_digest=key[3], first_applied_at=_EPOCH,
+        ) for key in sorted(self.identities) if key[:3] == (subject_id, signal, source)]
+        return [row for row in scoped if row.fact_key is None or row.fact_key == fact_key]
+
+    def backfill_identity(self, identity):
+        key = (identity.subject_id, identity.signal, identity.source,
+               identity.source_event_identity_digest)
+        if key not in self.identities:
+            raise ValueError("cannot backfill an unseen identity")
+        existing = self.identity_records.get(key)
+        if existing is not None and existing.fact_key is not None:
+            if existing != identity:
+                raise ValueError("conflicting durable identity metadata")
+            return
+        self.identity_records[key] = identity
 
     # -- 当前值 ----------------------------------------------------------
 
@@ -450,6 +471,7 @@ class InMemoryStorage:
         before = len(self.identities)
         self.identities = {i for i in self.identities if i[0] != subject_id}
         counts["identities"] = before - len(self.identities)
+        drop(self.identity_records, lambda k, v: k[0])
         # 回执按它对应事件的 subject 清理。以前这里只是原样复制了一遍列表 ——
         # "删除我的数据"这件事没有部分成功。
         doomed_events = {k for k in doomed_event_ids}

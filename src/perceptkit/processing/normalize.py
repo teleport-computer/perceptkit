@@ -22,6 +22,7 @@ from ..algorithms import attribution
 from ..contracts._time import to_iso
 from ..contracts.context import IngestContext
 from ..contracts.observation import Observation
+from ..contracts.report import canonical_semantics, observation_semantics
 from ..contracts.records import StoredObservation
 from ..manifest.types import FieldDefinition, SignalDefinition
 
@@ -60,8 +61,11 @@ class NormalizedObservation:
     content_digest: str
     #: 跨午夜的区间会摊到多天：``[(本地日期, 分钟数), ...]``。其余为空。
     day_slices: tuple[tuple[str, float], ...] = ()
-    #: 升级前这条投递会算出的身份。只用来认旧数据，见 ``identity_for``。
+    #: Deprecated diagnostic: how the old layout hashes this payload. Ingest
+    #: must not use it as migration evidence; use persisted rows in facts.py.
     legacy_identity_digest: str | None = None
+    #: Full Fact revision semantics, separate from stable historical IDs.
+    semantic_digest: str | None = None
 
 
 def _canonical(value: Any) -> str:
@@ -344,9 +348,9 @@ def identity_for(
         delivery = _digest(fact, rev, content_digest)
     else:
         delivery = legacy
-    # 旧身份只在换算法的这一版用来**认旧数据**：升级前落库的那些记的是
-    # 带 occurred_at 的摘要，只查新摘要的话，升级后第一次重传会认不出来、
-    # 再加一遍。过完一个保留周期就可以删掉这一路。
+    # Retain the old-layout output for callers inspecting normalization. It is
+    # NOT proof of a pre-upgrade Fact: this timestamp may be a new upload time.
+    # Ingest's migration path reconstructs only from persisted old evidence.
     return delivery, fact, (legacy if legacy != delivery else None), problems
 
 
@@ -458,6 +462,7 @@ def normalize_observations(
             fact_key=fact_key,
             content_digest=content,
             day_slices=slices,
+            semantic_digest=_digest(canonical_semantics(observation_semantics(obs))),
         ))
 
     return NormalizeResult(tuple(out), tuple(rejected), tuple(warnings))

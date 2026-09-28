@@ -92,6 +92,7 @@ def test_an_unavailable_report_still_keeps_last_known():
             "occurred_at": (T0 + timedelta(hours=1)).isoformat(),
             "availability": "unavailable", "timezone": "Asia/Shanghai",
             "source_event_id": "hk-A",
+            "source_revision": 1,  # D02: availability changes revise the Fact.
         }],
     }, context=IngestContext("u", T0 + timedelta(hours=1)))
     value, availability = _current(s)

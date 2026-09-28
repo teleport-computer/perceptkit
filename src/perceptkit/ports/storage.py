@@ -183,6 +183,26 @@ class StoragePort(Protocol):
         """这条处理过没有。明细已按保留期删掉之后，这是唯一还能回答的东西。"""
         ...
 
+    def list_identities(
+        self, *, subject_id: str, signal: str, source: str, fact_key: str,
+    ) -> Sequence[DurableDedupeIdentity]:
+        """Return this Fact's revisions plus unmapped legacy identities in scope.
+
+        Fact revision metadata must survive detail retention. Old opaque digests
+        have fact_key=None; never silently omit them or infer their source time
+        from an incoming upload. Adapters should index fact_key and the unmapped
+        subset, not scan all permanent identities for every new observation.
+        """
+        ...
+
+    def backfill_identity(self, identity: DurableDedupeIdentity) -> None:
+        """Attach recovered Fact metadata to an existing legacy identity atomically.
+
+        Only absent metadata may be filled; conflicting existing metadata must
+        raise and roll back. It must not create an unseen delivery identity.
+        """
+        ...
+
     # -- 来源镜像 --------------------------------------------------------
 
     def get_sync_state(

@@ -7,6 +7,12 @@ from __future__ import annotations
 from typing import Sequence
 
 
+# Receipt error code: a legacy hash omitted semantic fields, so it cannot prove
+# equality with a v2 report. Original envelopes can be explicitly migrated by
+# adapters; Kit never guesses the missing original semantics from a retry.
+LEGACY_REPORT_SEMANTICS_UNVERIFIABLE = "legacy_report_semantics_unverifiable"
+
+
 class ContractError(ValueError):
     """契约校验失败。
 
@@ -34,4 +40,4 @@ class RetryableProjectionError(RuntimeError):
         super().__init__(f"{signal}: {projection} CAS exhausted after {attempts} attempts")
 
 
-__all__ = ["ContractError", "RetryableProjectionError"]
+__all__ = ["ContractError", "RetryableProjectionError", "LEGACY_REPORT_SEMANTICS_UNVERIFIABLE"]

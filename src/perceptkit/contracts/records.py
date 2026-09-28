@@ -324,6 +324,13 @@ class DurableDedupeIdentity:
     #: 它保护的是哪个聚合范围（如 ``daily_added_count``）。
     aggregate_scope: str | None = None
     retain_until: datetime | None = None
+    #: Durable Fact revision authority. None means unmapped legacy identity.
+    fact_key: str | None = None
+    source_revision: str | int | None = None
+    semantic_digest: str | None = None
+    #: v0.8 compatibility evidence: persisted value/availability fingerprint.
+    legacy_content_digest: str | None = None
+    effective_local_date: date | None = None
 
 
 # ---------------------------------------------------------------------------

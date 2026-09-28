@@ -156,14 +156,11 @@ def test_a_real_revision_still_gets_through():
 # 升级兼容：旧数据记的是旧身份，不许因此再加一遍
 # ---------------------------------------------------------------------------
 
-def test_an_identity_remembered_before_the_upgrade_still_blocks_a_re_upload():
-    """改投递身份会连带改摘要，**已经在库里的旧数据记的是旧摘要**。
+def test_a_bare_legacy_digest_blocks_unproven_replay_as_incomplete():
+    """只剩不透明旧摘要时，不能用本次上报时间猜原始身份。
 
-    只查新摘要的话，升级后同一条样本第一次重传认不出来、再加一遍 ——
-    等于把"每次重传都翻倍"换成"升级当天翻一次"，那不叫修好。
-    所以新旧两个摘要都查，命中任一个就算重传。
-
-    这条模拟升级前的状态：手工把旧摘要记进去，再重传一次。
+    这是旧的 synthetic fixture，不含任何可恢复的 Fact 证据；应明确报告
+    incomplete。真实 v0.8 状态存在明细或 Current 的迁移由 A03 验证。
     """
     from perceptkit.contracts.observation import Observation
     from perceptkit.contracts.records import DurableDedupeIdentity
@@ -199,5 +196,9 @@ def test_an_identity_remembered_before_the_upgrade_still_blocks_a_re_upload():
             "value": value,
         }],
     }, context=IngestContext("u", report_at))
-    assert out.duplicates, "升级前记过的那条投递，重传时没被认出来"
+    # D02/I10: this old synthetic fixture has no persisted Fact evidence.
+    # It cannot prove a safe migration. Do not guess its timestamp from the
+    # incoming payload; report the irrecoverable gap and preserve the aggregate.
+    assert out.rejected and "legacy_identity_incomplete" in str(out.rejected)
+    assert not out.duplicates
     assert not out.applied

@@ -89,8 +89,9 @@ def recompute_day(
         )
         page.extend(more)
 
-    same_day = [o for o in page if o.effective_local_date == day]
-    same_day = _canonical(same_day, sig)
+    # A higher revision may move the Fact to a different day. Select its active
+    # revision before filtering dates, otherwise the old day keeps the old one.
+    same_day = [o for o in _canonical(page, sig) if o.effective_local_date == day]
     # 被来源撤回的那些不算数。**放在 canonical 之后**：撤回针对的是一条
     # 源事实，而 canonical 已经把同一源事实的多个修订收敛成一条了 ——
     # 先滤会让"撤回了 revision 1、但 revision 2 还在"这种情况删错东西。
