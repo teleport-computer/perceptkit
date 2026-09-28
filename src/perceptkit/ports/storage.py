@@ -225,6 +225,9 @@ class StoragePort(Protocol):
 
         Only absent metadata may be filled; conflicting existing metadata must
         raise and roll back. It must not create an unseen delivery identity.
+        For partial legacy evidence, restored persisted detail may fill an
+        unknown effective_local_date only if all other metadata stays identical;
+        a previously known date must never be overwritten.
         """
         ...
 

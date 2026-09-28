@@ -182,9 +182,13 @@ def ingest_report(
             if signals[item.stored.signal].identity_strategy != "source_event_id" or not item.stored.source_event_id:
                 continue
             siblings = fact_candidates.setdefault(item.fact_key, [])
-            if any(_compare_revisions(item.stored.source_revision, other.stored.source_revision) == 0
-                   and item.semantic_digest != other.semantic_digest for other in siblings):
-                blocked.add(item.fact_key)
+            for other in siblings:
+                order = _compare_revisions(item.stored.source_revision, other.stored.source_revision)
+                if order is None or (order == 0 and item.semantic_digest != other.semantic_digest):
+                    # Equal content cannot supply the missing revision ordering.
+                    # Never choose an active opaque revision by arrival order.
+                    blocked.add(item.fact_key)
+                    break
             siblings.append(item)
 
         for item in normalized.normalized:

@@ -21,20 +21,12 @@ def identity_evidence(storage, item):
     scope = dict(subject_id=stored.subject_id, signal=stored.signal, source=stored.source,
                  fact_key=item.fact_key)
     identities = list(storage.list_identities(**scope))
-    missing = {r.source_event_identity_digest: r for r in identities if r.fact_key is None}
+    missing = {r.source_event_identity_digest: r for r in identities
+               if r.fact_key is None or (r.semantic_digest is None and r.effective_local_date is None)}
     if not missing:
         return identities
-    for digest in (item.identity_digest, item.legacy_identity_digest):
-        if digest in missing:
-            # This is equality with an existing cryptographic commitment, not
-            # creation of an imaginary old hash from a new timestamp. Changed
-            # timestamps do not match and cannot be inferred from an orphan hash.
-            original = missing.pop(digest)
-            storage.backfill_identity(replace(
-                original, fact_key=item.fact_key, source_revision=stored.source_revision,
-                legacy_content_digest=item.content_digest,
-                effective_local_date=stored.effective_local_date,
-            ))
+    # Persisted evidence wins: the released digest did not commit to timezone,
+    # so an exact incoming match cannot authenticate its local-date attribution.
     evidence = []
     for row in _all_observations(storage, stored.subject_id, stored.signal):
         if row.source == stored.source and row.source_event_id:
@@ -58,6 +50,16 @@ def identity_evidence(storage, item):
             storage.backfill_identity(replace(
                 original, fact_key=fact, source_revision=revision,
                 legacy_content_digest=content, effective_local_date=day,
+            ))
+    for digest in (item.identity_digest, item.legacy_identity_digest):
+        if digest in missing:
+            # Only after exhausting persisted evidence, an exact match proves
+            # identity/content. It does NOT prove the incoming timezone/date.
+            original = missing.pop(digest)
+            storage.backfill_identity(replace(
+                original, fact_key=item.fact_key, source_revision=stored.source_revision,
+                legacy_content_digest=item.content_digest,
+                effective_local_date=None,
             ))
     return list(storage.list_identities(**scope))
 

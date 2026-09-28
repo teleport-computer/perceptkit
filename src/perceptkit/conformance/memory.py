@@ -194,6 +194,14 @@ class InMemoryStorage:
             raise ValueError("cannot backfill an unseen identity")
         existing = self.identity_records.get(key)
         if existing is not None and existing.fact_key is not None:
+            # An exact opaque match may have established identity but not date.
+            # Restored persisted detail may fill that single unknown field; no
+            # existing identity, content or known attribution may be replaced.
+            if (existing.semantic_digest is None and existing.effective_local_date is None
+                    and identity.effective_local_date is not None
+                    and replace(existing, effective_local_date=identity.effective_local_date) == identity):
+                self.identity_records[key] = identity
+                return
             if existing != identity:
                 raise ValueError("conflicting durable identity metadata")
             return
