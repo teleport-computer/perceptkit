@@ -329,7 +329,10 @@ class StoragePort(Protocol):
 
         Candidate must be complete, account for every requested day, contain a
         complete aggregate row for every accounted data day, and belong to the
-        requested scope. Failure leaves the old pointer untouched.
+        requested scope. Every candidate row must defensively match the
+        generation's subject, signal, kind, generation id, and algorithm
+        version; legacy/corrupt mismatches fail activation. Failure leaves the
+        old pointer untouched.
         """
         ...
 
@@ -361,6 +364,8 @@ class StoragePort(Protocol):
         使已读旧值的增量 CAS 失败并重读。重算与事实变更仍须由调用方序列化。
         扩大 active coverage 前必须先调用 ``account_active_aggregate_range``；
         raw sparse writes 不能拿两个端点行推断中间日期已完整核对。
+        If ``generation_id`` already exists in this row's scope, its algorithm
+        version must equal the generation record; reject mismatches at write.
         """
         ...
 

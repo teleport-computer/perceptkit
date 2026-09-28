@@ -405,6 +405,11 @@ class InMemoryStorage:
             self.aggregate_generations[generation_key] = generation
             if status == "active":
                 self.active_aggregate_generations[scope] = generation_id
+        elif (generation.subject_id, generation.signal, generation.aggregation_kind,
+              generation.aggregation_version) != (
+                  aggregate.subject_id, aggregate.signal, aggregate.aggregation_kind,
+                  aggregate.aggregation_version):
+            raise ValueError("aggregate generation scope/version mismatch")
         elif generation.status == "active":
             old_start, old_end = generation.requested_start_date, generation.requested_end_date
             new_start = min(old_start, aggregate.local_date)
@@ -534,8 +539,19 @@ class InMemoryStorage:
             if (generation.requested_start_date > old.requested_start_date
                     or generation.requested_end_date < old.requested_end_date):
                 return False
-        rows = [a for a in self.aggregates.values() if a.generation_id == generation_id
-                and (a.subject_id, a.signal, a.aggregation_kind) == scope]
+        rows = []
+        for aggregate_key_, aggregate in self.aggregates.items():
+            row_scope = (aggregate_key_[0], aggregate_key_[1], aggregate_key_[3])
+            row_generation_id = aggregate_key_[5]
+            if (*row_scope, row_generation_id) != (*scope, generation_id):
+                continue
+            if ((aggregate.subject_id, aggregate.signal, aggregate.aggregation_kind)
+                    != scope
+                    or aggregate.generation_id != generation.generation_id
+                    or aggregate.aggregation_version != generation.aggregation_version
+                    or aggregate_key_[4] != generation.aggregation_version):
+                return False
+            rows.append(aggregate)
         if {a.local_date for a in rows} != required or any(a.completeness != "complete" for a in rows):
             return False
         if expected_active_generation_id is not None:

@@ -987,6 +987,31 @@ def _g18_aggregate_generation_cutover(new: StorageFactory) -> list[str]:
         subject_id="u1", signal="steps", aggregation_kind="daily")
     if retained is None or retained.requested_start_date != gap_end:
         problems.append("retention did not reconcile active generation coverage")
+
+    # A row may never borrow a generation id while carrying another algorithm
+    # version. If a legacy adapter accepts it, activation must still fail closed.
+    binding = new()
+    bound_generation = AggregateGeneration(
+        "bound-v3", "u1", "steps", "daily", 3, DAY, DAY,
+        status="complete", completeness="complete", accounted_dates=(DAY,),
+        created_at=T0, updated_at=T0)
+    binding.put_aggregate_generation(bound_generation)
+    mismatch = DailyAggregate(
+        "u1", "steps", DAY, "daily", 2, {"n": 999},
+        generation_id="bound-v3", updated_at=T0)
+    accepted_mismatch = False
+    try:
+        binding.put_aggregate(mismatch)
+    except ValueError:
+        pass
+    else:
+        accepted_mismatch = True
+        problems.append("aggregate row accepted a mismatched generation algorithm version")
+    if accepted_mismatch and binding.activate_aggregate_generation(
+            subject_id="u1", signal="steps", aggregation_kind="daily",
+            generation_id="bound-v3", expected_active_generation_id=None,
+            activated_at=T0):
+        problems.append("activation published a row with mismatched generation metadata")
     return problems
 
 

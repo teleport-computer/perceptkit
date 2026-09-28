@@ -30,6 +30,12 @@ attempts may legitimately share that version. Activation must verify the
 complete requested date set and complete candidate rows in the same
 transaction. It must never select `max(aggregation_version)`.
 
+Every aggregate row is bound to the generation's exact subject, signal,
+aggregation kind, generation id, and algorithm version. Adapters reject a
+version/scope mismatch on write and revalidate all candidate rows during
+activation, so legacy or corrupt rows cannot publish a v2 document under a v3
+active-generation record.
+
 Activation is a whole-generation replacement, so candidate coverage must be a
 superset of the currently active generation's requested coverage. A 90-day
 active generation cannot be replaced by a one-day candidate: activation is

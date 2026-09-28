@@ -87,6 +87,32 @@ def test_partial_or_failed_candidate_cannot_replace_active_generation():
                                               aggregation_kind="daily") == old
 
 
+def test_generation_rejects_row_with_different_algorithm_version_on_write():
+    s = InMemoryStorage()
+    day = T.date()
+    candidate = _generation("candidate-v3", 3, day, day)
+    s.put_aggregate_generation(candidate)
+    with pytest.raises(ValueError, match="generation scope/version mismatch"):
+        s.put_aggregate(_daily(day, 2, 999, generation_id="candidate-v3"))
+
+
+def test_activation_defensively_rejects_corrupt_generation_row_metadata():
+    s = InMemoryStorage()
+    day = T.date()
+    candidate = _generation(
+        "candidate-v3", 3, day, day, status="complete", accounted=(day,))
+    s.put_aggregate_generation(candidate)
+    corrupt = _daily(day, 2, 999, generation_id="candidate-v3")
+    # Simulate a legacy migration/corrupt adapter bypassing the normal write API.
+    s.aggregates[("u", "steps", day, "daily", 2, "candidate-v3")] = corrupt
+    assert not s.activate_aggregate_generation(
+        subject_id="u", signal="steps", aggregation_kind="daily",
+        generation_id="candidate-v3", expected_active_generation_id=None,
+        activated_at=T)
+    assert s.get_active_aggregate_generation(
+        subject_id="u", signal="steps", aggregation_kind="daily") is None
+
+
 def test_narrow_candidate_cannot_collapse_broader_active_history():
     s = InMemoryStorage()
     start = date(2026, 6, 1)
