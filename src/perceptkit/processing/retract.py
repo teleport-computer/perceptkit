@@ -30,6 +30,8 @@ from ..contracts.records import CurrentProjection
 from ..contracts.retraction import Retraction
 from ..manifest.types import SignalDefinition
 from ..ports.storage import StoragePort
+from ..contracts.errors import RetryableProjectionError
+from ..contracts.mutation import fact_key, current_key, aggregate_key, canonical_keys
 
 
 #: 当前值写入撞车时重读重判几次。和 ingest 那条路同一个数量级 ——
@@ -48,7 +50,8 @@ class RetractionOutcome:
 
     recorded: int = 0
     reselected: int = 0
-    #: 当前值连续写入竞争失败的次数。**不算成功。**
+    #: Legacy compatibility field, always 0: exhausted CAS now raises and rolls
+    #: back the entire retraction, rather than returning a partially applied job.
     contended: int = 0
     affected_days: set[tuple[str, str, date]] = field(default_factory=set)
     #: 顺带抹掉了几条事件记录里的原值（宿主没实现那个可选端口时恒为 0）。
@@ -74,7 +77,21 @@ def apply_retractions(
     """
     outcome = RetractionOutcome()
 
-    with storage.transaction():
+    from .pipeline import AGGREGATION_VERSION
+
+    with storage.mutation_transaction() as mutation:
+        mutation.acquire(canonical_keys([
+            fact_key(r.subject_id, r.signal, r.source, r.source_event_id) for r in retractions
+        ]))
+        affected = {(r.subject_id, r.signal, r.source, r.source_event_id): _affected_days(storage, r)
+                    for r in retractions}
+        mutation.acquire(canonical_keys([current_key(r.subject_id, r.signal)
+                                         for r in retractions]))
+        mutation.acquire(canonical_keys([
+            aggregate_key(r.subject_id, r.signal, day, "daily", AGGREGATION_VERSION)
+            for r in retractions
+            for day in affected[(r.subject_id, r.signal, r.source, r.source_event_id)]
+        ]))
         for r in retractions:
             # 🔴 已经记过**不等于收尾做完了**。
             #
@@ -90,7 +107,7 @@ def apply_retractions(
                 # 但没法重选 —— 不知道这个信号的当前值长什么样。
                 outcome.unknown_signals.append(r.signal)
                 continue
-            for day in _affected_days(storage, r):
+            for day in affected[(r.subject_id, r.signal, r.source, r.source_event_id)]:
                 outcome.affected_days.add((r.subject_id, r.signal, day))
                 if on_affected_day is not None:
                     # 🔴 **在同一个事务里重算。** 放到事务外面的话，撤回提交了、
@@ -111,8 +128,6 @@ def apply_retractions(
             state = _reselect_current(storage, r, sig, now=now)
             if state == "reselected":
                 outcome.reselected += 1
-            elif state == "contended":
-                outcome.contended += 1
 
     return outcome
 
@@ -224,7 +239,7 @@ def _reselect_current(storage: StoragePort, r: Retraction,
                 break
         if not lost:
             return "reselected"
-    return "contended"
+    raise RetryableProjectionError("current", r.signal, _MAX_CAS_RETRIES)
 
 
 __all__ = ["apply_retractions", "RetractionOutcome"]

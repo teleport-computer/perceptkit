@@ -32,6 +32,7 @@ from ..ports.storage import StoragePort
 from ..rules.types import EventDefinition, RuleResult
 from .dispatch import RuleOutcome, definitions_for_signal, evaluate_and_enqueue
 from .normalize import NormalizedObservation
+from .mutation import rule_keys
 
 #: 算连续天数时最多往回看多少天。不设上限的话，一条"连续 N 天"的规则
 #: 会在每次日聚合时把整个历史读一遍。
@@ -165,7 +166,12 @@ def evaluate_daily(
     outcome = ScheduledOutcome()
     context = IngestContext(subject_id=subject_id, received_at=now)
 
-    with storage.transaction():
+    with storage.mutation_transaction() as mutation:
+        items = [_fake_observation(signals[d.signal], subject_id=subject_id,
+                                   when=now, day=local_date)
+                 for d in definitions if d.condition_type == "streak"
+                 and d.enabled and d.signal in signals]
+        mutation.acquire(rule_keys(items, definitions))
         for definition in definitions:
             if definition.condition_type != "streak" or not definition.enabled:
                 continue
@@ -181,6 +187,7 @@ def evaluate_daily(
                 extra_evaluators=extra_evaluators,
                 extra_context={"streak_length": length},
                 signal_definition=signal,
+                mutation=mutation,
             )
             outcome.events.extend(rules.events)
             outcome.misses.extend(rules.misses)
@@ -208,7 +215,12 @@ def evaluate_absence(
     outcome = ScheduledOutcome()
     context = IngestContext(subject_id=subject_id, received_at=now)
 
-    with storage.transaction():
+    with storage.mutation_transaction() as mutation:
+        items = [_fake_observation(signals[d.signal], subject_id=subject_id,
+                                   when=now, day=now.date())
+                 for d in definitions if d.condition_type == "absence"
+                 and d.enabled and d.signal in signals]
+        mutation.acquire(rule_keys(items, definitions))
         for definition in definitions:
             if definition.condition_type != "absence" or not definition.enabled:
                 continue
@@ -235,6 +247,7 @@ def evaluate_absence(
                 extra_evaluators=extra_evaluators,
                 extra_context={"silent_seconds": silent},
                 signal_definition=signal,
+                mutation=mutation,
             )
             outcome.events.extend(rules.events)
             outcome.misses.extend(rules.misses)

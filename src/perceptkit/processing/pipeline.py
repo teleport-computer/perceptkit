@@ -44,6 +44,7 @@ from . import aggregate as _aggregate
 from .dispatch import evaluate_and_enqueue
 from .normalize import NormalizedObservation, _canonical, normalize_observations
 from .facts import decide_fact, durable_identity, detail_proves_revision
+from .mutation import acquire_ingest
 
 #: 聚合算法的版本。改了口径就加这个数并重算，**不原地改写旧统计的语义** ——
 #: 否则同一张表里一半是老口径一半是新口径，而且看不出来。
@@ -143,7 +144,7 @@ def ingest_report(
     # 之前是"先认领、再逐条各自提交"：第 1 条提交后崩溃，重试会直接拿到
     # duplicate，剩下的观测【永久丢失】——批级幂等把一次中断伪装成了"已处理完"。
     # 代价是单个事务变长，所以 max_observations 是必须的,不是可选的。
-    with storage.transaction():
+    with storage.mutation_transaction() as mutation:
         # ① 批级幂等。同 identity 同摘要 -> 返回原结果不重复处理；
         #    同 identity 异摘要 -> conflict，不静默覆盖。
         claim = storage.claim_report(
@@ -171,6 +172,8 @@ def ingest_report(
             rejected=list(normalized.rejected),
             warnings=list(normalized.warnings),
         )
+        acquire_ingest(mutation, storage, normalized.normalized, signals, definitions,
+                       AGGREGATION_VERSION)
 
         # A batch is immutable: array order must never choose the winner among
         # two different contents claiming the same Fact revision. Preflight all
@@ -197,7 +200,8 @@ def ingest_report(
                 continue
             sig = signals[item.stored.signal]
             _apply_one(item, sig, context=context, storage=storage, outcome=outcome,
-                       definitions=definitions, extra_evaluators=extra_evaluators)
+                       definitions=definitions, extra_evaluators=extra_evaluators,
+                       mutation=mutation)
 
         status, code = _receipt.INGEST_ACCEPTED, None
         if outcome.conflicts:
@@ -265,6 +269,7 @@ def _apply_one(
     outcome: IngestOutcome,
     definitions: Sequence[EventDefinition] = (),
     extra_evaluators: Mapping[str, Callable[..., Any]] | None = None,
+    mutation=None,
 ) -> None:
     """③~⑨：一条观测的落地，以及命中规则时写发件箱。
 
@@ -410,6 +415,7 @@ def _apply_one(
             item, context=context, storage=storage,
             definitions=eligible_definitions, extra_evaluators=extra_evaluators,
             signal_definition=sig,
+            mutation=mutation,
         )
         outcome.events.extend(rules.events)
         outcome.rule_misses.extend(rules.misses)

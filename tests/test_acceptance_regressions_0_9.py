@@ -190,6 +190,7 @@ def test_acceptance_A04_A05_report_semantic_change_is_conflict(field, replacemen
 
 
 def test_acceptance_A07_interleaved_workouts_do_not_lose_an_aggregate_update():
+    from perceptkit import RetryableMutationError
     class InterleavedAggregateRead(InMemoryStorage):
         after_read = None
 
@@ -205,9 +206,18 @@ def test_acceptance_A07_interleaved_workouts_do_not_lose_an_aggregate_update():
     def workout(kit, minutes, eid, at):
         return ingest(kit, [observation({"workout_type": "running", "duration_minutes": minutes},
                                        signal="health_workout", eid=eid, at=at)], report_id=eid, at=at)
-    # Pause A after its aggregate read; B reads and commits before A's write.
-    storage.after_read = lambda: workout(second, 45, "B", T + timedelta(minutes=1))
+    # Pause A after its aggregate read. Ownership may reject B; the caller then
+    # retries B after A commits. Without ownership, exercise the original CAS race.
+    retry = []
+    def race():
+        try:
+            workout(second, 45, "B", T + timedelta(minutes=1))
+        except RetryableMutationError:
+            retry.append(True)
+    storage.after_read = race
     workout(first, 30, "A", T)
+    if retry:
+        workout(second, 45, "B", T + timedelta(minutes=1))
     before = aggregate(storage, "health_workout").typed_aggregate["duration_minutes"]["total"]
     first.recompute_aggregates(subject_id="u", signal="health_workout", start=DAY, end=DAY,
                                now=T + timedelta(hours=1))
@@ -216,6 +226,7 @@ def test_acceptance_A07_interleaved_workouts_do_not_lose_an_aggregate_update():
 
 
 def test_acceptance_A08_retraction_between_fact_check_and_write_cannot_resurrect():
+    from perceptkit import RetryableMutationError
     class InterleavedRetractionRead(InMemoryStorage):
         after_read = None
 
@@ -228,8 +239,18 @@ def test_acceptance_A08_retraction_between_fact_check_and_write_cannot_resurrect
 
     storage = InterleavedRetractionRead()
     first, second = PerceptionKit(storage), PerceptionKit(storage)
-    storage.after_read = lambda: retract(second, "A")
+    # A synchronous callback cannot wait for its paused caller to commit. Model
+    # the public contention/retry contract, retaining the original final checks.
+    retry = []
+    def race():
+        try:
+            retract(second, "A")
+        except RetryableMutationError:
+            retry.append(True)
+    storage.after_read = race
     weigh(first, 70)
+    if retry:
+        retract(second, "A")
     assert storage.list_retractions(subject_id="u", signal="health_weight")
     view = second.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"]
     assert view.value is None and view.last_known is None, view

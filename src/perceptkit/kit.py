@@ -237,9 +237,13 @@ class PerceptionKit:
         # 于是谁也没去重算；后来虽然重算了，却是在事务**外面**做的 ——
         # 撤回提交了、重算崩了，两边再也对不上，下一轮还以为上一轮成功了。
         def _rebuild(subject_id: str, signal: str, day) -> None:
-            self.recompute_aggregates(
+            # apply_retractions has already acquired ALL affected aggregate
+            # resources. Reuse that transaction, never create a nested owner.
+            from .processing.recompute import _recompute_owned_range
+            _recompute_owned_range(
+                self.storage, self.signals,
                 subject_id=subject_id, signal=signal,
-                start=day, end=day, now=now,
+                start_date=day, end_date=day, now=now, version=AGGREGATION_VERSION,
                 # 明细可能已经按保留期清掉了。清掉之后重算会得到一份
                 # 残缺统计，而那比"没重算"更糟 —— 旧值已经被覆盖。
                 allow_incomplete=False,

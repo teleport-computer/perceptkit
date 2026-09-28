@@ -40,6 +40,38 @@ from ..contracts.receipt import (
     IngestReceipt,
     WakeReceipt,
 )
+from ..contracts.mutation import canonical_keys, RetryableMutationError
+
+
+class _MemoryMutationOwner:
+    def __init__(self, storage):
+        self.storage = storage
+        self.keys = set()
+        self.active = True
+        self.failed = False
+
+    def validate(self):
+        if (not self.active or self.failed or any(
+                self.storage._mutation_locks.get(key) is not self for key in self.keys)):
+            self.failed = True
+            raise RetryableMutationError("mutation owner expired, aborted or lost its fence")
+
+    def acquire(self, keys):
+        def fail(reason):
+            self.failed = True
+            raise RetryableMutationError(reason)
+
+        self.validate()
+        if tuple(keys) != canonical_keys(keys):
+            fail("mutation keys must be sorted and unique")
+        new = set(keys) - self.keys
+        if new and self.keys and min(new) < max(self.keys):
+            fail("mutation lock order violation")
+        if any(key in self.storage._mutation_locks for key in new):
+            fail("mutation resource is owned by another operation")
+        for key in new:
+            self.storage._mutation_locks[key] = self
+        self.keys.update(new)
 
 
 class InMemoryStorage:
@@ -63,8 +95,23 @@ class InMemoryStorage:
         #: 测试用：数一数事务嵌套层数，验证调用方确实把该原子的操作包起来了。
         self.transaction_depth = 0
         self.transactions_opened = 0
+        self._mutation_locks = {}
 
     # -- 事务 ------------------------------------------------------------
+
+    @contextmanager
+    def mutation_transaction(self):
+        """Deterministic try-lock/fence reference, NOT a multithreaded adapter."""
+        owner = _MemoryMutationOwner(self)
+        try:
+            with self.transaction():
+                yield owner
+                owner.validate()
+        finally:
+            owner.active = False
+            for key in owner.keys:
+                if self._mutation_locks.get(key) is owner:
+                    del self._mutation_locks[key]
 
     @contextmanager
     def transaction(self) -> Iterator[None]:

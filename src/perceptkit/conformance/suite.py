@@ -687,17 +687,73 @@ def _g14_a_repeated_transition_is_a_new_event_a_replay_is_not(
     ).normalized[0]
     ids = []
     for _ in range(2):
-        with s2.transaction():
+        from ..processing.mutation import rule_keys
+        with s2.mutation_transaction() as mutation:
+            mutation.acquire(rule_keys([item], [rule]))
             s2.put_rule_state(subject_id="u1", definition_id=rule.definition_id,
                               scope_key=scope, state=dict(before or {}))
             out = evaluate_and_enqueue(item, context=ctx, storage=s2,
-                                       definitions=[rule])
+                                       definitions=[rule], mutation=mutation)
         ids += [e.event_id for e in out.events]
     if arrivals(s2) != 1 or len(ids) != 1:
         problems.append(
             f"⑭: 同一条观测从同一个状态重放，发件箱里有 {arrivals(s2)} 个事件、"
             f"入队成功 {len(ids)} 次，应该都是 1 —— 崩溃重放会让用户被提醒两次"
         )
+    return problems
+
+
+def _g15_mutation_and_aggregate_cas(new: StorageFactory) -> list[str]:
+    """Sequential contract only; real competing connections remain host proof."""
+    from ..contracts.mutation import aggregate_key, fact_key, RetryableMutationError
+
+    problems = []
+    s = new()
+    row = DailyAggregate(subject_id="u1", signal="steps", local_date=DAY,
+                         aggregation_kind="daily", aggregation_version=7,
+                         typed_aggregate={"n": 1}, updated_at=T0)
+    def get():
+        return next(a for a in s.get_aggregate(subject_id="u1", signal="steps",
+                    start_date=DAY, end_date=DAY) if a.aggregation_version == 7)
+    with s.mutation_transaction() as owner:
+        owner.acquire([aggregate_key("u1", "steps", DAY, "daily", 7)])
+        if not s.compare_and_put_aggregate(row, expected_version=-1) or get().version != 0:
+            problems.append("aggregate CAS: missing=-1, first successful write=0")
+        before = get()
+        if s.compare_and_put_aggregate(replace(row, typed_aggregate={"n": 99}), expected_version=-1) or get() != before:
+            problems.append("aggregate CAS: failed compare must change nothing")
+        if not s.compare_and_put_aggregate(row, expected_version=0) or get().version != 1:
+            problems.append("aggregate CAS: successful compare increments write version")
+        s.put_aggregate(row)
+        if get().version != 2 or get().aggregation_version != 7:
+            problems.append("aggregate CAS: ordinary put increments write version, not algorithm version")
+        before = get()
+        if s.compare_and_put_aggregate(row, expected_version=1) or get() != before:
+            problems.append("aggregate CAS: ordinary put must stale a prior read")
+    # A rollback-only owner must not commit just because application code caught
+    # its failure, and an expired capability must never acquire another lock.
+    try:
+        with s.mutation_transaction() as owner:
+            owner.acquire([aggregate_key("u1", "steps", DAY, "daily", 7)])
+            s.put_aggregate(replace(row, typed_aggregate={"n": 22}))
+            try:
+                owner.acquire([fact_key("u1", "steps", "ios", "late")])
+            except RetryableMutationError:
+                pass
+            else:
+                problems.append("mutation ownership: descending acquisition must abort")
+    except RetryableMutationError:
+        pass
+    else:
+        problems.append("mutation ownership: caught ownership failure still rolls back")
+    if get() != before:
+        problems.append("mutation ownership: aborted operation left a partial write")
+    try:
+        owner.acquire([aggregate_key("u1", "steps", DAY, "daily", 7)])
+    except RetryableMutationError:
+        pass
+    else:
+        problems.append("mutation ownership: owner remained usable after transaction exit")
     return problems
 
 
@@ -716,6 +772,7 @@ GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
     "⑫终态可查与翻页下推": _g12_terminal_events_and_offsets_are_queryable,
     "⑬删除只命中自己的范围": _g13_deletes_hit_exactly_their_own_scope,
     "⑭同一跳变再发生是新事件": _g14_a_repeated_transition_is_a_new_event_a_replay_is_not,
+    "⑮mutation ownership与aggregate CAS": _g15_mutation_and_aggregate_cas,
 }
 
 #: 这几条在内存实现上**永远是绿的**，因为内存天然原子、天然无并发。
@@ -724,7 +781,7 @@ NOT_PROVABLE_IN_MEMORY: frozenset[str] = frozenset({"⑤提供原子边界"})
 
 
 def run_storage_conformance(factory: StorageFactory) -> list[str]:
-    """跑全部十四条，返回问题清单（空 = 通过）。
+    """跑全部十五条，返回问题清单（空 = 通过）。
 
     返回列表而不是抛异常：一次看到全部缺口，比逐个修再重跑快得多。
     """

@@ -27,6 +27,7 @@ from typing import Mapping
 from ..contracts.records import DailyAggregate
 from ..manifest.types import PERMANENT, SignalDefinition
 from ..ports.storage import StoragePort
+from ..contracts.mutation import aggregate_key, canonical_keys
 from . import aggregate as _aggregate
 from .retract import canonical_revisions as _canonical
 from .retract import drop_retracted as _drop_retracted
@@ -134,6 +135,7 @@ def recompute_range(
     version: int,
     now: datetime,
     allow_incomplete: bool = False,
+    mutation=None,
 ) -> RecomputeOutcome:
     """按 ``version`` 重算一段日期的聚合。
 
@@ -143,6 +145,25 @@ def recompute_range(
     ``allow_incomplete=False``（默认）时，明细可能已经不全的日子**不算**，
     并在 ``skipped`` 里说明原因。
     """
+    if mutation is None:
+        with storage.mutation_transaction() as owner:
+            return recompute_range(
+                storage, signals, subject_id=subject_id, signal=signal,
+                start_date=start_date, end_date=end_date, version=version,
+                now=now, allow_incomplete=allow_incomplete, mutation=owner,
+            )
+    days = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
+    mutation.acquire(canonical_keys([
+        aggregate_key(subject_id, signal, day, "daily", version) for day in days
+    ]))
+    return _recompute_owned_range(storage, signals, subject_id=subject_id, signal=signal,
+                                  start_date=start_date, end_date=end_date, version=version,
+                                  now=now, allow_incomplete=allow_incomplete)
+
+
+def _recompute_owned_range(storage, signals, *, subject_id, signal, start_date,
+                           end_date, version, now, allow_incomplete=False):
+    """Internal only: caller owns every affected aggregate through commit."""
     outcome = RecomputeOutcome()
     sig = signals.get(signal)
     if sig is None:

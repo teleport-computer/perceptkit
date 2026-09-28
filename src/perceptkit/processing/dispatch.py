@@ -130,6 +130,7 @@ def evaluate_and_enqueue(
     extra_evaluators: Mapping[str, Callable[..., RuleResult]] | None = None,
     extra_context: Mapping[str, Any] | None = None,
     signal_definition: Any = None,
+    mutation=None,
 ) -> RuleOutcome:
     """⑧⑨：对一条已经落地的观测求值，命中就写发件箱。
 
@@ -137,6 +138,19 @@ def evaluate_and_enqueue(
     但事件没进发件箱" —— 这次触发就永远丢了，而且规则要等到下一个范围
     才会重新武装。
     """
+    from .mutation import rule_keys
+
+    if mutation is None:
+        with storage.mutation_transaction() as owner:
+            owner.acquire(rule_keys([item], definitions))
+            return evaluate_and_enqueue(
+                item, context=context, storage=storage, definitions=definitions,
+                extra_evaluators=extra_evaluators, extra_context=extra_context,
+                signal_definition=signal_definition, mutation=owner,
+            )
+    # The explicit owner is the only supported reentrant path. Acquire verifies
+    # the subset is already held by an outer ingest/scheduled transaction.
+    mutation.acquire(rule_keys([item], definitions))
     outcome = RuleOutcome()
     stored = item.stored
     relevant = definitions_for_signal(

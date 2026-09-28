@@ -30,6 +30,7 @@ from ..contracts.records import (
 )
 from ..contracts.receipt import IngestReceipt, WakeReceipt
 from ..contracts.retraction import Retraction
+from ..contracts.mutation import MutationOwner
 
 
 @runtime_checkable
@@ -40,6 +41,36 @@ class StoragePort(Protocol):
     """
 
     # -- 事务 ------------------------------------------------------------
+
+    def mutation_transaction(self) -> ContextManager[MutationOwner]:
+        """Atomic transaction with explicit resource ownership, held through commit.
+
+        Every invocation is a distinct operation/owner, including nested calls.
+        Kit acquires all Fact keys first, discovers old revision dates under
+        those locks, then acquires Current, Aggregate and RuleState batches in
+        global tuple order. All Fact/projection/rule writes follow acquisition
+        of the complete set; the preceding atomic report claim rolls back too.
+        Standalone recompute starts at Aggregate; it never acquires Fact later.
+        Internal helpers reuse the explicit owner; do NOT infer reentrancy from
+        a thread, connection, or Python RLock. Unrelated resources may proceed.
+
+        PostgreSQL example: a dedicated transaction/connection per owner,
+        pg_try_advisory_xact_lock over a stable collision-safe key mapping (or
+        lock rows), READ COMMITTED reads AFTER locks, locks held until COMMIT or
+        ROLLBACK. Hash collisions may only cause extra contention, never unsafe
+        sharing; never use process-random Python hash. Fresh snapshots after a
+        wait are required; stale REPEATABLE READ snapshots need serialization
+        validation and full retry. A lease implementation must fence EVERY
+        protected write and commit; an expired lease cannot commit old work.
+
+        Contention/deadlock/serialization/fence failure is RetryableMutationError
+        and aborts the entire operation, including reports/identities/outbox.
+        The acquire contract forbids descending lock order and marks failures
+        rollback-only. Ordinary transaction() alone does not provide ownership.
+        Real two-connection isolation/fencing tests are required in each host;
+        sequential conformance and InMemory are NOT that evidence.
+        """
+        ...
 
     def transaction(self) -> ContextManager[None]:
         """一个原子边界。

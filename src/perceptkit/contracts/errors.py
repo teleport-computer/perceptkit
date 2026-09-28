@@ -40,4 +40,10 @@ class RetryableProjectionError(RuntimeError):
         super().__init__(f"{signal}: {projection} CAS exhausted after {attempts} attempts")
 
 
-__all__ = ["ContractError", "RetryableProjectionError", "LEGACY_REPORT_SEMANTICS_UNVERIFIABLE"]
+class RetryableMutationError(RuntimeError):
+    """Ownership/fence failed. Roll back and retry the complete operation."""
+
+    retryable = True
+
+
+__all__ = ["ContractError", "RetryableProjectionError", "RetryableMutationError", "LEGACY_REPORT_SEMANTICS_UNVERIFIABLE"]

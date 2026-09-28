@@ -34,7 +34,7 @@ from .catalog import CAPABILITIES, SIGNALS
 from .ports.definitions import DefinitionProviderPort, StaticDefinitions
 from .contracts import IngestContext, Observation, PerceptionEvent, ReportEnvelope, WakeReceipt
 from .kit import PerceptionKit
-from .contracts.errors import RetryableProjectionError
+from .contracts.errors import RetryableProjectionError, RetryableMutationError
 from .processing.source_sync import (
     FULL, INCREMENTAL, SyncBatch, SyncContractError, SyncOutcome,
 )
@@ -59,6 +59,7 @@ __all__ = [
     # 接入口
     "PerceptionKit",
     "RetryableProjectionError",
+    "RetryableMutationError",
     "SyncBatch", "SyncOutcome", "SyncContractError",
     "FULL", "INCREMENTAL",
     "ReportEnvelope", "Observation", "PerceptionEvent", "WakeReceipt", "IngestContext",
