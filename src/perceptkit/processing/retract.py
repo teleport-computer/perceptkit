@@ -31,7 +31,8 @@ from ..contracts.retraction import Retraction
 from ..manifest.types import SignalDefinition
 from ..ports.storage import StoragePort
 from ..contracts.errors import RetryableProjectionError
-from ..contracts.mutation import current_key, aggregate_key, canonical_keys, event_key
+from ..contracts.mutation import (current_key, aggregate_generation_key,
+                                  aggregate_key, canonical_keys, event_key)
 
 
 #: 当前值写入撞车时重读重判几次。和 ingest 那条路同一个数量级 ——
@@ -89,6 +90,16 @@ def apply_retractions(
         mutation.acquire(canonical_keys([key for key, _ in identities.values()]))
         affected = {(r.subject_id, r.signal, r.source, r.source_event_id): _affected_days(storage, r)
                     for r in retractions}
+        # Detail retention can make _affected_days empty. Durable Fact identity
+        # still knows which projection date became suspect; include it before
+        # aggregate locks so the same transaction can mark coverage incomplete.
+        for r in retractions:
+            key = (r.subject_id, r.signal, r.source, r.source_event_id)
+            for identity in storage.list_identities(
+                    subject_id=r.subject_id, signal=r.signal, source=r.source,
+                    fact_key=identities[r][1]):
+                if identity.fact_key == identities[r][1] and identity.effective_local_date:
+                    affected[key].add(identity.effective_local_date)
         current_resources = set()
         backfills = {}
         for r in retractions:
@@ -106,7 +117,20 @@ def apply_retractions(
                            update.source_event_identity_digest)] = update
         mutation.acquire(canonical_keys(list(current_resources)))
         mutation.acquire(canonical_keys([
-            aggregate_key(r.subject_id, r.signal, day, "daily", AGGREGATION_VERSION)
+            aggregate_generation_key(r.subject_id, r.signal, "daily")
+            for r in retractions
+        ]))
+        active_versions = {}
+        active_getter = getattr(storage, "get_active_aggregate_generation", None)
+        for r in retractions:
+            active = (active_getter(subject_id=r.subject_id, signal=r.signal,
+                                    aggregation_kind="daily")
+                      if callable(active_getter) else None)
+            active_versions[(r.subject_id, r.signal)] = (
+                active.aggregation_version if active else AGGREGATION_VERSION)
+        mutation.acquire(canonical_keys([
+            aggregate_key(r.subject_id, r.signal, day, "daily",
+                          active_versions[(r.subject_id, r.signal)])
             for r in retractions
             for day in affected[(r.subject_id, r.signal, r.source, r.source_event_id)]
         ]))
@@ -114,13 +138,8 @@ def apply_retractions(
         plans = {}
         planned_days = {}
         for r in retractions:
-            # Include durable dates for rule repair even if details expired.
-            # Aggregate incomplete-date recovery remains the Task 6C contract.
+            # Includes durable dates even when details expired.
             days = set(affected[(r.subject_id, r.signal, r.source, r.source_event_id)])
-            for identity in storage.list_identities(subject_id=r.subject_id, signal=r.signal,
-                                                     source=r.source, fact_key=identities[r][1]):
-                if identity.fact_key == identities[r][1] and identity.effective_local_date:
-                    days.add(identity.effective_local_date)
             plans[r] = repair_scopes(storage, subject=r.subject_id, signal=r.signal,
                                      definitions=definitions_for(r.subject_id) if definitions_for else (),
                                      definition_at=definition_at, days=days or None)

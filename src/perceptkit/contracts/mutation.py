@@ -27,6 +27,11 @@ def current_key(subject: str, signal: str, dimension_key: str) -> MutationKey:
     return ("20_current", subject, signal, dimension_key)
 
 
+def aggregate_generation_key(subject: str, signal: str, kind: str) -> MutationKey:
+    """Serializes active-pointer reads, incremental writes and cutover."""
+    return ("29_aggregate_generation", subject, signal, kind)
+
+
 def aggregate_key(subject: str, signal: str, day: date, kind: str,
                   aggregation_version: int) -> MutationKey:
     return ("30_aggregate", subject, signal, day.isoformat(), kind, str(aggregation_version))
@@ -60,4 +65,5 @@ class MutationOwner(Protocol):
 
 
 __all__ = ["MutationKey", "MutationOwner", "RetryableMutationError", "fact_key",
-           "current_key", "aggregate_key", "rule_key", "event_key", "canonical_keys"]
+           "current_key", "aggregate_generation_key", "aggregate_key",
+           "rule_key", "event_key", "canonical_keys"]

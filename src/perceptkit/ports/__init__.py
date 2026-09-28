@@ -15,5 +15,7 @@ from __future__ import annotations
 
 from .storage import StoragePort
 from .wake import WakePort
+from .definitions import DefinitionProviderPort, PersistentDefinitionProviderPort
 
-__all__ = ["StoragePort", "WakePort"]
+__all__ = ["StoragePort", "WakePort", "DefinitionProviderPort",
+           "PersistentDefinitionProviderPort"]

@@ -62,8 +62,10 @@ dimension_fields 当前复用两种角色：`latest` 是公共 Current 身份，
 v0.10 将误称为 pending_events 的集合正式改名为 **events**；没有两个别名。
 未提供 end 时，导出沿用固定远期时间判断 Current，新鲜度不表示导出时的实时时钟。
 无 start 或 end 的对应时间边界开放。日聚合是**版本化审计**：每条包含
-date、value、aggregation_version，不合并版本，也不声称是普通查询选中的活动版本；
-活动 generation 的发布/选择由后续独立合同负责。普通 get_daily/get_trend 不由此改成审计查询。
+date、value、aggregation_version、generation_id、completeness 和
+incomplete_reasons，不合并版本，也不声称是普通查询选中的活动版本；
+活动 generation 的发布/选择见 `aggregate-generations-and-definition-history.md`。
+普通 get_daily/get_trend 只读明确 active generation，不是审计查询。
 
 Kit 导出仍标记 `kit_managed_only=True`；Host 自己的载荷、加密信封、Runtime 业务数据
 由 Host 合并导出。不要把这份包级导出当成整个产品的数据导出。并发导出快照一致性

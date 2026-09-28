@@ -104,11 +104,14 @@ def streak_length(
         return 0
 
     start = through - timedelta(days=max_days - 1)
+    from ..queries.api import _active_aggregate_rows
     by_day = {
         a.local_date: a.typed_aggregate
-        for a in storage.get_aggregate(
+        for a in _active_aggregate_rows(
+            storage,
             subject_id=subject_id, signal=signal.key,
             start_date=start, end_date=through, aggregation_kind="daily",
+            include_incomplete=False,
         )
     }
 
@@ -155,6 +158,7 @@ def evaluate_daily(
     signals: Mapping[str, SignalDefinition],
     definitions: Sequence[EventDefinition],
     extra_evaluators: Mapping[str, Callable[..., RuleResult]] | None = None,
+    archive_definition=None,
 ) -> ScheduledOutcome:
     """某一天的聚合算完之后调一次，跑 ``streak`` 这类按天判的规则。
 
@@ -174,6 +178,9 @@ def evaluate_daily(
                  and d.enabled and d.signal in signals]
         mutation.acquire(rule_keys(items, definitions))
         mutation.acquire(canonical_keys([event_key(item.stored.subject_id, item.stored.signal) for item in items]))
+        if archive_definition is not None:
+            for definition in definitions:
+                archive_definition(definition)
         for definition in definitions:
             if definition.condition_type != "streak" or not definition.enabled:
                 continue
@@ -212,6 +219,7 @@ def evaluate_absence(
     signals: Mapping[str, SignalDefinition],
     definitions: Sequence[EventDefinition],
     extra_evaluators: Mapping[str, Callable[..., RuleResult]] | None = None,
+    archive_definition=None,
 ) -> ScheduledOutcome:
     """定时调，跑 ``absence``（该来的没来）这类规则。
 
@@ -232,6 +240,9 @@ def evaluate_absence(
                  and d.enabled and d.signal in signals]
         mutation.acquire(rule_keys(items, definitions))
         mutation.acquire(canonical_keys([event_key(item.stored.subject_id, item.stored.signal) for item in items]))
+        if archive_definition is not None:
+            for definition in definitions:
+                archive_definition(definition)
         for definition in definitions:
             if definition.condition_type != "absence" or not definition.enabled:
                 continue

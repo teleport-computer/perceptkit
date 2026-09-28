@@ -31,8 +31,14 @@ from __future__ import annotations
 from . import contracts, manifest, ports, processing, rules
 from .algorithms.attribution import attribute_episode, attribute_instant, split_across_midnight
 from .catalog import CAPABILITIES, SIGNALS
-from .ports.definitions import DefinitionProviderPort, StaticDefinitions
-from .contracts import IngestContext, Observation, PerceptionEvent, ReportEnvelope, WakeReceipt
+from .ports.definitions import (
+    DefinitionArchiveConflictError,
+    DefinitionProviderPort,
+    PersistentDefinitionProviderPort,
+    StaticDefinitions,
+)
+from .contracts import (AggregateGeneration, IngestContext, Observation,
+                        PerceptionEvent, ReportEnvelope, WakeReceipt)
 from .kit import PerceptionKit
 from .contracts.errors import RetryableProjectionError, RetryableMutationError, UnsupportedRetractionIdentityError, RuleStateAttributionIncompleteError
 from .processing.source_sync import (
@@ -65,6 +71,7 @@ __all__ = [
     "SyncBatch", "SyncOutcome", "SyncContractError",
     "FULL", "INCREMENTAL",
     "ReportEnvelope", "Observation", "PerceptionEvent", "WakeReceipt", "IngestContext",
+    "AggregateGeneration",
     "contracts", "manifest", "ports", "processing", "rules",
     # 算法
     "attribute_episode",
@@ -73,6 +80,8 @@ __all__ = [
     "CAPABILITIES",
     "SIGNALS",
     "DefinitionProviderPort",
+    "PersistentDefinitionProviderPort",
+    "DefinitionArchiveConflictError",
     "StaticDefinitions",
     "AGENT_PERCEPTION_SIGNALS",
     "project_signal",

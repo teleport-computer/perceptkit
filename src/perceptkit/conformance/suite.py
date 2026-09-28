@@ -39,6 +39,7 @@ from ..contracts import delivery as _delivery
 from ..contracts import receipt as _receipt
 from ..contracts.records import (
     CalendarEventMirror,
+    AggregateGeneration,
     ConflictRecord,
     CurrentProjection,
     DailyAggregate,
@@ -894,6 +895,70 @@ def _g17_durable_conflicts_and_metadata(new: StorageFactory) -> list[str]:
     return problems
 
 
+def _g18_aggregate_generation_cutover(new: StorageFactory) -> list[str]:
+    """Sequential D11/D13 semantics; real concurrent CAS remains host proof."""
+    problems = []
+    s = new()
+    old_row = DailyAggregate("u1", "steps", DAY, "daily", 2, {"n": 1}, updated_at=T0)
+    s.put_aggregate(old_row)
+    old = s.get_active_aggregate_generation(
+        subject_id="u1", signal="steps", aggregation_kind="daily")
+    if old is None or old.aggregation_version != 2:
+        return ["generation bootstrap did not establish explicit active pointer"]
+    tomorrow = DAY + timedelta(days=1)
+    candidate = AggregateGeneration(
+        "candidate", "u1", "steps", "daily", 3, DAY, tomorrow,
+        created_at=T0, updated_at=T0)
+    s.put_aggregate_generation(candidate)
+    s.put_aggregate(DailyAggregate("u1", "steps", DAY, "daily", 3, {"n": 10},
+                                   generation_id="candidate", updated_at=T0))
+    partial = replace(candidate, status="complete", completeness="complete",
+                      accounted_dates=(DAY,))
+    s.update_aggregate_generation(partial)
+    if s.activate_aggregate_generation(
+            subject_id="u1", signal="steps", aggregation_kind="daily",
+            generation_id="candidate", expected_active_generation_id=old.generation_id,
+            activated_at=T0):
+        problems.append("partial generation activated")
+    if s.get_active_aggregate_generation(
+            subject_id="u1", signal="steps", aggregation_kind="daily") != old:
+        problems.append("failed activation changed old active pointer")
+    s.put_aggregate(DailyAggregate("u1", "steps", tomorrow, "daily", 3, {"n": 20},
+                                   generation_id="candidate", updated_at=T0))
+    complete = replace(partial, accounted_dates=(DAY, tomorrow))
+    s.update_aggregate_generation(complete)
+    if not s.activate_aggregate_generation(
+            subject_id="u1", signal="steps", aggregation_kind="daily",
+            generation_id="candidate", expected_active_generation_id=old.generation_id,
+            activated_at=T0):
+        problems.append("complete generation did not activate")
+    active = s.get_active_aggregate_generation(
+        subject_id="u1", signal="steps", aggregation_kind="daily")
+    if active is None or active.generation_id != "candidate":
+        problems.append("activation pointer did not select candidate")
+    narrow = AggregateGeneration(
+        "narrow", "u1", "steps", "daily", 4, tomorrow, tomorrow,
+        status="complete", completeness="complete", accounted_dates=(tomorrow,),
+        created_at=T0, updated_at=T0)
+    s.put_aggregate_generation(narrow)
+    s.put_aggregate(DailyAggregate("u1", "steps", tomorrow, "daily", 4, {"n": 99},
+                                   generation_id="narrow", updated_at=T0))
+    if s.activate_aggregate_generation(
+            subject_id="u1", signal="steps", aggregation_kind="daily",
+            generation_id="narrow", expected_active_generation_id="candidate",
+            activated_at=T0):
+        problems.append("narrow candidate collapsed broader active history")
+    if not s.mark_active_aggregate_incomplete(
+            subject_id="u1", signal="steps", aggregation_kind="daily",
+            local_date=DAY, reason="detail_retention_expired", updated_at=T0):
+        problems.append("active incomplete marker was not persisted")
+    marked = s.get_active_aggregate_generation(
+        subject_id="u1", signal="steps", aggregation_kind="daily")
+    if marked is None or DAY not in marked.incomplete_dates or marked.completeness != "incomplete":
+        problems.append("active generation still claims complete after lost detail")
+    return problems
+
+
 GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
     "①上报与观测幂等": _g1_report_and_observation_idempotency,
     "②旧数据不覆盖新当前值": _g2_old_does_not_overwrite_new,
@@ -912,6 +977,7 @@ GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
     "⑮mutation ownership与aggregate CAS": _g15_mutation_and_aggregate_cas,
     "⑯dispatch fence与event invalidation": _g16_dispatch_fence_and_invalidation,
     "⑰durable conflict与canonical metadata": _g17_durable_conflicts_and_metadata,
+    "⑱aggregate generation原子切换与incomplete": _g18_aggregate_generation_cutover,
 }
 
 #: 这几条在内存实现上**永远是绿的**，因为内存天然原子、天然无并发。
@@ -920,7 +986,7 @@ NOT_PROVABLE_IN_MEMORY: frozenset[str] = frozenset({"⑤提供原子边界"})
 
 
 def run_storage_conformance(factory: StorageFactory) -> list[str]:
-    """跑全部十七条，返回问题清单（空 = 通过）。
+    """跑全部十八条，返回问题清单（空 = 通过）。
 
     返回列表而不是抛异常：一次看到全部缺口，比逐个修再重跑快得多。
     """

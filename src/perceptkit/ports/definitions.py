@@ -40,15 +40,37 @@ class DefinitionProviderPort(Protocol):
                       version: int) -> EventDefinition | None:
         """按 id + 版本回看一条规则，**包括已经停用或删除的**。
 
-        为什么必须能回看：事件只记 ``definition_id`` + ``definition_version``。
-        规则删掉之后，若这个方法答不出来，那些历史事件就变成一串无从追溯的
-        id —— 用户问「这条为什么叫醒我」再也答不了。
-
-        真的查不到就返回 None（比如宿主确实做了硬删除）。**返回 None 是
-        一个诚实的答案，编一条出来不是。**
+        真的查不到就返回 None。返回 None 是一个诚实的答案，编一条出来不是。
         """
         ...
 
+
+class DefinitionArchiveConflictError(ValueError):
+    """The same immutable definition identity was presented with new semantics."""
+
+    def __init__(self, definition_id: str, version: int):
+        super().__init__(
+            f"definition archive conflict for immutable key {definition_id}@v{version}"
+        )
+        self.definition_id = definition_id
+        self.version = version
+
+
+@runtime_checkable
+class PersistentDefinitionProviderPort(DefinitionProviderPort, Protocol):
+    """Production-capable definition history.
+
+    ``archive_definition`` must durably insert-if-absent by ``(id, version)``.
+    Equivalent retries are idempotent; conflicting content raises
+    :class:`DefinitionArchiveConflictError`.  ``persistent=True`` is an explicit
+    host assertion checked by readiness tooling; implementing a method in RAM is
+    not production durability.
+    """
+
+    persistent: bool
+
+    def archive_definition(self, definition: EventDefinition) -> None:
+        ...
 
 class StaticDefinitions:
     """一份固定的规则表（宿主装配时传进来的那份）。
@@ -58,13 +80,15 @@ class StaticDefinitions:
     """
 
     __slots__ = ("_definitions", "_by_key")
+    persistent = False
 
     def __init__(self, definitions: Sequence[EventDefinition] = ()):
         self._definitions = tuple(definitions)
         # (id, version) -> 规则。同一 id 的不同版本都留着，这样删掉/改版之后
         # 历史事件仍解释得出来。
-        self._by_key = {(d.definition_id, d.version): d
-                        for d in self._definitions}
+        self._by_key = {}
+        for definition in self._definitions:
+            self.archive_definition(definition)
 
     def definitions_for(self, subject_id: str) -> Sequence[EventDefinition]:
         # `subject_id is None` 的是宿主级规则，对所有人生效；带 subject_id 的
@@ -76,6 +100,13 @@ class StaticDefinitions:
     def definition_at(self, definition_id: str,
                       version: int) -> EventDefinition | None:
         return self._by_key.get((definition_id, version))
+
+    def archive_definition(self, definition: EventDefinition) -> None:
+        key = (definition.definition_id, definition.version)
+        existing = self._by_key.get(key)
+        if existing is not None and existing != definition:
+            raise DefinitionArchiveConflictError(*key)
+        self._by_key[key] = definition
 
     def __len__(self) -> int:
         return len(self._definitions)
@@ -92,10 +123,16 @@ def as_provider(source) -> DefinitionProviderPort:
     """
     if source is None:
         return StaticDefinitions(())
-    if isinstance(source, DefinitionProviderPort) and not isinstance(
-            source, (list, tuple)):
+    # Keep the read-only v0.9 provider shape source-compatible. Production
+    # readiness is assessed separately by PersistentDefinitionProviderPort.
+    if (not isinstance(source, (list, tuple))
+            and callable(getattr(source, "definitions_for", None))
+            and callable(getattr(source, "definition_at", None))):
         return source
     return StaticDefinitions(tuple(source))
 
 
-__all__ = ["DefinitionProviderPort", "StaticDefinitions", "as_provider"]
+__all__ = [
+    "DefinitionProviderPort", "PersistentDefinitionProviderPort",
+    "DefinitionArchiveConflictError", "StaticDefinitions", "as_provider",
+]

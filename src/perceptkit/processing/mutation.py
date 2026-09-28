@@ -2,7 +2,9 @@
 from dataclasses import replace
 
 from ..contracts.errors import ContractError, UnsupportedRetractionIdentityError
-from ..contracts.mutation import aggregate_key, canonical_keys, current_key, fact_key, rule_key, event_key
+from ..contracts.mutation import (aggregate_key, aggregate_generation_key,
+                                  canonical_keys, current_key, fact_key,
+                                  rule_key, event_key)
 from ..rules.engine import scope_key
 
 
@@ -157,8 +159,18 @@ def acquire_ingest(owner, storage, items, signals, definitions, version, definit
                 backfills[(update.subject_id, update.signal, update.source,
                            update.source_event_identity_digest)] = update
     owner.acquire(canonical_keys(list(currents)))
-    owner.acquire(canonical_keys([aggregate_key(subject, signal, day, "daily", version)
-                                  for subject, signal, day in days]))
+    scopes = {(subject, signal) for subject, signal, _ in days}
+    owner.acquire(canonical_keys([aggregate_generation_key(subject, signal, "daily")
+                                  for subject, signal in scopes]))
+    active_versions = {}
+    getter = getattr(storage, "get_active_aggregate_generation", None)
+    for subject, signal in scopes:
+        active = (getter(subject_id=subject, signal=signal, aggregation_kind="daily")
+                  if callable(getter) else None)
+        active_versions[(subject, signal)] = active.aggregation_version if active else version
+    owner.acquire(canonical_keys([aggregate_key(
+        subject, signal, day, "daily", active_versions[(subject, signal)])
+        for subject, signal, day in days]))
     replay_days.update(days)  # Includes legacy dates recovered from persisted detail.
     from .rule_repair import repair_scopes, repair_keys
     scopes = []

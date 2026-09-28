@@ -49,6 +49,10 @@ def weigh(kit, value, *, eid="A", at=T, revision=None, report_id=None, source="i
 def aggregate(storage, signal):
     rows = storage.get_aggregate(subject_id="u", signal=signal,
                                  start_date=DAY, end_date=DAY)
+    active = storage.get_active_aggregate_generation(
+        subject_id="u", signal=signal, aggregation_kind="daily")
+    rows = [row for row in rows if active is not None
+            and row.generation_id == active.generation_id]
     assert len(rows) == 1, rows
     return rows[0]
 

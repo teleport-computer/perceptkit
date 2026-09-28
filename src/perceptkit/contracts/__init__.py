@@ -52,6 +52,7 @@ from .records import (
     IGNORE,
     REPLACE,
     CalendarEventMirror,
+    AggregateGeneration,
     ConflictRecord,
     CurrentProjection,
     DailyAggregate,
@@ -87,7 +88,7 @@ __all__ = [
     "REPORT_SCHEMA_VERSION", "EVENT_SCHEMA_VERSION", "SUPPORTED_REPORT_VERSIONS",
     "UnsupportedSchemaVersion", "check_report_version",
     # 逻辑存储对象
-    "StoredObservation", "CurrentProjection", "DailyAggregate",
+    "StoredObservation", "CurrentProjection", "AggregateGeneration", "DailyAggregate",
     "ConflictRecord",
     "CalendarEventMirror", "ReminderItemMirror", "SourceSyncState",
     "DurableDedupeIdentity", "EventOutboxEntry",

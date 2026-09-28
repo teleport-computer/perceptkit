@@ -217,6 +217,18 @@ def test_host_reports_produce_byte_identical_results_to_v070():
         assert raw.pop("previous_fact")["fact_key"]
         assert raw.pop("completeness") == "complete"
         assert raw.pop("incomplete_reason") is None
+    # D11 adds explicit generation identity/completeness to aggregate storage.
+    # This fixture performs incremental v2 writes only, so strip those verified
+    # metadata additions before comparing pre-existing product behavior.
+    legacy_aggregates = {}
+    for key, raw in result["storage"]["aggregates"].items():
+        assert raw.pop("generation_id") == "legacy-v2"
+        assert raw.pop("completeness") == "complete"
+        assert raw.pop("incomplete_reasons") == []
+        suffix = "\x1flegacy-v2"
+        assert key.endswith(suffix)
+        legacy_aggregates[key[:-len(suffix)]] = raw
+    result["storage"]["aggregates"] = legacy_aggregates
     now = _canonical_json(result) + "\n"
     if now != golden:
         import difflib

@@ -37,7 +37,17 @@ def test_a_correct_adapter_passes_everything():
 
 
 def test_the_suite_covers_every_guarantee():
-    assert len(GUARANTEES) == 17
+    assert len(GUARANTEES) == 18
+
+
+def test_catches_an_adapter_that_activates_partial_generation():
+    def activate_aggregate_generation(self, **kwargs):
+        scope = (kwargs["subject_id"], kwargs["signal"], kwargs["aggregation_kind"])
+        self.active_aggregate_generations[scope] = kwargs["generation_id"]
+        return True
+    problems = run_storage_conformance(broken(
+        activate_aggregate_generation=activate_aggregate_generation))
+    assert hits(problems, "⑱")
 
 
 def test_catches_report_finalization_that_loses_terminal_failures():

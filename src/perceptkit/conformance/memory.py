@@ -16,7 +16,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 #: 排序时给「没有时间」的条目垫底用的哨兵，不参与任何业务判断。
 _EPOCH = datetime(1, 1, 1, tzinfo=timezone.utc)
@@ -25,6 +25,7 @@ from typing import Any, Iterator, Sequence
 from ..contracts import delivery as _delivery
 from ..contracts.records import (
     CalendarEventMirror,
+    AggregateGeneration,
     ConflictRecord,
     CurrentProjection,
     DailyAggregate,
@@ -86,7 +87,9 @@ class InMemoryStorage:
         self.identity_records: dict[tuple[str, str, str, str], DurableDedupeIdentity] = {}
         self.conflicts: dict[tuple[str, str], ConflictRecord] = {}
         self.current: dict[tuple[str, str, str], CurrentProjection] = {}
-        self.aggregates: dict[tuple[str, str, date, str, int], DailyAggregate] = {}
+        self.aggregates: dict[tuple[str, str, date, str, int, str], DailyAggregate] = {}
+        self.aggregate_generations: dict[tuple[str, str, str, str], AggregateGeneration] = {}
+        self.active_aggregate_generations: dict[tuple[str, str, str], str] = {}
         self.calendar: dict[tuple, CalendarEventMirror] = {}
         self.reminders: dict[tuple, ReminderItemMirror] = {}
         self.sync_state: dict[tuple[str, str, str], SourceSyncState] = {}
@@ -120,6 +123,7 @@ class InMemoryStorage:
     def transaction(self) -> Iterator[None]:
         """嵌套边界使用快照回滚；仅作同步端口参照，不证明数据库隔离。"""
         collections = ("reports", "observations", "identities", "identity_records", "current", "aggregates",
+                       "aggregate_generations", "active_aggregate_generations",
                        "calendar", "reminders", "sync_state", "rule_state", "outbox",
                        "receipts", "retractions", "conflicts")
         before = {key: deepcopy(getattr(self, key)) for key in collections}
@@ -333,29 +337,187 @@ class InMemoryStorage:
     def get_aggregate(self, *, subject_id, signal, start_date, end_date,
                       aggregation_kind=None, limit=None, offset=0):
         rows = [
-            a for (subj, sig, day, kind, _v), a in self.aggregates.items()
+            a for (subj, sig, day, kind, _v, _gid), a in self.aggregates.items()
             if subj == subject_id and sig == signal
             and start_date <= day <= end_date
             and (aggregation_kind is None or kind == aggregation_kind)
         ]
-        rows.sort(key=lambda a: (a.local_date, a.aggregation_kind, a.aggregation_version))
+        active = self.active_aggregate_generations.get((subject_id, signal, aggregation_kind or "daily"))
+        rows.sort(key=lambda a: (a.local_date, a.aggregation_kind,
+                                 0 if a.generation_id == active else 1,
+                                 a.aggregation_version, a.generation_id or ""))
         return rows[offset:None if limit is None else offset + limit]
 
     def put_aggregate(self, aggregate: DailyAggregate) -> None:
+        generation_id = aggregate.generation_id or f"legacy-v{aggregate.aggregation_version}"
+        if aggregate.generation_id != generation_id:
+            aggregate = replace(aggregate, generation_id=generation_id)
+        scope = (aggregate.subject_id, aggregate.signal, aggregate.aggregation_kind)
+        generation_key = (*scope, generation_id)
+        generation = self.aggregate_generations.get(generation_key)
+        if generation is None:
+            # Explicit legacy/bootstrap rule: the first directly inserted
+            # complete generation becomes active. Later versions are retained
+            # for audit until an explicit activation CAS.
+            active = self.active_aggregate_generations.get(scope)
+            status = "active" if active is None and aggregate.completeness == "complete" else (
+                "complete" if aggregate.completeness == "complete" else "incomplete")
+            generation = AggregateGeneration(
+                generation_id=generation_id, subject_id=aggregate.subject_id,
+                signal=aggregate.signal, aggregation_kind=aggregate.aggregation_kind,
+                aggregation_version=aggregate.aggregation_version,
+                requested_start_date=aggregate.local_date,
+                requested_end_date=aggregate.local_date,
+                status=status, completeness=aggregate.completeness,
+                accounted_dates=(aggregate.local_date,),
+                incomplete_dates=((aggregate.local_date,)
+                                  if aggregate.completeness == "incomplete" else ()),
+                incomplete_reasons=aggregate.incomplete_reasons,
+                created_at=aggregate.updated_at, updated_at=aggregate.updated_at,
+                activated_at=aggregate.updated_at if status == "active" else None,
+            )
+            self.aggregate_generations[generation_key] = generation
+            if status == "active":
+                self.active_aggregate_generations[scope] = generation_id
+        elif generation.status == "active":
+            days = tuple(sorted(set(generation.accounted_dates) | {aggregate.local_date}))
+            self.aggregate_generations[generation_key] = replace(
+                generation,
+                requested_start_date=min(generation.requested_start_date, aggregate.local_date),
+                requested_end_date=max(generation.requested_end_date, aggregate.local_date),
+                accounted_dates=days, updated_at=aggregate.updated_at or generation.updated_at,
+            )
         key = (
             aggregate.subject_id, aggregate.signal, aggregate.local_date,
-            aggregate.aggregation_kind, aggregate.aggregation_version,
+            aggregate.aggregation_kind, aggregate.aggregation_version, generation_id,
         )
         existing = self.aggregates.get(key)
         self.aggregates[key] = replace(aggregate, version=existing.version + 1 if existing else 0)
 
     def compare_and_put_aggregate(self, aggregate, *, expected_version) -> bool:
         key = (aggregate.subject_id, aggregate.signal, aggregate.local_date,
-               aggregate.aggregation_kind, aggregate.aggregation_version)
+               aggregate.aggregation_kind, aggregate.aggregation_version,
+               aggregate.generation_id or f"legacy-v{aggregate.aggregation_version}")
         existing = self.aggregates.get(key)
         if (existing.version if existing else -1) != expected_version:
             return False
         self.put_aggregate(aggregate)
+        return True
+
+    @staticmethod
+    def _generation_identity(generation):
+        return (generation.generation_id, generation.subject_id, generation.signal,
+                generation.aggregation_kind, generation.aggregation_version,
+                generation.requested_start_date, generation.requested_end_date)
+
+    def put_aggregate_generation(self, generation):
+        key = (generation.subject_id, generation.signal,
+               generation.aggregation_kind, generation.generation_id)
+        existing = self.aggregate_generations.get(key)
+        if existing is not None:
+            if self._generation_identity(existing) != self._generation_identity(generation):
+                raise ValueError("conflicting aggregate generation identity")
+            return False
+        self.aggregate_generations[key] = deepcopy(generation)
+        return True
+
+    def update_aggregate_generation(self, generation):
+        key = (generation.subject_id, generation.signal,
+               generation.aggregation_kind, generation.generation_id)
+        existing = self.aggregate_generations.get(key)
+        if existing is None:
+            raise ValueError("aggregate generation does not exist")
+        if self._generation_identity(existing) != self._generation_identity(generation):
+            raise ValueError("aggregate generation immutable identity changed")
+        allowed = {
+            "building": {"building", "complete", "failed", "incomplete"},
+            "complete": {"complete", "active", "failed"},
+            "active": {"active", "complete"},
+            "incomplete": {"incomplete", "failed"},
+            "failed": {"failed"},
+        }
+        if generation.status not in allowed[existing.status]:
+            raise ValueError(f"invalid aggregate generation transition {existing.status}->{generation.status}")
+        self.aggregate_generations[key] = deepcopy(generation)
+
+    def get_aggregate_generation(self, *, subject_id, signal, aggregation_kind, generation_id):
+        return deepcopy(self.aggregate_generations.get(
+            (subject_id, signal, aggregation_kind, generation_id)))
+
+    def list_aggregate_generations(self, *, subject_id, signal, aggregation_kind):
+        return deepcopy(sorted((g for (sub, sig, kind, _), g in self.aggregate_generations.items()
+                                if (sub, sig, kind) == (subject_id, signal, aggregation_kind)),
+                               key=lambda g: ((g.created_at or _EPOCH), g.generation_id)))
+
+    def get_active_aggregate_generation(self, *, subject_id, signal, aggregation_kind):
+        gid = self.active_aggregate_generations.get((subject_id, signal, aggregation_kind))
+        if gid is None:
+            return None
+        return deepcopy(self.aggregate_generations.get((subject_id, signal, aggregation_kind, gid)))
+
+    def activate_aggregate_generation(self, *, subject_id, signal, aggregation_kind,
+                                      generation_id, expected_active_generation_id,
+                                      activated_at):
+        scope = (subject_id, signal, aggregation_kind)
+        if self.active_aggregate_generations.get(scope) != expected_active_generation_id:
+            return False
+        key = (*scope, generation_id)
+        generation = self.aggregate_generations.get(key)
+        if generation is None or generation.status != "complete" or generation.completeness != "complete":
+            return False
+        required = {
+            generation.requested_start_date + timedelta(days=i)
+            for i in range((generation.requested_end_date - generation.requested_start_date).days + 1)
+        }
+        if set(generation.accounted_dates) != required or generation.incomplete_dates:
+            return False
+        if expected_active_generation_id is not None:
+            old = self.aggregate_generations.get((*scope, expected_active_generation_id))
+            if old is None:
+                return False
+            # A cutover replaces the whole ordinary-read generation. A narrower
+            # candidate would make previously visible history disappear; reject
+            # it instead of mixing the old version outside candidate coverage.
+            if (generation.requested_start_date > old.requested_start_date
+                    or generation.requested_end_date < old.requested_end_date):
+                return False
+        rows = [a for a in self.aggregates.values() if a.generation_id == generation_id
+                and (a.subject_id, a.signal, a.aggregation_kind) == scope]
+        if {a.local_date for a in rows} != required or any(a.completeness != "complete" for a in rows):
+            return False
+        if expected_active_generation_id is not None:
+            old_key = (*scope, expected_active_generation_id)
+            old = self.aggregate_generations.get(old_key)
+            if old is not None:
+                self.aggregate_generations[old_key] = replace(old, status="complete")
+        self.aggregate_generations[key] = replace(
+            generation, status="active", activated_at=activated_at, updated_at=activated_at)
+        self.active_aggregate_generations[scope] = generation_id
+        return True
+
+    def mark_active_aggregate_incomplete(self, *, subject_id, signal, aggregation_kind,
+                                         local_date, reason, updated_at):
+        scope = (subject_id, signal, aggregation_kind)
+        gid = self.active_aggregate_generations.get(scope)
+        if gid is None:
+            return False
+        key = (*scope, gid)
+        generation = self.aggregate_generations[key]
+        self.aggregate_generations[key] = replace(
+            generation, completeness="incomplete",
+            incomplete_dates=tuple(sorted(set(generation.incomplete_dates) | {local_date})),
+            incomplete_reasons=tuple(sorted(set(generation.incomplete_reasons) | {reason})),
+            updated_at=updated_at,
+        )
+        for aggregate_key_, aggregate in list(self.aggregates.items()):
+            if (aggregate.subject_id, aggregate.signal, aggregate.aggregation_kind,
+                    aggregate.generation_id, aggregate.local_date) == (
+                    subject_id, signal, aggregation_kind, gid, local_date):
+                self.aggregates[aggregate_key_] = replace(
+                    aggregate, completeness="incomplete",
+                    incomplete_reasons=tuple(sorted(set(aggregate.incomplete_reasons) | {reason})),
+                    updated_at=updated_at,
+                )
         return True
 
     # -- 来源镜像 --------------------------------------------------------
@@ -666,6 +828,9 @@ class InMemoryStorage:
             "observations": drop(self.observations, lambda k, v: v.subject_id),
             "current": drop(self.current, lambda k, v: k[0]),
             "aggregates": drop(self.aggregates, lambda k, v: k[0]),
+            "aggregate_generations": drop(self.aggregate_generations, lambda k, v: k[0]),
+            "active_aggregate_generations": drop(
+                self.active_aggregate_generations, lambda k, v: k[0]),
             "calendar": drop(self.calendar, lambda k, v: k[0]),
             "reminders": drop(self.reminders, lambda k, v: k[0]),
             "sync_state": drop(self.sync_state, lambda k, v: k[0]),

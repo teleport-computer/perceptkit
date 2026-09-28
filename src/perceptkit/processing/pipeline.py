@@ -100,6 +100,7 @@ def ingest_report(
     max_observations: int = 200,
     max_payload_bytes: int = 256 * 1024,
     definition_at=None,
+    archive_definition=None,
 ) -> IngestOutcome:
     """把一批上报走完前七步。
 
@@ -183,6 +184,9 @@ def ingest_report(
         )
         acquire_ingest(mutation, storage, normalized.normalized, signals, definitions,
                        AGGREGATION_VERSION, definition_at=definition_at)
+        if archive_definition is not None:
+            for definition in definitions:
+                archive_definition(definition)
 
         # A batch is immutable: array order must never choose the winner among
         # two different contents claiming the same Fact revision. Preflight all
@@ -323,6 +327,16 @@ def _apply_one(
         if reason:
             outcome.warnings.append(f"{stored.signal}: {reason}")
         if fact_decision in ("incomplete", "stale"):
+            if fact_decision == "incomplete":
+                marker = getattr(storage, "mark_active_aggregate_incomplete", None)
+                if callable(marker):
+                    for old in prior_revisions:
+                        if old.effective_local_date is not None:
+                            marker(subject_id=stored.subject_id, signal=stored.signal,
+                                   aggregation_kind="daily",
+                                   local_date=old.effective_local_date,
+                                   reason="fact_revision_details_incomplete",
+                                   updated_at=context.received_at)
             outcome.rejected.append((-1, (f"{stored.signal}: {reason}",)))
             return
         if prior_revisions and sig.stores_history:
@@ -333,6 +347,15 @@ def _apply_one(
             if any(r.effective_local_date is None or not any(
                 detail_proves_revision(detail, r, item) for detail in details
             ) for r in prior_revisions):
+                marker = getattr(storage, "mark_active_aggregate_incomplete", None)
+                if callable(marker):
+                    for old in prior_revisions:
+                        if old.effective_local_date is not None:
+                            marker(subject_id=stored.subject_id, signal=stored.signal,
+                                   aggregation_kind="daily",
+                                   local_date=old.effective_local_date,
+                                   reason="fact_revision_details_incomplete",
+                                   updated_at=context.received_at)
                 outcome.rejected.append((-1, (f"{stored.signal}: fact_revision_details_incomplete",)))
                 return
             active = drop_retracted(storage, canonical_revisions(details, sig),
@@ -343,6 +366,12 @@ def _apply_one(
                                                    start_date=day, end_date=day)
                 if any(a.aggregation_version == AGGREGATION_VERSION
                        and int(a.source_coverage.get("observations", 0)) > count for a in aggregates):
+                    marker = getattr(storage, "mark_active_aggregate_incomplete", None)
+                    if callable(marker):
+                        marker(subject_id=stored.subject_id, signal=stored.signal,
+                               aggregation_kind="daily", local_date=day,
+                               reason="fact_revision_details_incomplete",
+                               updated_at=context.received_at)
                     outcome.rejected.append((-1, (f"{stored.signal}: fact_revision_details_incomplete",)))
                     return
     if storage.has_seen_identity(
@@ -595,12 +624,19 @@ def _update_aggregate(
     # 「重置」和「修订」，混了的话「重置到 0」会被当成错值吃掉。
     typed = stored.typed_value or {}
     epoch = typed.get("counter_epoch_id")
+    active_getter = getattr(storage, "get_active_aggregate_generation", None)
+    active = (active_getter(subject_id=context.subject_id, signal=stored.signal,
+                            aggregation_kind=kind)
+              if callable(active_getter) else None)
+    aggregation_version = active.aggregation_version if active else AGGREGATION_VERSION
+    generation_id = active.generation_id if active else None
     for _ in range(MAX_CAS_RETRIES):
         existing = next((
             a for a in storage.get_aggregate(
                 subject_id=context.subject_id, signal=stored.signal,
                 start_date=day, end_date=day, aggregation_kind=kind,
-            ) if a.aggregation_version == AGGREGATION_VERSION
+            ) if a.aggregation_version == aggregation_version
+            and (generation_id is None or a.generation_id == generation_id)
         ), None)
         doc = _aggregate.fold_into_day(
             existing.typed_aggregate if existing else None, sig, typed,
@@ -615,8 +651,9 @@ def _update_aggregate(
             signal=stored.signal,
             local_date=day,
             aggregation_kind=kind,
-            aggregation_version=AGGREGATION_VERSION,
+            aggregation_version=aggregation_version,
             typed_aggregate=doc,
+            generation_id=generation_id,
             timezone_attribution=stored.timezone,
             source_coverage=coverage,
             updated_at=stored.received_at,
@@ -633,15 +670,23 @@ def _batch_digest(report: ReportEnvelope) -> str:
 
 def _rebuild_corrected_day(storage, sig, *, context, day):
     from .recompute import recompute_day
+    active_getter = getattr(storage, "get_active_aggregate_generation", None)
+    active = (active_getter(subject_id=context.subject_id, signal=sig.key,
+                            aggregation_kind="daily")
+              if callable(active_getter) else None)
+    aggregation_version = active.aggregation_version if active else AGGREGATION_VERSION
+    generation_id = active.generation_id if active else None
     for _ in range(MAX_CAS_RETRIES):
         old = next((row for row in storage.get_aggregate(
             subject_id=context.subject_id, signal=sig.key,
             start_date=day, end_date=day, aggregation_kind="daily",
-        ) if row.aggregation_version == AGGREGATION_VERSION), None)
+        ) if row.aggregation_version == aggregation_version
+            and (generation_id is None or row.generation_id == generation_id)), None)
         expected = old.version if old else -1
         rebuilt = recompute_day(storage, sig, subject_id=context.subject_id,
-                                day=day, version=AGGREGATION_VERSION,
-                                updated_at=context.received_at)
+                                day=day, version=aggregation_version,
+                                updated_at=context.received_at,
+                                generation_id=generation_id)
         if storage.compare_and_put_aggregate(replace(rebuilt, version=expected + 1),
                                              expected_version=expected):
             return

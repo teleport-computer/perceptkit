@@ -20,6 +20,7 @@ from typing import Any, ContextManager, Protocol, Sequence, runtime_checkable
 
 from ..contracts.records import (
     CalendarEventMirror,
+    AggregateGeneration,
     ConflictRecord,
     CurrentProjection,
     DailyAggregate,
@@ -254,13 +255,70 @@ class StoragePort(Protocol):
         """
         ...
 
+    def put_aggregate_generation(self, generation: AggregateGeneration) -> bool:
+        """Insert one immutable rebuild attempt; equivalent retry is idempotent.
+
+        The immutable identity fields are generation id, scope, algorithm
+        version and requested coverage. Conflicting reuse must fail closed.
+        Returns True for a new record and False for an equivalent existing one.
+        """
+        ...
+
+    def update_aggregate_generation(self, generation: AggregateGeneration) -> None:
+        """Persist status/completeness for an existing generation.
+
+        Immutable identity/coverage fields cannot change. Adapters must reject
+        backward or conflicting state transitions.
+        """
+        ...
+
+    def get_aggregate_generation(
+        self, *, subject_id: str, signal: str, aggregation_kind: str,
+        generation_id: str,
+    ) -> AggregateGeneration | None:
+        ...
+
+    def list_aggregate_generations(
+        self, *, subject_id: str, signal: str, aggregation_kind: str,
+    ) -> Sequence[AggregateGeneration]:
+        ...
+
+    def get_active_aggregate_generation(
+        self, *, subject_id: str, signal: str, aggregation_kind: str,
+    ) -> AggregateGeneration | None:
+        """Return the explicit active pointer, never max(version)."""
+        ...
+
+    def activate_aggregate_generation(
+        self, *, subject_id: str, signal: str, aggregation_kind: str,
+        generation_id: str, expected_active_generation_id: str | None,
+        activated_at: datetime,
+    ) -> bool:
+        """Atomically CAS the active pointer after validating full coverage.
+
+        Candidate must be complete, account for every requested day, contain a
+        complete aggregate row for every accounted data day, and belong to the
+        requested scope. Failure leaves the old pointer untouched.
+        """
+        ...
+
+    def mark_active_aggregate_incomplete(
+        self, *, subject_id: str, signal: str, aggregation_kind: str,
+        local_date: date, reason: str, updated_at: datetime,
+    ) -> bool:
+        """Durably flag stale active coverage without publishing partial data."""
+        ...
+
     def put_aggregate(self, aggregate: DailyAggregate) -> None:
         """写入或替换一个聚合。
 
-        按 ``(subject, signal, date, kind, aggregation_version)`` 覆盖 ——
-        换了 ``aggregation_version`` 就是新的一份，旧的留着，**不原地改写
-        旧统计的语义**。每次写入必须将写入 version 从现存值加一（新行为 0），
+        按 ``(subject, signal, date, kind, generation_id)`` 覆盖 ——
+        换了 generation（包括同一算法重试）就是新的一份，旧的留着，
+        **不原地改写旧统计的语义**。每次写入必须将写入 version 从现存值
+        加一（新行为 0），
         使已读旧值的增量 CAS 失败并重读。重算与事实变更仍须由调用方序列化。
+        写入 active generation 的新日期还必须原子扩展它的 requested coverage
+        和 accounted dates；否则下一次全量 cutover 会低估当前可见历史范围。
         """
         ...
 

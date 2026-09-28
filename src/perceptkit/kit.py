@@ -111,6 +111,36 @@ class PerceptionKit:
         return getattr(self, "_definition_archive", {}).get(
             (definition_id, version))
 
+    def _archive_definition(self, definition: EventDefinition) -> None:
+        """Archive before RuleState/Event writes; conflict means fail closed."""
+        from .ports.definitions import DefinitionArchiveConflictError
+        provider = self._definitions
+        archive = getattr(provider, "archive_definition", None)
+        if callable(archive):
+            archive(definition)
+            return
+        existing = provider.definition_at(definition.definition_id, definition.version)
+        if existing is not None and existing != definition:
+            raise DefinitionArchiveConflictError(definition.definition_id, definition.version)
+        # Read-only legacy providers remain source-compatible, but this fallback
+        # is process-local and is deliberately reported as not production-ready.
+        local = getattr(self, "_definition_archive", None)
+        if local is None:
+            local = {}
+            object.__setattr__(self, "_definition_archive", local)
+        key = (definition.definition_id, definition.version)
+        old = local.get(key)
+        if old is not None and old != definition:
+            raise DefinitionArchiveConflictError(*key)
+        local[key] = definition
+
+    def definition_provider_status(self) -> dict[str, bool]:
+        """Machine-readable production readiness; no inference from read methods."""
+        provider = self._definitions
+        persistent = bool(getattr(provider, "persistent", False)
+                          and callable(getattr(provider, "archive_definition", None)))
+        return {"persistent": persistent, "production_ready": persistent}
+
     # -- 写入侧 ----------------------------------------------------------
 
     def ingest(
@@ -139,6 +169,7 @@ class PerceptionKit:
             timezone_fallback=self.timezone_fallback,
             max_observations=self.max_observations,
             definition_at=self.definition_at,
+            archive_definition=self._archive_definition,
         )
         if dispatch and outcome.events:
             if self.wake is None:
@@ -185,24 +216,27 @@ class PerceptionKit:
             now=now, signals=self.signals,
             definitions=self.definitions_for(subject_id),
             extra_evaluators=self.extra_evaluators,
+            archive_definition=self._archive_definition,
         )
 
     def recompute_aggregates(
         self, *, subject_id: str, signal: str, start: date, end: date,
         now: datetime, version: int | None = None,
         allow_incomplete: bool = False,
+        generation_id: str | None = None,
     ):
         """聚合算法升级之后，按新版本把历史重算一遍。
 
         **默认拒绝重算明细可能已经被保留期清掉的日子** —— 拿残缺明细折出来的
-        永久统计会错一个数量级，而且旧值已经被覆盖、救不回来。真要算就显式
-        传 ``allow_incomplete=True``，结果里会标出来。
+        永久统计会错一个数量级，而且旧值已经被覆盖、救不回来。显式传
+        ``allow_incomplete=True`` 只生成 incomplete 审计候选，绝不激活。
         """
         return recompute_range(
             storage=self.storage, signals=self.signals, subject_id=subject_id,
             signal=signal, start_date=start, end_date=end,
             version=AGGREGATION_VERSION if version is None else version,
             now=now, allow_incomplete=allow_incomplete,
+            generation_id=generation_id,
         )
 
     def sync_source_mirror(self, batch, *, context: IngestContext):
@@ -329,6 +363,7 @@ class PerceptionKit:
             signals=self.signals,
             definitions=self.definitions_for(subject_id),
             extra_evaluators=self.extra_evaluators,
+            archive_definition=self._archive_definition,
         )
 
     # -- 读取侧 ----------------------------------------------------------

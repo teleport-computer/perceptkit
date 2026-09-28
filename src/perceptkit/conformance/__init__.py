@@ -19,10 +19,12 @@ from .report import (
     REPORT_GUARANTEES, REPORT_NOT_PROVABLE, run_report_conformance,
 )
 from .wake import WAKE_GUARANTEES, WAKE_NOT_PROVABLE, run_wake_conformance
+from .definitions import run_definition_provider_conformance
 
 __all__ = [
     "InMemoryStorage",
     "run_storage_conformance", "GUARANTEES", "NOT_PROVABLE_IN_MEMORY",
     "run_wake_conformance", "WAKE_GUARANTEES", "WAKE_NOT_PROVABLE",
     "run_report_conformance", "REPORT_GUARANTEES", "REPORT_NOT_PROVABLE",
+    "run_definition_provider_conformance",
 ]

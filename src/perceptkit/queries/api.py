@@ -218,6 +218,37 @@ class DailyView:
     value: dict[str, Any]
     #: 这一天有没有数据。**空缺的日子不补零** —— `no_data` 不是 0。
     has_data: bool = True
+    completeness: str = "complete"
+    incomplete_reasons: tuple[str, ...] = ()
+
+
+def _active_aggregate_rows(storage, *, subject_id, signal, start_date, end_date,
+                           aggregation_kind="daily", include_incomplete=True):
+    """Read one explicit active generation; never infer ``max(version)``."""
+    active_getter = getattr(storage, "get_active_aggregate_generation", None)
+    active = (active_getter(subject_id=subject_id, signal=signal,
+                            aggregation_kind=aggregation_kind)
+              if callable(active_getter) else None)
+    rows = storage.get_aggregate(
+        subject_id=subject_id, signal=signal, start_date=start_date,
+        end_date=end_date, aggregation_kind=aggregation_kind,
+    )
+    if active is not None:
+        rows = [row for row in rows if row.generation_id == active.generation_id]
+    else:
+        # Transitional adapter behavior for pre-D11 hosts. This is intentionally
+        # the Kit's declared current algorithm, not max(version) or insertion
+        # order. Production conformance requires an explicit active pointer.
+        from ..processing.pipeline import AGGREGATION_VERSION
+        rows = [row for row in rows if row.aggregation_version == AGGREGATION_VERSION]
+    if not include_incomplete:
+        rows = [row for row in rows if row.completeness == "complete"]
+    # Rebuild coverage includes no-data days as accounted rows; ordinary daily
+    # history keeps its long-standing no-zero/no-placeholder contract.
+    return [row for row in rows if not (
+        row.source_coverage.get("recomputed") is True
+        and int(row.source_coverage.get("observations", 0)) == 0
+    )]
 
 
 def get_daily_aggregates(
@@ -229,12 +260,14 @@ def get_daily_aggregates(
     补零是这类系统最常见的一个静默错误：十四天里两天没戴表，补两个 0 进去，
     平均睡眠时长立刻被拉垮，而且没有任何地方报错。
     """
-    rows = storage.get_aggregate(
-        subject_id=subject_id, signal=signal,
+    rows = _active_aggregate_rows(
+        storage, subject_id=subject_id, signal=signal,
         start_date=start_date, end_date=end_date, aggregation_kind="daily",
     )
     return [
-        DailyView(date=r.local_date.isoformat(), value=r.typed_aggregate)
+        DailyView(date=r.local_date.isoformat(), value=r.typed_aggregate,
+                  completeness=r.completeness,
+                  incomplete_reasons=r.incomplete_reasons)
         for r in sorted(rows, key=lambda r: r.local_date)
     ]
 
@@ -258,16 +291,21 @@ def get_trend(
     if fd.query_visibility == "never":
         return {"model": "none", "reason": "这个字段不对 agent 开放"}
 
-    rows = storage.get_aggregate(
-        subject_id=subject_id, signal=signal,
+    all_active_rows = _active_aggregate_rows(
+        storage, subject_id=subject_id, signal=signal,
         start_date=start_date, end_date=end_date, aggregation_kind="daily",
     )
+    incomplete_days = {row.local_date for row in all_active_rows
+                       if row.completeness != "complete"}
+    rows = [row for row in all_active_rows if row.completeness == "complete"]
     docs = [
         {"date": r.local_date.isoformat(), "doc": r.typed_aggregate}
         for r in sorted(rows, key=lambda r: r.local_date)
     ]
     span = (end_date - start_date).days + 1
-    coverage = {"days_with_data": len(docs), "days_missing": max(0, span - len(docs))}
+    coverage = {"days_with_data": len(docs),
+                "days_missing": max(0, span - len(docs) - len(incomplete_days)),
+                "days_incomplete": len(incomplete_days)}
 
     if not docs:
         return {"model": fd.trend_model, "reason": "这段时间一条数据都没有", **coverage}
@@ -530,7 +568,10 @@ def export_subject(
         if aggs:
             daily[signal] = [
                 {"date": a.local_date.isoformat(), "value": project(manifest[signal], a.typed_aggregate),
-                 "aggregation_version": a.aggregation_version}
+                 "aggregation_version": a.aggregation_version,
+                 "generation_id": a.generation_id,
+                 "completeness": a.completeness,
+                 "incomplete_reasons": list(a.incomplete_reasons)}
                 for a in sorted(aggs, key=lambda a: (a.local_date,
                                                      a.aggregation_version))
             ]
