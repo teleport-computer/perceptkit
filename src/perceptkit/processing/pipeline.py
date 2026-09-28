@@ -628,7 +628,7 @@ def _update_aggregate(
 
 def _batch_digest(report: ReportEnvelope) -> str:
     from .normalize import _digest
-    return "v2:" + _digest(canonical_semantics(report.semantic_payload()))
+    return "v2:" + _digest(canonical_semantics(report.semantic_payload(), fingerprint_nonfinite=True))
 
 
 def _rebuild_corrected_day(storage, sig, *, context, day):

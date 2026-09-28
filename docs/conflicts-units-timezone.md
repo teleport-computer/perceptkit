@@ -65,6 +65,13 @@ Wire example: `value: {weight_kg: 154}, units: {weight_kg: "lb"}` becomes
 explicit canonical unit is accepted even when absent from `accepted_units`.
 Unsupported units, malformed maps, undeclared/non-numeric fields, absent values
 and incompatible conversions produce an `invalid_units` observation problem.
+Numeric leaves must be finite and representable; overflow, nonfinite conversion
+results and expected numeric conversion errors produce `invalid_numeric_value`
+for that observation while valid siblings continue. No rejected numeric source
+evidence is persisted. Arbitrary programming errors still propagate and roll back.
+For direct Python inputs containing NaN/Infinity, Report fingerprinting records a
+deterministic invalid-payload digest; strict Fact canonicalization and storage
+never accept those values. Normal valid Report digests are unchanged.
 
 `StoredObservation` and `CurrentProjection` persist `source_units` and
 `source_values` separately from canonical `typed_value`. Restricted/undeclared
@@ -79,6 +86,12 @@ canonical-equivalent numbers expressed with a different explicit wire unit.
 Use a higher revision for such a correction and a new Report ID. Canonical
 omission and an empty units map have the same semantics. Explicit null units are
 invalid and distinct from omission; valid existing v2 digests are unchanged.
+
+Relative-jump baseline selection compares canonical Fact identities, including
+the manifest's fallback strategy and persisted observation time. Two absent
+source IDs do not prove one Fact. A late reading without a real predecessor is
+accepted without comparing it to future Current; if a real chronological
+predecessor exists, its canonical value still supplies the anomaly baseline.
 
 ## Timezone
 

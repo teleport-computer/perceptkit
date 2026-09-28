@@ -6,7 +6,29 @@ No pending candidate becomes an applied Observation or a remembered identity.
 from ..contracts.records import ConflictRecord, _compare_revisions
 from ..contracts.mutation import RetryableMutationError
 from ..manifest.units import relative_jump
-from .normalize import _digest
+from .normalize import _digest, identity_for
+
+
+def _current_is_same_fact(current, item, sig):
+    """Reconstruct the persisted Current's canonical Fact, never compare None IDs.
+
+    Source event IDs count only for the manifest's source-ID strategy; optional
+    IDs on fallback strategies cannot override the persisted timestamp/strategy.
+    This comparison does not grant fallback Facts new revision capabilities.
+    """
+    from ..contracts.context import IngestContext
+    from ..contracts.observation import Observation
+
+    row = item.stored
+    if current.source is None or current.source != row.source:
+        return False
+    evidence = Observation(sig.key, sig.schema_version, current.observed_at, current.availability,
+                           source_event_id=current.source_event_id,
+                           source_revision=current.source_revision)
+    _, existing_fact, _, _ = identity_for(
+        evidence, sig, IngestContext(row.subject_id, row.received_at),
+        source=current.source, content_digest="")
+    return existing_fact == item.fact_key
 
 
 def pending_conflicts(storage, item):
@@ -45,7 +67,8 @@ def relative_jump_reason(storage, item, sig, *, correction=False):
     # Corrections compare to their own latest applied Fact when it is still
     # available, not an unrelated newer measurement at the end of the timeline.
     prior = []
-    if correction and sig.stores_history and row.source_event_id:
+    if (correction and sig.stores_history and sig.identity_strategy == "source_event_id"
+            and row.source_event_id):
         from .retract import _all_observations, canonical_revisions, drop_retracted
         prior = [o for o in drop_retracted(storage, canonical_revisions(
                     _all_observations(storage, row.subject_id, row.signal), sig),
@@ -56,7 +79,7 @@ def relative_jump_reason(storage, item, sig, *, correction=False):
     if previous is None:
         for current in storage.get_current(subject_id=row.subject_id, signals=[row.signal]).get(row.signal, ()):
             if current.dimension_key == dimension and current.typed_value is not None:
-                same_fact = (current.source, current.source_event_id) == (row.source, row.source_event_id)
+                same_fact = _current_is_same_fact(current, item, sig)
                 if same_fact or current.observed_at <= row.occurred_at:
                     previous = current.typed_value
                     break

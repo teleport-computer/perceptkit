@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Any, Mapping
@@ -152,8 +153,10 @@ def canonical_units(obs: Observation, sig: SignalDefinition):
         return None, {}, {}, [f"{sig.key}: invalid_units: units must be an object"]
     value = dict(obs.value) if obs.value is not None else None
     known = sig.field_map()
-    problems = []
+    problems = _numeric_problems(value, sig.key)
     source_units, source_values = {}, {}
+    if problems:
+        return value, source_units, source_values, problems
     for key, unit in units.items():
         fd = known.get(key)
         if (fd is None or fd.value_type not in ("integer", "number")
@@ -168,8 +171,13 @@ def canonical_units(obs: Observation, sig: SignalDefinition):
             continue
         try:
             converted = convert(raw, source=unit, target=fd.unit)
+            if not math.isfinite(converted):
+                raise ValueError("conversion produced a nonfinite number")
         except UnitError as exc:
             problems.append(f"{sig.key}.{key}: invalid_units: {exc}")
+            continue
+        except (OverflowError, ValueError):
+            problems.append(f"{sig.key}.{key}: invalid_numeric_value: conversion is not finite/representable")
             continue
         value[key] = (int(converted) if fd.value_type == "integer" and converted.is_integer()
                       else converted)
@@ -177,6 +185,29 @@ def canonical_units(obs: Observation, sig: SignalDefinition):
         if fd.privacy_class != "restricted":
             source_units[key], source_values[key] = unit, raw
     return value, source_units, source_values, problems
+
+
+def _numeric_problems(value, where):
+    """Reject invalid numeric leaves before conversion or semantic hashing.
+
+    Unknown/nested fields are included: even discarded values remain part of
+    immutable wire semantics. Only numeric representation errors are caught;
+    programmer errors from other conversion operations must still propagate.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            if math.isfinite(float(value)):
+                return []
+        except (OverflowError, ValueError):
+            pass
+        return [f"{where}: invalid_numeric_value: number must be finite and representable"]
+    if isinstance(value, dict):
+        return [problem for key, item in value.items()
+                for problem in _numeric_problems(item, f"{where}.{key}")]
+    if isinstance(value, (list, tuple)):
+        return [problem for index, item in enumerate(value)
+                for problem in _numeric_problems(item, f"{where}[{index}]")]
+    return []
 
 
 def sanitize_value(

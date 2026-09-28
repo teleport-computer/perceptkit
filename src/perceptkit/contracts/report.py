@@ -30,11 +30,16 @@ from .errors import ContractError
 from .observation import Observation
 
 
-def canonical_semantics(value: Any) -> str:
+def canonical_semantics(value: Any, *, fingerprint_nonfinite: bool = False) -> str:
     """JSON canonicalization, with the contract's explicit datetime support.
 
     Arbitrary Python objects have no wire meaning; hashing their str/repr would
     invent an unstable protocol. Fail before claiming or applying a report.
+
+    Report-level fingerprinting may represent nonfinite Python numbers using
+    deterministic JSON encoder tokens (NaN/Infinity/-Infinity, distinct from
+    strings). That option records rejected Report semantics only; normalization
+    rejects each such observation before Fact semantics or persistence.
     """
     def encode(raw):
         if isinstance(raw, datetime):
@@ -42,7 +47,7 @@ def canonical_semantics(value: Any) -> str:
         raise TypeError(f"unsupported semantic value type: {type(raw).__name__}")
     try:
         return json.dumps(value, sort_keys=True, ensure_ascii=False,
-                          separators=(",", ":"), allow_nan=False, default=encode)
+                          separators=(",", ":"), allow_nan=fingerprint_nonfinite, default=encode)
     except (TypeError, ValueError) as exc:
         raise ContractError([f"report semantic payload: {exc}"]) from exc
 
