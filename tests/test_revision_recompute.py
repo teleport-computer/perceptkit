@@ -101,3 +101,77 @@ def test_a_revision_marked_unavailable_removes_the_fact_from_the_day():
          availability="unavailable")
     _, n = _rhr(s)
     assert n == 0
+
+
+@pytest.mark.parametrize("projection", ["current", "aggregate", "rule_state", "pending_event"])
+def test_acceptance_A09_retraction_repairs_every_derived_projection(projection):
+    from test_acceptance_regressions_0_9 import T, aggregate, fired_weight, retract
+    storage, kit = fired_weight()
+    old_event = next(iter(storage.outbox))
+    retract(kit)
+    if projection == "current":
+        assert kit.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"].value == {"weight_kg": 70}
+    elif projection == "aggregate":
+        assert aggregate(storage, "health_weight").typed_aggregate["weight_kg"] == 70
+    elif projection == "rule_state":
+        states = list(storage.rule_state.values())
+        assert len(states) == 1
+        assert (states[0]["previous_value"], states[0]["fired_in_scope"]) == (70, False)
+    else:
+        assert storage.outbox[old_event].delivery_state == "invalidated"
+        assert storage.list_pending_events(subject_id="u") == []
+
+
+def test_acceptance_A10_retracted_crossing_does_not_consume_next_real_crossing():
+    from test_acceptance_regressions_0_9 import T, fired_weight, retract, weigh
+    storage, kit = fired_weight()
+    old_event = next(iter(storage.outbox))
+    retract(kit)
+    out = weigh(kit, 73, eid="new-crossing", at=T + timedelta(hours=3))
+    assert len(out.events) == 1, out.rule_misses
+    assert out.events[0].event_id != old_event
+    assert out.events[0].previous == 70 and out.events[0].current == 73
+    assert [e.event_id for e in storage.list_pending_events(subject_id="u")] == [out.events[0].event_id]
+
+
+@pytest.mark.parametrize("phase", ["pending", "claimed"])
+def test_acceptance_A09_invalidated_fact_never_crosses_wake_boundary(monkeypatch, phase):
+    from test_acceptance_regressions_0_9 import T, RecordingWake, fired_weight, retract
+    storage, kit = fired_weight()
+    wake = RecordingWake()
+    kit.wake = wake
+    if phase == "pending":
+        retract(kit)
+    else:
+        claim = storage.claim_pending_event
+
+        def claim_then_retract(**kwargs):
+            entry = claim(**kwargs)
+            if entry is not None:
+                retract(kit)
+            return entry
+
+        # A worker already has a claimed copy while the fact is retracted.
+        monkeypatch.setattr(storage, "claim_pending_event", claim_then_retract)
+    kit.dispatch_pending(worker_id="worker", now=T + timedelta(hours=3))
+    assert wake.delivered == [], [event.to_dict() for event in wake.delivered]
+
+
+@pytest.mark.parametrize("projection", ["current", "aggregate", "rule_state", "pending_event"])
+def test_acceptance_A11_correction_repairs_every_derived_projection(projection):
+    from test_acceptance_regressions_0_9 import T, aggregate, fired_weight, weigh
+    storage, kit = fired_weight()
+    old_event = next(iter(storage.outbox))
+    out = weigh(kit, 70, eid="trigger", at=T + timedelta(hours=1), revision=2)
+    assert len(out.applied) == 1 and not out.duplicates
+    if projection == "current":
+        assert kit.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"].value == {"weight_kg": 70}
+    elif projection == "aggregate":
+        assert aggregate(storage, "health_weight").typed_aggregate["weight_kg"] == 70
+    elif projection == "rule_state":
+        states = list(storage.rule_state.values())
+        assert len(states) == 1
+        assert (states[0]["previous_value"], states[0]["fired_in_scope"]) == (70, False)
+    else:
+        assert storage.outbox[old_event].delivery_state == "invalidated"
+        assert storage.list_pending_events(subject_id="u") == []

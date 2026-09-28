@@ -525,3 +525,42 @@ def test_events_can_be_narrowed_by_type_and_by_time():
 
     by_time, _ = api.list_events(s, subject_id="u1", start=t("2026-08-15"))
     assert [e["event_id"] for e in by_time] == ["e2"]
+
+
+def test_acceptance_A17_public_current_preserves_both_anchor_dimensions():
+    from test_acceptance_regressions_0_9 import T, ingest, observation
+    storage = InMemoryStorage()
+    kit = PerceptionKit(storage)
+    for i, anchor in enumerate(("home", "office")):
+        out = ingest(kit, [observation({"anchor_id": anchor, "anchor_type": "wifi",
+                                        "label": anchor, "is_connected": True},
+                                       signal="proximity_anchor", eid=anchor,
+                                       at=T + timedelta(minutes=i))],
+                     report_id=anchor, at=T + timedelta(minutes=i))
+        assert len(out.applied) == 1
+    assert len(storage.get_current(subject_id="u", signals=["proximity_anchor"])["proximity_anchor"]) == 2
+    public = kit.get_current(subject_id="u", signals=["proximity_anchor"], now=T + timedelta(minutes=2))
+    # D10: measure lost dimensions in today's public API. This normalization is
+    # test-only, not a compatibility API or a v0.9.1 public shape requirement.
+    value = public["proximity_anchor"]
+    entries = value if isinstance(value, list) else [value]
+    assert {e.value["anchor_id"] for e in entries if e.value} == {"home", "office"}
+
+
+@pytest.mark.parametrize("query", ["daily", "trend"])
+def test_acceptance_A18_normal_queries_do_not_mix_aggregate_versions(query):
+    storage = InMemoryStorage()
+    # v2 is the current release's completed aggregate; v3 is a candidate.
+    # This gate deliberately does not invent an activation API. Regardless of
+    # the eventual mechanism, an ordinary one-day query must not show two days.
+    storage.put_aggregate(daily("steps", "2026-08-01", {"step_count": {"total": 8000}}, version=2))
+    storage.put_aggregate(daily("steps", "2026-08-01", {"step_count": {"total": 9000}}, version=3))
+    if query == "daily":
+        rows = api.get_daily_aggregates(storage, subject_id="u1", signal="steps",
+                                        start_date=date(2026, 8, 1), end_date=date(2026, 8, 1))
+        assert len(rows) == 1, rows
+    else:
+        result = api.get_trend(storage, subject_id="u1", signal="steps", field="step_count",
+                               manifest=MINIMAL_SIGNALS,
+                               start_date=date(2026, 8, 1), end_date=date(2026, 8, 1))
+        assert (result["days_with_data"], result["days_missing"]) == (1, 0), result
