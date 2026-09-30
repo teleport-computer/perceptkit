@@ -61,8 +61,8 @@ def fold_into_day(
     """
     doc = dict(prev_doc or {})
     # 跨字段的策略需要状态标签那一格。manifest 里状态字段自己不声明聚合，
-    # 所以从 dimension_fields 取 —— 「按什么分桶」和「当前值按什么并列」
-    # 本来就该是同一个答案，分成两处声明迟早漂开。
+    # 所以从 dimension_fields 取。current_policy=none 的信号（睡眠）仍有
+    # 聚合维度；声明了维度并不表示它必须发布 Current。
     bucket_field = sig.dimension_fields[0] if sig.dimension_fields else None
     for field_key, shape in aggregating_fields(sig):
         if field_key not in values:

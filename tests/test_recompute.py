@@ -73,11 +73,12 @@ def test_recomputing_reproduces_what_the_incremental_fold_produced():
 def test_a_rebuilt_aggregate_says_it_was_rebuilt():
     """排查「这个数字怎么变了」时，第一件事就是看它是不是被重算过。"""
     kit, s = build()
-    kit.recompute_aggregates(subject_id="u1", signal="steps",
-                             start=date(2026, 8, 26), end=date(2026, 8, 26), now=NOW)
-    row = s.get_aggregate(subject_id="u1", signal="steps",
-                          start_date=date(2026, 8, 26), end_date=date(2026, 8, 26),
-                          aggregation_kind="daily")[0]
+    out = kit.recompute_aggregates(subject_id="u1", signal="steps",
+                                   start=date(2026, 8, 26), end=date(2026, 8, 26), now=NOW)
+    row = next(row for row in s.get_aggregate(
+        subject_id="u1", signal="steps", start_date=date(2026, 8, 26),
+        end_date=date(2026, 8, 26), aggregation_kind="daily")
+        if row.generation_id == out.generation_id)
     assert row.source_coverage["recomputed"] is True
     assert row.source_coverage["observations"] == 3
 
@@ -112,8 +113,11 @@ def test_recomputing_twice_changes_nothing_the_second_time():
 
 def test_only_the_days_asked_for_are_touched():
     kit, s = build()
-    kit.recompute_aggregates(subject_id="u1", signal="steps",
-                             start=date(2026, 8, 26), end=date(2026, 8, 26), now=NOW)
+    out = kit.recompute_aggregates(subject_id="u1", signal="steps",
+                                   start=date(2026, 8, 26), end=date(2026, 8, 26), now=NOW)
+    assert not out.activated
+    assert out.skipped == [(date(2026, 8, 26),
+                            "candidate_coverage_does_not_cover_active_scope")]
     rows = s.get_aggregate(subject_id="u1", signal="steps",
                            start_date=date(2026, 8, 27), end_date=date(2026, 8, 27),
                            aggregation_kind="daily")
@@ -170,7 +174,10 @@ def test_the_caller_can_insist_but_has_to_say_so_explicitly():
         start=date(2024, 1, 1), end=date(2024, 1, 1), now=NOW,
         allow_incomplete=True,
     )
-    assert out.ok and out.rebuilt == [date(2024, 1, 1)]
+    # D13: compatibility flag now creates an explicitly incomplete audit
+    # candidate only. It can never replace the ordinary active result.
+    assert not out.ok and not out.activated and not out.rebuilt
+    assert out.incomplete == [(date(2024, 1, 1), "detail_retention_expired")]
 
 
 def test_a_signal_that_keeps_details_forever_is_never_refused():

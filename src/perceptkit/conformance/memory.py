@@ -3,9 +3,9 @@
 它存在的意义是让宿主在写自己的 adapter 之前，先有一个能跑通的参照，
 以及让 kit 自己的管线测试不依赖任何数据库。
 
-🔴 **它验不出真正的事务边界和隔离级别。** 内存实现天然是原子的、天然没有
-并发 —— "RuleState 和 Outbox 必须同事务"这类保证，在这里永远是绿的，
-不代表真实数据库上也绿。宿主必须另外用真实数据库、两条独立连接、
+🔴 **它验不出数据库事务边界和隔离级别。** 这里以快照实现异常回滚，
+提供同步 reference CAS，不提供多线程或独立连接隔离保证。
+宿主必须另外用真实数据库、两条独立连接、
 在关键写操作之间打断点，才能证明那条保证成立。
 
 在这里绿 = 端口语义、调用顺序、确定性没问题。
@@ -14,8 +14,9 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 #: 排序时给「没有时间」的条目垫底用的哨兵，不参与任何业务判断。
 _EPOCH = datetime(1, 1, 1, tzinfo=timezone.utc)
@@ -24,6 +25,8 @@ from typing import Any, Iterator, Sequence
 from ..contracts import delivery as _delivery
 from ..contracts.records import (
     CalendarEventMirror,
+    AggregateGeneration,
+    ConflictRecord,
     CurrentProjection,
     DailyAggregate,
     DurableDedupeIdentity,
@@ -31,6 +34,7 @@ from ..contracts.records import (
     ReminderItemMirror,
     SourceSyncState,
     StoredObservation,
+    _compare_revisions,
 )
 from ..contracts.receipt import (
     INGEST_ACCEPTED,
@@ -39,6 +43,38 @@ from ..contracts.receipt import (
     IngestReceipt,
     WakeReceipt,
 )
+from ..contracts.mutation import canonical_keys, RetryableMutationError
+
+
+class _MemoryMutationOwner:
+    def __init__(self, storage):
+        self.storage = storage
+        self.keys = set()
+        self.active = True
+        self.failed = False
+
+    def validate(self):
+        if (not self.active or self.failed or any(
+                self.storage._mutation_locks.get(key) is not self for key in self.keys)):
+            self.failed = True
+            raise RetryableMutationError("mutation owner expired, aborted or lost its fence")
+
+    def acquire(self, keys):
+        def fail(reason):
+            self.failed = True
+            raise RetryableMutationError(reason)
+
+        self.validate()
+        if tuple(keys) != canonical_keys(keys):
+            fail("mutation keys must be sorted and unique")
+        new = set(keys) - self.keys
+        if new and self.keys and min(new) < max(self.keys):
+            fail("mutation lock order violation")
+        if any(key in self.storage._mutation_locks for key in new):
+            fail("mutation resource is owned by another operation")
+        for key in new:
+            self.storage._mutation_locks[key] = self
+        self.keys.update(new)
 
 
 class InMemoryStorage:
@@ -48,8 +84,12 @@ class InMemoryStorage:
         self.reports: dict[tuple[str, str, str], IngestReceipt] = {}
         self.observations: dict[str, StoredObservation] = {}
         self.identities: set[tuple[str, str, str, str]] = set()
+        self.identity_records: dict[tuple[str, str, str, str], DurableDedupeIdentity] = {}
+        self.conflicts: dict[tuple[str, str], ConflictRecord] = {}
         self.current: dict[tuple[str, str, str], CurrentProjection] = {}
-        self.aggregates: dict[tuple[str, str, date, str, int], DailyAggregate] = {}
+        self.aggregates: dict[tuple[str, str, date, str, int, str], DailyAggregate] = {}
+        self.aggregate_generations: dict[tuple[str, str, str, str], AggregateGeneration] = {}
+        self.active_aggregate_generations: dict[tuple[str, str, str], str] = {}
         self.calendar: dict[tuple, CalendarEventMirror] = {}
         self.reminders: dict[tuple, ReminderItemMirror] = {}
         self.sync_state: dict[tuple[str, str, str], SourceSyncState] = {}
@@ -61,37 +101,102 @@ class InMemoryStorage:
         #: 测试用：数一数事务嵌套层数，验证调用方确实把该原子的操作包起来了。
         self.transaction_depth = 0
         self.transactions_opened = 0
+        self._mutation_locks = {}
 
     # -- 事务 ------------------------------------------------------------
 
     @contextmanager
-    def transaction(self) -> Iterator[None]:
-        """内存里没有真正的回滚 —— 只记录边界，供测试断言"该包起来的确实包了"。
+    def mutation_transaction(self):
+        """Deterministic try-lock/fence reference, NOT a multithreaded adapter."""
+        owner = _MemoryMutationOwner(self)
+        try:
+            with self.transaction():
+                yield owner
+                owner.validate()
+        finally:
+            owner.active = False
+            for key in owner.keys:
+                if self._mutation_locks.get(key) is owner:
+                    del self._mutation_locks[key]
 
-        **不要把这里的绿当成"原子性验过了"。** 见模块开头。
-        """
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """嵌套边界使用快照回滚；仅作同步端口参照，不证明数据库隔离。"""
+        collections = ("reports", "observations", "identities", "identity_records", "current", "aggregates",
+                       "aggregate_generations", "active_aggregate_generations",
+                       "calendar", "reminders", "sync_state", "rule_state", "outbox",
+                       "receipts", "retractions", "conflicts")
+        before = {key: deepcopy(getattr(self, key)) for key in collections}
         self.transaction_depth += 1
         self.transactions_opened += 1
         try:
             yield
+        except BaseException:
+            for key, value in before.items():
+                setattr(self, key, value)
+            raise
         finally:
             self.transaction_depth -= 1
 
     # -- 批级幂等 --------------------------------------------------------
+
+    def put_conflict(self, record):
+        key = (record.subject_id, record.conflict_id)
+        if key not in self.conflicts:
+            self.conflicts[key] = deepcopy(record)
+        return deepcopy(self.conflicts[key])
+
+    def list_conflicts(self, *, subject_id, signal=None, source=None,
+                       fact_key=None, status=None, start=None, end=None,
+                       limit=None, offset=0):
+        if status not in (None, "pending", "resolved"):
+            raise ValueError("conflict status must be pending or resolved")
+        return deepcopy(sorted((r for r in self.conflicts.values()
+                                if r.subject_id == subject_id
+                                and (signal is None or r.signal == signal)
+                                and (source is None or r.source == source)
+                                and (fact_key is None or r.fact_key == fact_key)
+                                and (status is None or r.status == status)
+                                and (start is None or r.created_at >= start)
+                                and (end is None or r.created_at <= end)),
+                               key=lambda r: (r.created_at, r.conflict_id))[
+                                   offset:None if limit is None else offset + limit])
+
+    def resolve_conflict(self, *, subject_id, conflict_id, revision,
+                         semantic_digest, observation_id, resolved_at):
+        key = (subject_id, conflict_id)
+        old = self.conflicts.get(key)
+        if old is None:
+            return False
+        if old.status == "resolved":
+            return (old.resolution_revision == revision
+                    and old.resolution_semantic_digest == semantic_digest
+                    and old.resolution_observation_id == observation_id)
+        if _compare_revisions(revision, old.candidate_revision) != 1:
+            return False
+        self.conflicts[key] = replace(old, status="resolved", updated_at=resolved_at,
+                                      resolved_at=resolved_at, resolution_revision=revision,
+                                      resolution_semantic_digest=semantic_digest,
+                                      resolution_observation_id=observation_id)
+        return True
 
     def claim_report(self, *, subject_id, producer, report_id, payload_digest,
                      received_at) -> IngestReceipt:
         key = (subject_id, producer, report_id)
         prior = self.reports.get(key)
         if prior is not None:
+            if prior.payload_digest == payload_digest and prior.status != INGEST_ACCEPTED:
+                return replace(prior, observations_applied=0)
             status = (INGEST_DUPLICATE if prior.payload_digest == payload_digest
                       else INGEST_CONFLICT)
             return IngestReceipt(
                 subject_id=subject_id, producer=producer, report_id=report_id,
                 payload_digest=prior.payload_digest, received_at=prior.received_at,
                 status=status,
-                error_code=None if status == INGEST_DUPLICATE else "digest_mismatch",
+                error_code=None if status == INGEST_DUPLICATE else "report_digest_conflict",
                 observations_applied=0,
+                observations_rejected=(prior.observations_rejected
+                                       if status == INGEST_DUPLICATE else ()),
             )
         fresh = IngestReceipt(
             subject_id=subject_id, producer=producer, report_id=report_id,
@@ -100,6 +205,29 @@ class InMemoryStorage:
         )
         self.reports[key] = fresh
         return fresh
+
+    def finalize_report(self, receipt):
+        key = (receipt.subject_id, receipt.producer, receipt.report_id)
+        prior = self.reports.get(key)
+        if prior is None or prior.payload_digest != receipt.payload_digest:
+            raise ValueError("report finalization requires matching claim")
+        if prior.status != INGEST_ACCEPTED and prior != receipt:
+            raise ValueError("cannot overwrite a terminal report failure")
+        self.reports[key] = receipt
+
+    def backfill_report_digest(self, *, subject_id, producer, report_id,
+                               expected_digest, payload_digest):
+        key = (subject_id, producer, report_id)
+        prior = self.reports.get(key)
+        if prior is None:
+            return False
+        if prior.payload_digest == payload_digest:
+            return True
+        if (prior.payload_digest != expected_digest or prior.payload_digest.startswith("v2:")
+                or not payload_digest.startswith("v2:")):
+            return False
+        self.reports[key] = replace(prior, payload_digest=payload_digest)
+        return True
 
     # -- 观测 ------------------------------------------------------------
 
@@ -142,10 +270,43 @@ class InMemoryStorage:
         if key in self.identities:
             return False
         self.identities.add(key)
+        self.identity_records[key] = identity
         return True
 
     def has_seen_identity(self, *, subject_id, signal, source, digest) -> bool:
         return (subject_id, signal, source, digest) in self.identities
+
+    def list_identities(self, *, subject_id, signal, source=None, fact_key=None):
+        scoped = [self.identity_records.get(key) or DurableDedupeIdentity(
+            subject_id=subject_id, signal=signal, source=key[2],
+            source_event_identity_digest=key[3], first_applied_at=_EPOCH,
+        ) for key in sorted(self.identities) if key[:2] == (subject_id, signal)
+            and (source is None or key[2] == source)]
+        return [row for row in scoped if fact_key is None or row.fact_key is None or row.fact_key == fact_key]
+
+    def backfill_identity(self, identity):
+        key = (identity.subject_id, identity.signal, identity.source,
+               identity.source_event_identity_digest)
+        if key not in self.identities:
+            raise ValueError("cannot backfill an unseen identity")
+        existing = self.identity_records.get(key)
+        if existing is not None and existing.fact_key is not None:
+            # An exact opaque match may have established identity but not date.
+            # Restored persisted detail may fill date/Current partition only
+            # when unknown; no identity/content/known attribution is replaced.
+            candidate = existing
+            if existing.dimension_key is None and identity.dimension_key is not None:
+                candidate = replace(candidate, dimension_key=identity.dimension_key)
+            if (existing.semantic_digest is None and existing.effective_local_date is None
+                    and identity.effective_local_date is not None):
+                candidate = replace(candidate, effective_local_date=identity.effective_local_date)
+            if candidate == identity:
+                self.identity_records[key] = identity
+                return
+            if existing != identity:
+                raise ValueError("conflicting durable identity metadata")
+            return
+        self.identity_records[key] = identity
 
     # -- 当前值 ----------------------------------------------------------
 
@@ -173,22 +334,283 @@ class InMemoryStorage:
                   and v.local_date < before]
         for k in doomed:
             del self.aggregates[k]
+        # Retention changes the readable active scope. Keep the pointer and its
+        # coverage coherent so a subsequent rebuild only has to cover retained
+        # history, not rows that policy deliberately deleted.
+        for scope, gid in list(self.active_aggregate_generations.items()):
+            if scope[:2] != (subject_id, signal):
+                continue
+            key = (*scope, gid)
+            generation = self.aggregate_generations.get(key)
+            if generation is None:
+                del self.active_aggregate_generations[scope]
+                continue
+            retained = tuple(day for day in generation.accounted_dates if day >= before)
+            incomplete = tuple(day for day in generation.incomplete_dates if day >= before)
+            retained_scope = tuple(sorted(set(retained) | set(incomplete)))
+            if not retained_scope:
+                self.aggregate_generations[key] = replace(generation, status="complete")
+                del self.active_aggregate_generations[scope]
+                continue
+            self.aggregate_generations[key] = replace(
+                generation,
+                requested_start_date=min(retained_scope),
+                accounted_dates=retained,
+                incomplete_dates=incomplete,
+                completeness="incomplete" if incomplete else "complete",
+                incomplete_reasons=(generation.incomplete_reasons if incomplete else ()),
+            )
         return len(doomed)
 
     def get_aggregate(self, *, subject_id, signal, start_date, end_date,
-                      aggregation_kind=None):
-        return [
-            a for (subj, sig, day, kind, _v), a in self.aggregates.items()
+                      aggregation_kind=None, limit=None, offset=0):
+        rows = [
+            a for (subj, sig, day, kind, _v, _gid), a in self.aggregates.items()
             if subj == subject_id and sig == signal
             and start_date <= day <= end_date
             and (aggregation_kind is None or kind == aggregation_kind)
         ]
+        active = self.active_aggregate_generations.get((subject_id, signal, aggregation_kind or "daily"))
+        rows.sort(key=lambda a: (a.local_date, a.aggregation_kind,
+                                 0 if a.generation_id == active else 1,
+                                 a.aggregation_version, a.generation_id or ""))
+        return rows[offset:None if limit is None else offset + limit]
 
     def put_aggregate(self, aggregate: DailyAggregate) -> None:
-        self.aggregates[(
+        generation_id = aggregate.generation_id or f"legacy-v{aggregate.aggregation_version}"
+        if aggregate.generation_id != generation_id:
+            aggregate = replace(aggregate, generation_id=generation_id)
+        scope = (aggregate.subject_id, aggregate.signal, aggregate.aggregation_kind)
+        generation_key = (*scope, generation_id)
+        generation = self.aggregate_generations.get(generation_key)
+        if generation is None:
+            # Explicit legacy/bootstrap rule: the first directly inserted
+            # complete generation becomes active. Later versions are retained
+            # for audit until an explicit activation CAS.
+            active = self.active_aggregate_generations.get(scope)
+            status = "active" if active is None and aggregate.completeness == "complete" else (
+                "complete" if aggregate.completeness == "complete" else "incomplete")
+            generation = AggregateGeneration(
+                generation_id=generation_id, subject_id=aggregate.subject_id,
+                signal=aggregate.signal, aggregation_kind=aggregate.aggregation_kind,
+                aggregation_version=aggregate.aggregation_version,
+                requested_start_date=aggregate.local_date,
+                requested_end_date=aggregate.local_date,
+                status=status, completeness=aggregate.completeness,
+                accounted_dates=(aggregate.local_date,),
+                incomplete_dates=((aggregate.local_date,)
+                                  if aggregate.completeness == "incomplete" else ()),
+                incomplete_reasons=aggregate.incomplete_reasons,
+                created_at=aggregate.updated_at, updated_at=aggregate.updated_at,
+                activated_at=aggregate.updated_at if status == "active" else None,
+            )
+            self.aggregate_generations[generation_key] = generation
+            if status == "active":
+                self.active_aggregate_generations[scope] = generation_id
+        elif (generation.subject_id, generation.signal, generation.aggregation_kind,
+              generation.aggregation_version) != (
+                  aggregate.subject_id, aggregate.signal, aggregate.aggregation_kind,
+                  aggregate.aggregation_version):
+            raise ValueError("aggregate generation scope/version mismatch")
+        elif generation.status == "active":
+            old_start, old_end = generation.requested_start_date, generation.requested_end_date
+            new_start = min(old_start, aggregate.local_date)
+            new_end = max(old_end, aggregate.local_date)
+            required = {
+                new_start + timedelta(days=i)
+                for i in range((new_end - new_start).days + 1)
+            }
+            accounted = set(generation.accounted_dates) | {aggregate.local_date}
+            gaps = required - accounted
+            incomplete_dates = set(generation.incomplete_dates) | gaps
+            self.aggregate_generations[generation_key] = replace(
+                generation,
+                requested_start_date=new_start, requested_end_date=new_end,
+                completeness="incomplete" if incomplete_dates else generation.completeness,
+                accounted_dates=tuple(sorted(accounted)),
+                incomplete_dates=tuple(sorted(incomplete_dates)),
+                incomplete_reasons=(tuple(sorted(set(generation.incomplete_reasons)
+                                                  | ({"unaccounted_bootstrap_gap"} if gaps else set())))),
+                updated_at=aggregate.updated_at or generation.updated_at,
+            )
+            generation = self.aggregate_generations[generation_key]
+        # Generation-level incomplete evidence is authoritative over a later
+        # row write; a fold may refresh values but cannot declare the day whole.
+        if (aggregate.local_date in generation.incomplete_dates
+                or aggregate.completeness == "incomplete"):
+            reasons = set(aggregate.incomplete_reasons)
+            if aggregate.local_date in generation.incomplete_dates:
+                reasons.update(generation.incomplete_reasons)
+            aggregate = replace(aggregate, completeness="incomplete",
+                                incomplete_reasons=tuple(sorted(reasons)))
+        key = (
             aggregate.subject_id, aggregate.signal, aggregate.local_date,
-            aggregate.aggregation_kind, aggregate.aggregation_version,
-        )] = aggregate
+            aggregate.aggregation_kind, aggregate.aggregation_version, generation_id,
+        )
+        existing = self.aggregates.get(key)
+        self.aggregates[key] = replace(aggregate, version=existing.version + 1 if existing else 0)
+
+    def compare_and_put_aggregate(self, aggregate, *, expected_version) -> bool:
+        key = (aggregate.subject_id, aggregate.signal, aggregate.local_date,
+               aggregate.aggregation_kind, aggregate.aggregation_version,
+               aggregate.generation_id or f"legacy-v{aggregate.aggregation_version}")
+        existing = self.aggregates.get(key)
+        if (existing.version if existing else -1) != expected_version:
+            return False
+        self.put_aggregate(aggregate)
+        return True
+
+    @staticmethod
+    def _generation_identity(generation):
+        return (generation.generation_id, generation.subject_id, generation.signal,
+                generation.aggregation_kind, generation.aggregation_version,
+                generation.requested_start_date, generation.requested_end_date)
+
+    def put_aggregate_generation(self, generation):
+        key = (generation.subject_id, generation.signal,
+               generation.aggregation_kind, generation.generation_id)
+        existing = self.aggregate_generations.get(key)
+        if existing is not None:
+            if self._generation_identity(existing) != self._generation_identity(generation):
+                raise ValueError("conflicting aggregate generation identity")
+            return False
+        self.aggregate_generations[key] = deepcopy(generation)
+        return True
+
+    def update_aggregate_generation(self, generation):
+        key = (generation.subject_id, generation.signal,
+               generation.aggregation_kind, generation.generation_id)
+        existing = self.aggregate_generations.get(key)
+        if existing is None:
+            raise ValueError("aggregate generation does not exist")
+        if self._generation_identity(existing) != self._generation_identity(generation):
+            raise ValueError("aggregate generation immutable identity changed")
+        allowed = {
+            "building": {"building", "complete", "failed", "incomplete"},
+            "complete": {"complete", "active", "failed"},
+            "active": {"active", "complete"},
+            "incomplete": {"incomplete", "failed"},
+            "failed": {"failed"},
+        }
+        if generation.status not in allowed[existing.status]:
+            raise ValueError(f"invalid aggregate generation transition {existing.status}->{generation.status}")
+        self.aggregate_generations[key] = deepcopy(generation)
+
+    def get_aggregate_generation(self, *, subject_id, signal, aggregation_kind, generation_id):
+        return deepcopy(self.aggregate_generations.get(
+            (subject_id, signal, aggregation_kind, generation_id)))
+
+    def list_aggregate_generations(self, *, subject_id, signal, aggregation_kind,
+                                   start_date=None, end_date=None, limit=None, offset=0):
+        rows = sorted((g for (sub, sig, kind, _), g in self.aggregate_generations.items()
+                       if (sub, sig, kind) == (subject_id, signal, aggregation_kind)
+                       and (start_date is None or g.requested_end_date >= start_date)
+                       and (end_date is None or g.requested_start_date <= end_date)),
+                      key=lambda g: ((g.created_at or _EPOCH), g.generation_id))
+        return deepcopy(rows[offset:None if limit is None else offset + limit])
+
+    def get_active_aggregate_generation(self, *, subject_id, signal, aggregation_kind):
+        gid = self.active_aggregate_generations.get((subject_id, signal, aggregation_kind))
+        if gid is None:
+            return None
+        return deepcopy(self.aggregate_generations.get((subject_id, signal, aggregation_kind, gid)))
+
+    def activate_aggregate_generation(self, *, subject_id, signal, aggregation_kind,
+                                      generation_id, expected_active_generation_id,
+                                      activated_at):
+        scope = (subject_id, signal, aggregation_kind)
+        if self.active_aggregate_generations.get(scope) != expected_active_generation_id:
+            return False
+        key = (*scope, generation_id)
+        generation = self.aggregate_generations.get(key)
+        if generation is None or generation.status != "complete" or generation.completeness != "complete":
+            return False
+        required = {
+            generation.requested_start_date + timedelta(days=i)
+            for i in range((generation.requested_end_date - generation.requested_start_date).days + 1)
+        }
+        if set(generation.accounted_dates) != required or generation.incomplete_dates:
+            return False
+        if expected_active_generation_id is not None:
+            old = self.aggregate_generations.get((*scope, expected_active_generation_id))
+            if old is None:
+                return False
+            # A cutover replaces the whole ordinary-read generation. A narrower
+            # candidate would make previously visible history disappear; reject
+            # it instead of mixing the old version outside candidate coverage.
+            if (generation.requested_start_date > old.requested_start_date
+                    or generation.requested_end_date < old.requested_end_date):
+                return False
+        rows = []
+        for aggregate_key_, aggregate in self.aggregates.items():
+            row_scope = (aggregate_key_[0], aggregate_key_[1], aggregate_key_[3])
+            row_generation_id = aggregate_key_[5]
+            if (*row_scope, row_generation_id) != (*scope, generation_id):
+                continue
+            if ((aggregate.subject_id, aggregate.signal, aggregate.aggregation_kind)
+                    != scope
+                    or aggregate.generation_id != generation.generation_id
+                    or aggregate.aggregation_version != generation.aggregation_version
+                    or aggregate_key_[4] != generation.aggregation_version):
+                return False
+            rows.append(aggregate)
+        if {a.local_date for a in rows} != required or any(a.completeness != "complete" for a in rows):
+            return False
+        if expected_active_generation_id is not None:
+            old_key = (*scope, expected_active_generation_id)
+            old = self.aggregate_generations.get(old_key)
+            if old is not None:
+                self.aggregate_generations[old_key] = replace(old, status="complete")
+        self.aggregate_generations[key] = replace(
+            generation, status="active", activated_at=activated_at, updated_at=activated_at)
+        self.active_aggregate_generations[scope] = generation_id
+        return True
+
+    def mark_active_aggregate_incomplete(self, *, subject_id, signal, aggregation_kind,
+                                         local_date, reason, updated_at):
+        scope = (subject_id, signal, aggregation_kind)
+        gid = self.active_aggregate_generations.get(scope)
+        if gid is None:
+            return False
+        key = (*scope, gid)
+        generation = self.aggregate_generations[key]
+        self.aggregate_generations[key] = replace(
+            generation, completeness="incomplete",
+            requested_start_date=min(generation.requested_start_date, local_date),
+            requested_end_date=max(generation.requested_end_date, local_date),
+            incomplete_dates=tuple(sorted(set(generation.incomplete_dates) | {local_date})),
+            incomplete_reasons=tuple(sorted(set(generation.incomplete_reasons) | {reason})),
+            updated_at=updated_at,
+        )
+        for aggregate_key_, aggregate in list(self.aggregates.items()):
+            if (aggregate.subject_id, aggregate.signal, aggregate.aggregation_kind,
+                    aggregate.generation_id, aggregate.local_date) == (
+                    subject_id, signal, aggregation_kind, gid, local_date):
+                self.aggregates[aggregate_key_] = replace(
+                    aggregate, completeness="incomplete",
+                    incomplete_reasons=tuple(sorted(set(aggregate.incomplete_reasons) | {reason})),
+                    updated_at=updated_at,
+                )
+        return True
+
+    def account_active_aggregate_range(self, *, subject_id, signal, aggregation_kind,
+                                       start_date, end_date, updated_at):
+        if end_date < start_date:
+            raise ValueError("aggregate accounted range end precedes start")
+        scope = (subject_id, signal, aggregation_kind)
+        gid = self.active_aggregate_generations.get(scope)
+        if gid is None:
+            return
+        key = (*scope, gid)
+        generation = self.aggregate_generations[key]
+        new_start = min(generation.requested_start_date, start_date)
+        new_end = max(generation.requested_end_date, end_date)
+        accounted = set(generation.accounted_dates)
+        accounted.update(start_date + timedelta(days=i)
+                         for i in range((end_date - start_date).days + 1))
+        self.aggregate_generations[key] = replace(
+            generation, requested_start_date=new_start, requested_end_date=new_end,
+            accounted_dates=tuple(sorted(accounted)), updated_at=updated_at)
 
     # -- 来源镜像 --------------------------------------------------------
 
@@ -248,20 +670,39 @@ class InMemoryStorage:
         self.retractions[key] = retraction
         return True
 
-    def scrub_event_snapshots(self, *, subject_id, signal, source, source_event_id) -> int:
+    def scrub_event_snapshots(self, *, subject_id, signal, source, source_event_id,
+                              now, reason="fact_retracted", observation_ids=None,
+                              canonical_fact_key=None) -> int:
         hit = 0
         for event_id, entry in list(self.outbox.items()):
-            if (entry.subject_id, entry.source, entry.source_event_id) != (
-                    subject_id, source, source_event_id):
+            if entry.subject_id != subject_id or entry.fact_snapshot.get("signal") != signal:
                 continue
-            snap = dict(entry.fact_snapshot or {})
-            if snap.get("retracted"):
+            # Legacy missing provenance is not evidence of independence. Fail
+            # closed for that signal until adapters backfill canonical refs.
+            matches = not entry.fact_dependencies_complete or not entry.fact_dependencies or any(
+                (ref.get("subject_id"), ref.get("signal"), ref.get("source"), ref.get("source_event_id"))
+                == (subject_id, signal, source, source_event_id)
+                and (observation_ids is None or ref.get("observation_id") in observation_ids)
+                and (canonical_fact_key is None or ref.get("fact_key") == canonical_fact_key)
+                for ref in entry.fact_dependencies)
+            if not matches or entry.invalidated_at is not None:
                 continue
-            # 只抹数值，留下"触发过、而且触发它的数据已被删除"。
-            snap["previous"] = None
-            snap["current"] = None
-            snap["retracted"] = True
-            self.outbox[event_id] = replace(entry, fact_snapshot=snap)
+            audit_keys = ("event_id", "definition_id", "definition_version", "subject_id",
+                          "type", "signal", "field", "occurred_at", "received_at", "schema_version")
+            snap = {key: entry.fact_snapshot[key] for key in audit_keys if key in entry.fact_snapshot}
+            snap.update(previous=None, current=None, retracted=reason == "fact_retracted",
+                        invalidated=True, context={"scope": entry.fact_snapshot.get("context", {}).get("scope")})
+            state = entry.delivery_state
+            if state in (_delivery.PENDING, _delivery.CLAIMED):
+                state = _delivery.UNKNOWN if entry.dispatch_started_at else _delivery.INVALIDATED
+            self.outbox[event_id] = replace(
+                entry, fact_snapshot=snap, delivery_state=state,
+                invalidated_at=now, invalidation_reason=reason,
+                claim_token=entry.claim_token if state == _delivery.UNKNOWN else None,
+                lease_owner=entry.lease_owner if state == _delivery.UNKNOWN else None,
+                lease_expires_at=entry.lease_expires_at if state == _delivery.UNKNOWN else None,
+                budget_reservation_id=(entry.budget_reservation_id
+                                       if state in (_delivery.UNKNOWN, _delivery.DELIVERED) else None))
             hit += 1
         return hit
 
@@ -317,6 +758,10 @@ class InMemoryStorage:
     def get_rule_state(self, *, subject_id, definition_id, scope_key):
         return self.rule_state.get((subject_id, definition_id, scope_key))
 
+    def list_rule_states(self, *, subject_id):
+        return [(did, scope, deepcopy(raw)) for (sub, did, scope), raw in self.rule_state.items()
+                if sub == subject_id]
+
     def put_rule_state(self, *, subject_id, definition_id, scope_key, state) -> None:
         self.rule_state[(subject_id, definition_id, scope_key)] = dict(state)
 
@@ -332,6 +777,10 @@ class InMemoryStorage:
         from dataclasses import replace
         from datetime import timedelta
         for event_id, entry in sorted(self.outbox.items()):
+            if (entry.delivery_state == _delivery.CLAIMED and entry.dispatch_started_at
+                    and entry.lease_expires_at is not None and entry.lease_expires_at <= now):
+                self.mark_dispatch_unknown(event_id=event_id, claim_token=entry.claim_token)
+                continue
             claimable = (
                 entry.delivery_state == _delivery.PENDING
                 or (entry.delivery_state == _delivery.CLAIMED
@@ -342,39 +791,86 @@ class InMemoryStorage:
                 continue
             if entry.next_attempt_at is not None and entry.next_attempt_at > now:
                 continue
-            claimed = replace(
-                entry,
-                delivery_state=_delivery.CLAIMED,
-                attempt_count=entry.attempt_count + 1,
-                lease_owner=worker_id,
-                lease_expires_at=now + timedelta(seconds=lease_seconds),
-                # 额度只是占位，不是消耗 —— delivered 时才兑现。
-                budget_reservation_id=f"resv_{event_id}_{entry.attempt_count + 1}",
-                # 每次认领换一个新令牌 —— 旧 worker 回来时手里是旧的。
-                claim_token=f"{worker_id}:{entry.attempt_count + 1}",
-            )
-            self.outbox[event_id] = claimed
+            from ..contracts.mutation import event_key
+            with self.mutation_transaction() as owner:
+                owner.acquire((event_key(entry.subject_id, entry.fact_snapshot.get("signal", "")),))
+                entry = self.outbox[event_id]
+                if entry.invalidated_at or entry.dispatch_started_at or not (
+                    entry.delivery_state == _delivery.PENDING or
+                    entry.delivery_state == _delivery.CLAIMED and entry.lease_expires_at is not None
+                    and entry.lease_expires_at <= now
+                ) or entry.next_attempt_at is not None and entry.next_attempt_at > now:
+                    continue
+                claimed = replace(
+                    entry, delivery_state=_delivery.CLAIMED,
+                    attempt_count=entry.attempt_count + 1, lease_owner=worker_id,
+                    lease_expires_at=now + timedelta(seconds=lease_seconds),
+                    budget_reservation_id=f"resv_{event_id}_{entry.attempt_count + 1}",
+                    claim_token=f"{worker_id}:{entry.attempt_count + 1}")
+                self.outbox[event_id] = claimed
             return claimed
         return None
 
+    def begin_event_dispatch(self, *, event_id, claim_token, now):
+        from ..contracts.mutation import event_key
+        entry = self.outbox[event_id]
+        with self.mutation_transaction() as owner:
+            owner.acquire((event_key(entry.subject_id, entry.fact_snapshot.get("signal", "")),))
+            entry = self.outbox[event_id]
+            if (entry.delivery_state != _delivery.CLAIMED or not claim_token
+                    or entry.claim_token != claim_token or entry.invalidated_at
+                    or entry.dispatch_started_at or entry.lease_expires_at is None
+                    or entry.lease_expires_at <= now):
+                return None
+            started = replace(entry, dispatch_started_at=now)
+            self.outbox[event_id] = started
+            return started
+
+    def mark_dispatch_unknown(self, *, event_id, claim_token):
+        from ..contracts.mutation import event_key
+        entry = self.outbox[event_id]
+        with self.mutation_transaction() as owner:
+            owner.acquire((event_key(entry.subject_id, entry.fact_snapshot.get("signal", "")),))
+            entry = self.outbox[event_id]
+            if (entry.claim_token != claim_token or not claim_token or not entry.dispatch_started_at
+                    or entry.delivery_state not in (_delivery.CLAIMED, _delivery.UNKNOWN)):
+                return False
+            self.outbox[event_id] = replace(entry, delivery_state=_delivery.UNKNOWN)
+            return True
+
     def record_wake_receipt(self, *, receipt, next_state, claim_token=None,
-                            next_attempt_at=None) -> bool:
+                            next_attempt_at=None) -> str | bool:
+        from ..contracts.mutation import event_key
+        entry = self.outbox[receipt.event_id]
+        with self.mutation_transaction() as owner:
+            owner.acquire((event_key(entry.subject_id, entry.fact_snapshot.get("signal", "")),))
+            return self._record_wake_receipt(receipt=receipt, next_state=next_state,
+                                             claim_token=claim_token, next_attempt_at=next_attempt_at)
+
+    def _record_wake_receipt(self, *, receipt, next_state, claim_token=None,
+                             next_attempt_at=None) -> str | bool:
         from dataclasses import replace
         entry = self.outbox.get(receipt.event_id)
         if entry is None:
             raise KeyError(f"unknown event_id {receipt.event_id!r}")
-        if claim_token is not None and entry.claim_token != claim_token:
+        if (not claim_token or entry.claim_token != claim_token
+                or entry.delivery_state not in (_delivery.CLAIMED, _delivery.UNKNOWN)):
             # 令牌过期:这个事件已经被别人接管了。只记审计,不改状态。
-            self.receipts.append(receipt)
+            if receipt not in self.receipts:
+                self.receipts.append(receipt)
             return False
+        if entry.invalidated_at is not None and next_state in (_delivery.PENDING, _delivery.DEAD_LETTER):
+            next_state = _delivery.INVALIDATED
         _delivery.assert_transition(entry.delivery_state, next_state)
-        self.receipts.append(receipt)
+        if receipt not in self.receipts:
+            self.receipts.append(receipt)
         self.outbox[receipt.event_id] = replace(
             entry,
             delivery_state=next_state,
             next_attempt_at=next_attempt_at,
             lease_owner=None,
             lease_expires_at=None,
+            dispatch_started_at=None if next_state == _delivery.PENDING else entry.dispatch_started_at,
             # 兑现或释放：只有 delivered 会把占位变成真正的消耗。
             claim_token=None,
             budget_reservation_id=(
@@ -382,12 +878,13 @@ class InMemoryStorage:
                 if _delivery.consumes_budget(next_state) else None
             ),
         )
-        return True
+        return next_state
 
     def list_pending_events(self, *, subject_id=None, limit=100):
         return [
             e for e in self.outbox.values()
-            if not e.is_terminal and (subject_id is None or e.subject_id == subject_id)
+            if e.delivery_state in (_delivery.PENDING, _delivery.CLAIMED)
+            and (subject_id is None or e.subject_id == subject_id)
         ][:limit]
 
     def list_events(self, *, subject_id, delivery_states=None, event_type=None,
@@ -423,16 +920,21 @@ class InMemoryStorage:
             "observations": drop(self.observations, lambda k, v: v.subject_id),
             "current": drop(self.current, lambda k, v: k[0]),
             "aggregates": drop(self.aggregates, lambda k, v: k[0]),
+            "aggregate_generations": drop(self.aggregate_generations, lambda k, v: k[0]),
+            "active_aggregate_generations": drop(
+                self.active_aggregate_generations, lambda k, v: k[0]),
             "calendar": drop(self.calendar, lambda k, v: k[0]),
             "reminders": drop(self.reminders, lambda k, v: k[0]),
             "sync_state": drop(self.sync_state, lambda k, v: k[0]),
             "rule_state": drop(self.rule_state, lambda k, v: k[0]),
             "outbox": drop(self.outbox, lambda k, v: v.subject_id),
             "retractions": drop(self.retractions, lambda k, v: k[0]),
+            "conflicts": drop(self.conflicts, lambda k, v: k[0]),
         }
         before = len(self.identities)
         self.identities = {i for i in self.identities if i[0] != subject_id}
         counts["identities"] = before - len(self.identities)
+        drop(self.identity_records, lambda k, v: k[0])
         # 回执按它对应事件的 subject 清理。以前这里只是原样复制了一遍列表 ——
         # "删除我的数据"这件事没有部分成功。
         doomed_events = {k for k in doomed_event_ids}

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import re
 
 from ._time import parse_timestamp
 from .errors import ContractError
@@ -35,6 +36,61 @@ INGEST_STATUSES: frozenset[str] = frozenset({
 })
 
 
+_QUOTED_LITERAL = re.compile(r"(['\"])(?:\\.|(?!\1).)*\1")
+_NUMERIC_LITERAL = re.compile(
+    r"(?<![A-Za-z0-9_])-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?![A-Za-z0-9_])"
+)
+
+#: Closed machine-readable outcomes for one Report array entry. Diagnostics in
+#: ``problems`` are display/audit text only and must never drive control flow.
+OBSERVATION_VALIDATION_FAILED = "validation_failed"
+OBSERVATION_FACT_CONFLICT = "fact_conflict"
+OBSERVATION_FACT_REVISION_DETAILS_INCOMPLETE = "fact_revision_details_incomplete"
+OBSERVATION_STALE_FACT_REVISION = "stale_fact_revision"
+OBSERVATION_ISSUE_CODES: frozenset[str] = frozenset({
+    OBSERVATION_VALIDATION_FAILED,
+    OBSERVATION_FACT_CONFLICT,
+    OBSERVATION_FACT_REVISION_DETAILS_INCOMPLETE,
+    OBSERVATION_STALE_FACT_REVISION,
+})
+
+
+def sanitize_observation_problem(problem: object) -> str:
+    """Keep a bounded diagnostic, never the rejected payload value itself."""
+    text = " ".join(str(problem).split())
+    text = _QUOTED_LITERAL.sub("<redacted>", text)
+    text = _NUMERIC_LITERAL.sub("<redacted>", text)
+    return (text[:253] + "...") if len(text) > 256 else text
+
+
+@dataclass(frozen=True)
+class ObservationRejection:
+    """Durable, replayable outcome for one Report array entry.
+
+    Only the request index and bounded/redacted diagnostics are persisted. Raw
+    Observation, normalized values, source values, and restricted fields never
+    become part of the Report receipt.
+    """
+
+    index: int
+    #: One terminal rejecting phase owns an item. Multiple diagnostics from
+    #: that phase share this closed machine code.
+    code: str
+    problems: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.index) is not int or self.index < 0:
+            raise ContractError(["observation rejection index must be a non-negative integer"])
+        if self.code not in OBSERVATION_ISSUE_CODES:
+            raise ContractError([
+                f"observation rejection code must be one of {sorted(OBSERVATION_ISSUE_CODES)}"
+            ])
+        sanitized = tuple(sanitize_observation_problem(problem) for problem in self.problems)
+        if not sanitized or any(not problem for problem in sanitized):
+            raise ContractError(["observation rejection problems must not be empty"])
+        object.__setattr__(self, "problems", sanitized)
+
+
 @dataclass(frozen=True)
 class IngestReceipt:
     """一批上报的处理结果。唯一身份是 ``(subject_id, producer, report_id)``。"""
@@ -49,6 +105,8 @@ class IngestReceipt:
     error_code: str | None = None
     #: 这批里有几条观测被真正处理了(duplicate 时为 0)。
     observations_applied: int = 0
+    #: Durable per-item failures. Whole-batch rejection uses status/error_code.
+    observations_rejected: tuple[ObservationRejection, ...] = ()
 
     def __post_init__(self) -> None:
         if self.status not in INGEST_STATUSES:
@@ -56,6 +114,47 @@ class IngestReceipt:
                 [f"status: {self.status!r} is not one of {sorted(INGEST_STATUSES)}"]
             )
         parse_timestamp(self.received_at, field="received_at")
+        if type(self.observations_applied) is not int or self.observations_applied < 0:
+            raise ContractError(["observations_applied must be a non-negative integer"])
+        rejected = tuple(self.observations_rejected)
+        if any(not isinstance(item, ObservationRejection) for item in rejected):
+            raise ContractError(["observations_rejected must contain ObservationRejection"])
+        if tuple(sorted(item.index for item in rejected)) != tuple(item.index for item in rejected):
+            raise ContractError(["observations_rejected must be ordered by request index"])
+        if len({item.index for item in rejected}) != len(rejected):
+            raise ContractError(["observations_rejected must contain one entry per request index"])
+        object.__setattr__(self, "observations_rejected", rejected)
+
+    @property
+    def retryable(self) -> bool:
+        """Returned receipts are committed terminal decisions, never retry hints.
+
+        Transient transaction/CAS failures raise and roll back instead of
+        returning a receipt. Repeating a failed immutable Report cannot fix it.
+        """
+        return False
+
+    @property
+    def recovery_action(self) -> str | None:
+        """Machine-readable recovery contract for producer/host adapters."""
+        if self.error_code == "legacy_report_semantics_unverifiable":
+            return "migrate_original_envelope_or_use_new_report_id"
+        if self.error_code == "fact_revision_details_incomplete":
+            return "restore_fact_evidence_and_use_new_report_id"
+        if self.error_code == "fact_conflict":
+            return "resolve_fact_conflict_and_use_new_report_id"
+        codes = {item.code for item in self.observations_rejected}
+        if OBSERVATION_FACT_REVISION_DETAILS_INCOMPLETE in codes:
+            return "restore_fact_evidence_and_use_new_report_id"
+        if OBSERVATION_FACT_CONFLICT in codes:
+            return "resolve_fact_conflict_and_use_new_report_id"
+        if OBSERVATION_STALE_FACT_REVISION in codes:
+            return "use_higher_fact_revision_and_new_report_id"
+        if OBSERVATION_VALIDATION_FAILED in codes:
+            return "correct_rejected_observations_and_use_new_report_id"
+        if self.status in (INGEST_REJECTED, INGEST_CONFLICT):
+            return "correct_payload_and_use_new_report_id"
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +221,10 @@ class WakeReceipt:
 
 __all__ = [
     "INGEST_ACCEPTED", "INGEST_DUPLICATE", "INGEST_CONFLICT", "INGEST_REJECTED",
-    "INGEST_STATUSES", "IngestReceipt",
+    "INGEST_STATUSES", "ObservationRejection", "IngestReceipt",
+    "OBSERVATION_VALIDATION_FAILED", "OBSERVATION_FACT_CONFLICT",
+    "OBSERVATION_FACT_REVISION_DETAILS_INCOMPLETE", "OBSERVATION_STALE_FACT_REVISION",
+    "OBSERVATION_ISSUE_CODES",
     "WAKE_ACCEPTED", "WAKE_DUPLICATE", "WAKE_SUPPRESSED",
     "WAKE_ENQUEUE_FAILED", "WAKE_REJECTED", "WAKE_STATUSES", "WAKE_RETRYABLE",
     "WakeReceipt",

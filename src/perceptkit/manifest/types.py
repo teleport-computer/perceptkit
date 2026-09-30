@@ -175,6 +175,10 @@ class SignalDefinition:
     #: Wi-Fi，「当前连着哪些锚点」有两个答案，覆盖式写入只会剩最后一个。
     #: 更糟的是用户搬家、新旧网络都叫 "home" —— 按名字看是同一个，按
     #: ``anchor_id`` 看是两个，合并之后历史再也分不开哪段是哪个家。
+    #: With current_policy="latest", these form public business identity: each
+    #: field must have query_visibility="always" and non-restricted privacy.
+    #: current_policy="none" may reuse them as internal aggregate buckets;
+    #: changing to latest revalidates the public capability before any query.
     dimension_fields: tuple[str, ...] = ()
     #: **明细**（逐条观测）保留多少天。``PERMANENT`` = 永久;``0`` = 不存历史。
     history_retention_days: int = 0
@@ -196,6 +200,12 @@ class SignalDefinition:
     #: 写进数据结构而不是注释,是为了让它跟着 manifest 一起被读到。
     note: str | None = None
     extensions: dict[str, Any] = field(default_factory=dict)
+    #: latest = 每个 dimension 的最近状态；none = 只有事实与聚合，不发布 Current。
+    current_policy: str = "latest"
+
+    def __post_init__(self) -> None:
+        if self.current_policy not in {"latest", "none"}:
+            raise ValueError(f"Unknown current_policy: {self.current_policy!r}")
 
     def field_map(self) -> dict[str, FieldDefinition]:
         return {f.key: f for f in self.fields}

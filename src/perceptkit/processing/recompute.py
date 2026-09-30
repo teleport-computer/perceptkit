@@ -15,18 +15,20 @@
                        → 数字错了一个数量级,没有任何地方报错,而且旧值已被覆盖
 
 **所以默认拒绝重算明细可能已经不完整的日子**，而不是尽力而为。
-真要重算那些日子，调用方必须显式说"我知道明细不全，仍然要"
-（``allow_incomplete=True``），并且结果里会标出来。
+``allow_incomplete=True`` 只允许生成显式 incomplete 的审计候选，永不激活、
+也不覆盖普通查询正在读取的完整 generation。
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from typing import Mapping
+from uuid import uuid4
 
-from ..contracts.records import DailyAggregate
+from ..contracts.records import AggregateGeneration, DailyAggregate
 from ..manifest.types import PERMANENT, SignalDefinition
 from ..ports.storage import StoragePort
+from ..contracts.mutation import aggregate_generation_key, aggregate_key, canonical_keys
 from . import aggregate as _aggregate
 from .retract import canonical_revisions as _canonical
 from .retract import drop_retracted as _drop_retracted
@@ -39,10 +41,13 @@ class RecomputeOutcome:
     rebuilt: list[date] = field(default_factory=list)
     #: ``(那一天, 为什么没算)``
     skipped: list[tuple[date, str]] = field(default_factory=list)
+    incomplete: list[tuple[date, str]] = field(default_factory=list)
+    generation_id: str | None = None
+    activated: bool = False
 
     @property
     def ok(self) -> bool:
-        return not self.skipped
+        return not self.skipped and not self.incomplete
 
 
 def _epoch(dt: datetime) -> float:
@@ -73,6 +78,9 @@ def recompute_day(
     day: date,
     version: int,
     updated_at: datetime,
+    generation_id: str | None = None,
+    completeness: str = "complete",
+    incomplete_reasons: tuple[str, ...] = (),
 ) -> DailyAggregate:
     """把某一天的明细重新折成一份聚合文档。**不写库**，由调用方决定写不写。"""
     # 刻意**不按 occurred_at 开时间窗**：一条观测归到哪一天由
@@ -89,8 +97,9 @@ def recompute_day(
         )
         page.extend(more)
 
-    same_day = [o for o in page if o.effective_local_date == day]
-    same_day = _canonical(same_day, sig)
+    # A higher revision may move the Fact to a different day. Select its active
+    # revision before filtering dates, otherwise the old day keeps the old one.
+    same_day = [o for o in _canonical(page, sig) if o.effective_local_date == day]
     # 被来源撤回的那些不算数。**放在 canonical 之后**：撤回针对的是一条
     # 源事实，而 canonical 已经把同一源事实的多个修订收敛成一条了 ——
     # 先滤会让"撤回了 revision 1、但 revision 2 还在"这种情况删错东西。
@@ -111,6 +120,9 @@ def recompute_day(
         aggregation_kind="daily",
         aggregation_version=version,
         typed_aggregate=doc,
+        generation_id=generation_id,
+        completeness=completeness,
+        incomplete_reasons=incomplete_reasons,
         timezone_attribution=same_day[0].timezone if same_day else None,
         source_coverage={
             "observations": len(same_day),
@@ -133,6 +145,8 @@ def recompute_range(
     version: int,
     now: datetime,
     allow_incomplete: bool = False,
+    mutation=None,
+    generation_id: str | None = None,
 ) -> RecomputeOutcome:
     """按 ``version`` 重算一段日期的聚合。
 
@@ -140,8 +154,120 @@ def recompute_range(
     是不是已经过了保留期"。
 
     ``allow_incomplete=False``（默认）时，明细可能已经不全的日子**不算**，
-    并在 ``skipped`` 里说明原因。
+    并在 ``skipped`` 里说明原因。True 只写 incomplete 审计候选，不激活。
     """
+    if end_date < start_date:
+        raise ValueError("aggregate generation coverage end precedes start")
+    generation_id = generation_id or f"agg-{uuid4().hex}"
+    sig = signals.get(signal)
+    if sig is None:
+        return RecomputeOutcome(skipped=[(start_date, f"manifest 里没有 {signal}")],
+                                generation_id=generation_id)
+    if not sig.stores_history:
+        return RecomputeOutcome(skipped=[(start_date, f"{signal} 不存明细，无从重算")],
+                                generation_id=generation_id)
+    if mutation is None:
+        try:
+            with storage.mutation_transaction() as owner:
+                return recompute_range(
+                    storage, signals, subject_id=subject_id, signal=signal,
+                    start_date=start_date, end_date=end_date, version=version,
+                    now=now, allow_incomplete=allow_incomplete, mutation=owner,
+                    generation_id=generation_id,
+                )
+        except Exception as exc:
+            # The candidate transaction rolled back, but the failed attempt is
+            # still useful audit evidence. It is never active.
+            try:
+                failed = AggregateGeneration(
+                    generation_id=generation_id, subject_id=subject_id, signal=signal,
+                    aggregation_kind="daily", aggregation_version=version,
+                    requested_start_date=start_date, requested_end_date=end_date,
+                    status="failed", completeness="incomplete",
+                    failure_reason=f"{type(exc).__name__}: {exc}",
+                    created_at=now, updated_at=now,
+                )
+                with storage.mutation_transaction() as owner:
+                    owner.acquire((aggregate_generation_key(subject_id, signal, "daily"),))
+                    storage.put_aggregate_generation(failed)
+            except Exception:
+                # Preserve the original build/activation failure if the store
+                # itself is unavailable and cannot record audit evidence.
+                pass
+            raise
+    days = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
+    mutation.acquire((aggregate_generation_key(subject_id, signal, "daily"),))
+    mutation.acquire(canonical_keys([
+        aggregate_key(subject_id, signal, day, "daily", version) for day in days
+    ]))
+    active = storage.get_active_aggregate_generation(
+        subject_id=subject_id, signal=signal, aggregation_kind="daily")
+    generation = AggregateGeneration(
+        generation_id=generation_id, subject_id=subject_id, signal=signal,
+        aggregation_kind="daily", aggregation_version=version,
+        requested_start_date=start_date, requested_end_date=end_date,
+        status="building", completeness="unknown", created_at=now, updated_at=now,
+    )
+    storage.put_aggregate_generation(generation)
+    outcome = RecomputeOutcome(generation_id=generation_id)
+    accounted = []
+    today = now.date()
+    for day in days:
+        expired = details_may_be_incomplete(sig, day, today=today)
+        if expired and not allow_incomplete:
+            outcome.skipped.append((
+                day, "detail_retention_expired: 明细可能已被清理，候选不会激活"
+            ))
+            continue
+        reasons = ("detail_retention_expired",) if expired else ()
+        storage.put_aggregate(recompute_day(
+            storage, sig, subject_id=subject_id, day=day, version=version,
+            updated_at=now, generation_id=generation_id,
+            completeness="incomplete" if expired else "complete",
+            incomplete_reasons=reasons,
+        ))
+        accounted.append(day)
+        if expired:
+            outcome.incomplete.append((day, "detail_retention_expired"))
+        else:
+            outcome.rebuilt.append(day)
+    if outcome.skipped or outcome.incomplete:
+        storage.update_aggregate_generation(replace(
+            generation, status="incomplete", completeness="incomplete",
+            accounted_dates=tuple(accounted),
+            incomplete_dates=(tuple(day for day, _ in outcome.incomplete)
+                              + tuple(day for day, _ in outcome.skipped)),
+            incomplete_reasons=tuple(sorted({
+                reason.split(":", 1)[0]
+                for _, reason in [*outcome.incomplete, *outcome.skipped]
+            })),
+            updated_at=now,
+        ))
+        return outcome
+    complete = replace(generation, status="complete", completeness="complete",
+                       accounted_dates=tuple(accounted), updated_at=now)
+    storage.update_aggregate_generation(complete)
+    if active is not None and (
+            start_date > active.requested_start_date
+            or end_date < active.requested_end_date):
+        outcome.skipped.append((
+            start_date, "candidate_coverage_does_not_cover_active_scope"
+        ))
+        return outcome
+    outcome.activated = storage.activate_aggregate_generation(
+        subject_id=subject_id, signal=signal, aggregation_kind="daily",
+        generation_id=generation_id,
+        expected_active_generation_id=active.generation_id if active else None,
+        activated_at=now,
+    )
+    if not outcome.activated:
+        raise RuntimeError("aggregate generation activation CAS/coverage validation failed")
+    return outcome
+
+
+def _recompute_owned_range(storage, signals, *, subject_id, signal, start_date,
+                           end_date, version, now, allow_incomplete=False):
+    """Internal only: caller owns every affected aggregate through commit."""
     outcome = RecomputeOutcome()
     sig = signals.get(signal)
     if sig is None:
@@ -154,18 +280,24 @@ def recompute_range(
     today = now.date()
     day = start_date
     while day <= end_date:
-        if not allow_incomplete and details_may_be_incomplete(sig, day, today=today):
+        if details_may_be_incomplete(sig, day, today=today):
             outcome.skipped.append((
                 day,
                 f"{day} 早于明细保留期（{sig.history_retention_days} 天），"
                 "明细可能已被清理。拿残缺明细重算会写下一个数量级都不对的统计，"
-                "而且旧值会被覆盖、不可恢复。确实要算就传 allow_incomplete=True",
+                "而且旧值会被覆盖、不可恢复。active projection 已标记 incomplete",
             ))
+            storage.mark_active_aggregate_incomplete(
+                subject_id=subject_id, signal=signal, aggregation_kind="daily",
+                local_date=day, reason="detail_retention_expired", updated_at=now)
             day += timedelta(days=1)
             continue
+        active = storage.get_active_aggregate_generation(
+            subject_id=subject_id, signal=signal, aggregation_kind="daily")
         storage.put_aggregate(recompute_day(
             storage, sig, subject_id=subject_id, day=day,
-            version=version, updated_at=now,
+            version=active.aggregation_version if active else version, updated_at=now,
+            generation_id=active.generation_id if active else None,
         ))
         outcome.rebuilt.append(day)
         day += timedelta(days=1)

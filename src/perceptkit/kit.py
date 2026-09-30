@@ -20,8 +20,9 @@ from typing import Any, Callable, Mapping, Sequence
 from .contracts.context import IngestContext
 from .contracts.report import ReportEnvelope
 from .manifest.minimal import MINIMAL_SIGNALS
+from .manifest.checks import require_public_dimension_fields
 from .manifest.types import SignalDefinition
-from .ports.storage import StoragePort
+from .ports.storage import StoragePort, require_aggregate_generation_storage
 from .ports.wake import WakePort
 from .processing.dispatch import DispatchOutcome, drain
 from .processing.pipeline import AGGREGATION_VERSION, IngestOutcome, ingest_report
@@ -52,10 +53,13 @@ class PerceptionKit:
     definitions: Any = ()
     #: 宿主注册的自定义 evaluator。普通用户配置仍然只能用声明式模板。
     extra_evaluators: Mapping[str, Callable[..., Any]] | None = None
-    #: 观测没带时区时用什么兜底。见 OPEN-QUESTIONS B2 —— 这一条还没和
-    #: 产品方对齐，所以由宿主传，不在包里写死。
+    #: Only omitted timezone may use this validated IANA Host fallback (D09).
     timezone_fallback: str | None = None
     max_observations: int = 200
+
+    def __post_init__(self) -> None:
+        require_public_dimension_fields(self.signals)
+        require_aggregate_generation_storage(self.storage)
 
     @property
     def _definitions(self):
@@ -108,6 +112,36 @@ class PerceptionKit:
         return getattr(self, "_definition_archive", {}).get(
             (definition_id, version))
 
+    def _archive_definition(self, definition: EventDefinition) -> None:
+        """Archive before RuleState/Event writes; conflict means fail closed."""
+        from .ports.definitions import DefinitionArchiveConflictError
+        provider = self._definitions
+        archive = getattr(provider, "archive_definition", None)
+        if callable(archive):
+            archive(definition)
+            return
+        existing = provider.definition_at(definition.definition_id, definition.version)
+        if existing is not None and existing != definition:
+            raise DefinitionArchiveConflictError(definition.definition_id, definition.version)
+        # Read-only legacy providers remain source-compatible, but this fallback
+        # is process-local and is deliberately reported as not production-ready.
+        local = getattr(self, "_definition_archive", None)
+        if local is None:
+            local = {}
+            object.__setattr__(self, "_definition_archive", local)
+        key = (definition.definition_id, definition.version)
+        old = local.get(key)
+        if old is not None and old != definition:
+            raise DefinitionArchiveConflictError(*key)
+        local[key] = definition
+
+    def definition_provider_status(self) -> dict[str, bool]:
+        """Machine-readable production readiness; no inference from read methods."""
+        provider = self._definitions
+        persistent = bool(getattr(provider, "persistent", False)
+                          and callable(getattr(provider, "archive_definition", None)))
+        return {"persistent": persistent, "production_ready": persistent}
+
     # -- 写入侧 ----------------------------------------------------------
 
     def ingest(
@@ -135,6 +169,8 @@ class PerceptionKit:
             extra_evaluators=self.extra_evaluators,
             timezone_fallback=self.timezone_fallback,
             max_observations=self.max_observations,
+            definition_at=self.definition_at,
+            archive_definition=self._archive_definition,
         )
         if dispatch and outcome.events:
             if self.wake is None:
@@ -181,24 +217,27 @@ class PerceptionKit:
             now=now, signals=self.signals,
             definitions=self.definitions_for(subject_id),
             extra_evaluators=self.extra_evaluators,
+            archive_definition=self._archive_definition,
         )
 
     def recompute_aggregates(
         self, *, subject_id: str, signal: str, start: date, end: date,
         now: datetime, version: int | None = None,
         allow_incomplete: bool = False,
+        generation_id: str | None = None,
     ):
         """聚合算法升级之后，按新版本把历史重算一遍。
 
         **默认拒绝重算明细可能已经被保留期清掉的日子** —— 拿残缺明细折出来的
-        永久统计会错一个数量级，而且旧值已经被覆盖、救不回来。真要算就显式
-        传 ``allow_incomplete=True``，结果里会标出来。
+        永久统计会错一个数量级，而且旧值已经被覆盖、救不回来。显式传
+        ``allow_incomplete=True`` 只生成 incomplete 审计候选，绝不激活。
         """
         return recompute_range(
             storage=self.storage, signals=self.signals, subject_id=subject_id,
             signal=signal, start_date=start, end_date=end,
             version=AGGREGATION_VERSION if version is None else version,
             now=now, allow_incomplete=allow_incomplete,
+            generation_id=generation_id,
         )
 
     def sync_source_mirror(self, batch, *, context: IngestContext):
@@ -231,15 +270,24 @@ class PerceptionKit:
         默认**直接把受影响那几天的聚合重算并写回**（``recompute=False``
         可以关掉，由调用方自己按更大的范围重算）。重算那条路已经会排除
         被撤回的观测。
+
+        Only source_event_id identity strategy with a valid ID supports this
+        deletion envelope end-to-end. Singleton/deterministic/unknown strategies raise
+        UnsupportedRetractionIdentityError before any batch write; observed_at
+        is deletion audit time, never a substitute for the original Fact time.
         """
         # 🔴 受影响那几天的聚合**真的会重算并写回**，而且跟记撤回在同一个
         # 事务里。早先只返回一个"有几天受影响"的计数，调用方拿不到是哪几天，
         # 于是谁也没去重算；后来虽然重算了，却是在事务**外面**做的 ——
         # 撤回提交了、重算崩了，两边再也对不上，下一轮还以为上一轮成功了。
         def _rebuild(subject_id: str, signal: str, day) -> None:
-            self.recompute_aggregates(
+            # apply_retractions has already acquired ALL affected aggregate
+            # resources. Reuse that transaction, never create a nested owner.
+            from .processing.recompute import _recompute_owned_range
+            _recompute_owned_range(
+                self.storage, self.signals,
                 subject_id=subject_id, signal=signal,
-                start=day, end=day, now=now,
+                start_date=day, end_date=day, now=now, version=AGGREGATION_VERSION,
                 # 明细可能已经按保留期清掉了。清掉之后重算会得到一份
                 # 残缺统计，而那比"没重算"更糟 —— 旧值已经被覆盖。
                 allow_incomplete=False,
@@ -250,6 +298,8 @@ class PerceptionKit:
             signals=dict(self.signals), now=now,
             # 重算跟着撤回走在**同一个事务**里，见 apply_retractions。
             on_affected_day=_rebuild if recompute else None,
+            definitions_for=self.definitions_for, definition_at=self.definition_at,
+            extra_evaluators=self.extra_evaluators,
         )
         return outcome
 
@@ -314,6 +364,7 @@ class PerceptionKit:
             signals=self.signals,
             definitions=self.definitions_for(subject_id),
             extra_evaluators=self.extra_evaluators,
+            archive_definition=self._archive_definition,
         )
 
     # -- 读取侧 ----------------------------------------------------------
@@ -321,15 +372,20 @@ class PerceptionKit:
     # 这条路和写入侧共用存储，方向相反：agent 主动来查。
     # 八个函数的实现在 queries/api.py —— 这里只是绑上 manifest 的薄封装。
 
+    def list_conflicts(self, *, subject_id: str, signal: str | None = None,
+                       status: str | None = None):
+        """Durable quarantined candidates and their immutable resolution audit."""
+        return list(self.storage.list_conflicts(subject_id=subject_id, signal=signal, status=status))
+
     def get_current(self, *, subject_id: str, signals: Sequence[str],
-                    now: datetime) -> dict[str, _queries.CurrentView]:
+                    now: datetime) -> dict[str, list[_queries.CurrentView]]:
         """取当前值，**带 TTL 判定**：过期的不冒充现在。"""
         return _queries.get_current(
             self.storage, subject_id=subject_id, signals=signals,
             manifest=self.signals, now=now,
         )
 
-    def get_last_known(self, *, subject_id: str, signal: str):
+    def get_last_known(self, *, subject_id: str, signal: str) -> list[_queries.CurrentView]:
         return _queries.get_last_known(
             self.storage, subject_id=subject_id, signal=signal, manifest=self.signals,
         )

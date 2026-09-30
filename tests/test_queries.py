@@ -152,7 +152,9 @@ def test_daily_does_not_fill_the_missing_days_with_zero():
 
     rows = api.get_daily_aggregates(s, subject_id="u1", signal="steps",
                                     start_date=date(2026, 8, 1), end_date=date(2026, 8, 5))
-    assert [r.date for r in rows] == ["2026-08-01", "2026-08-04"]
+    assert [r.date for r in rows if r.has_data] == ["2026-08-01", "2026-08-04"]
+    assert all(r.value == {} and r.completeness == "incomplete"
+               for r in rows if not r.has_data)
 
 
 def test_daily_comes_back_in_date_order_regardless_of_insert_order():
@@ -162,7 +164,8 @@ def test_daily_comes_back_in_date_order_regardless_of_insert_order():
 
     rows = api.get_daily_aggregates(s, subject_id="u1", signal="steps",
                                     start_date=date(2026, 8, 1), end_date=date(2026, 8, 31))
-    assert [r.date for r in rows] == ["2026-08-01", "2026-08-03", "2026-08-05"]
+    assert [r.date for r in rows if r.has_data] == [
+        "2026-08-01", "2026-08-03", "2026-08-05"]
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +437,7 @@ def test_the_last_known_value_always_says_when_it_was_true():
             "value": {"step_count": 8000}}],
     }, context=IngestContext("u1", t("2026-08-01")))
 
-    view = kit.get_last_known(subject_id="u1", signal="steps")
+    view = kit.get_last_known(subject_id="u1", signal="steps")[0]
     assert view.state == "last_known"
     assert view.as_of is not None and view.as_of.startswith("2026-08-01")
     # **永远不说 fresh，也不把值放在 value 上** —— 放上去调用方会当成现在的事实
@@ -446,7 +449,7 @@ def test_asking_for_the_last_known_of_a_signal_with_no_data_says_so():
     s = InMemoryStorage()
     kit = PerceptionKit(storage=s)
     view = kit.get_last_known(subject_id="u1", signal="steps")
-    assert view.state == "no_data" and view.last_known is None
+    assert view == []
 
 
 def test_a_stale_current_still_reports_when_it_was_true():
@@ -465,7 +468,7 @@ def test_a_stale_current_still_reports_when_it_was_true():
 
     # steps 的 TTL 是 1 小时
     view = kit.get_current(subject_id="u1", signals=["steps"],
-                           now=t("2026-08-01", "23:00"))["steps"]
+                           now=t("2026-08-01", "23:00"))["steps"][0]
     assert view.state == "stale"
     assert view.value is None                  # 不冒充现在
     assert view.as_of.startswith("2026-08-01")  # 但说得出是什么时候的
@@ -525,3 +528,40 @@ def test_events_can_be_narrowed_by_type_and_by_time():
 
     by_time, _ = api.list_events(s, subject_id="u1", start=t("2026-08-15"))
     assert [e["event_id"] for e in by_time] == ["e2"]
+
+
+def test_acceptance_A17_public_current_preserves_both_anchor_dimensions():
+    from test_acceptance_regressions_0_9 import T, ingest, observation
+    storage = InMemoryStorage()
+    kit = PerceptionKit(storage)
+    for i, anchor in enumerate(("home", "office")):
+        out = ingest(kit, [observation({"anchor_id": anchor, "anchor_type": "wifi",
+                                        "label": anchor, "is_connected": True},
+                                       signal="proximity_anchor", eid=anchor,
+                                       at=T + timedelta(minutes=i))],
+                     report_id=anchor, at=T + timedelta(minutes=i))
+        assert len(out.applied) == 1
+    assert len(storage.get_current(subject_id="u", signals=["proximity_anchor"])["proximity_anchor"]) == 2
+    public = kit.get_current(subject_id="u", signals=["proximity_anchor"], now=T + timedelta(minutes=2))
+    entries = public["proximity_anchor"]
+    assert isinstance(entries, list)
+    assert {e.value["anchor_id"] for e in entries if e.value} == {"home", "office"}
+
+
+@pytest.mark.parametrize("query", ["daily", "trend"])
+def test_acceptance_A18_normal_queries_do_not_mix_aggregate_versions(query):
+    storage = InMemoryStorage()
+    # v2 is the current release's completed aggregate; v3 is a candidate.
+    # This gate deliberately does not invent an activation API. Regardless of
+    # the eventual mechanism, an ordinary one-day query must not show two days.
+    storage.put_aggregate(daily("steps", "2026-08-01", {"step_count": {"total": 8000}}, version=2))
+    storage.put_aggregate(daily("steps", "2026-08-01", {"step_count": {"total": 9000}}, version=3))
+    if query == "daily":
+        rows = api.get_daily_aggregates(storage, subject_id="u1", signal="steps",
+                                        start_date=date(2026, 8, 1), end_date=date(2026, 8, 1))
+        assert len(rows) == 1, rows
+    else:
+        result = api.get_trend(storage, subject_id="u1", signal="steps", field="step_count",
+                               manifest=MINIMAL_SIGNALS,
+                               start_date=date(2026, 8, 1), end_date=date(2026, 8, 1))
+        assert (result["days_with_data"], result["days_missing"]) == (1, 0), result

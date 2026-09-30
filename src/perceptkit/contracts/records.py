@@ -57,6 +57,44 @@ class StoredObservation:
     source_event_id: str | None = None
     source_revision: str | int | None = None
     created_at: datetime | None = None
+    #: Audit only: projections always consume typed_value in canonical units.
+    source_units: dict[str, str] = field(default_factory=dict)
+    source_values: dict[str, Any] = field(default_factory=dict)
+    #: legacy_unknown is for pre-upgrade rows, never inferred from their zone.
+    timezone_source: str = "legacy_unknown"
+
+
+@dataclass(frozen=True)
+class ConflictRecord:
+    """Durable quarantined candidate; resolution preserves original evidence.
+
+    Insert/read/resolve share the candidate's Fact mutation owner. This record
+    is not an applied Observation or a dedupe identity. It survives detail
+    retention and is erased only by explicit subject purge.
+    """
+
+    conflict_id: str
+    subject_id: str
+    signal: str
+    source: str
+    fact_key: str
+    candidate_revision: str | int | None
+    semantic_digest: str
+    content_digest: str
+    kind: str
+    reason: str
+    candidate: StoredObservation
+    created_at: datetime
+    updated_at: datetime
+    status: str = "pending"
+    resolved_at: datetime | None = None
+    resolution_revision: str | int | None = None
+    resolution_semantic_digest: str | None = None
+    resolution_observation_id: str | None = None
+
+    def __post_init__(self):
+        if self.status not in ("pending", "resolved"):
+            raise ValueError("conflict status must be pending or resolved")
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +141,11 @@ class CurrentProjection:
     version: int = 0
     #: 内容摘要。用来分辨"同一时刻的重传"和"同一时刻的不同内容"。
     content_digest: str | None = None
+    #: Attribution and source-unit audit, including current_only signals.
+    timezone: str | None = None
+    timezone_source: str = "legacy_unknown"
+    source_units: dict[str, str] = field(default_factory=dict)
+    source_values: dict[str, Any] = field(default_factory=dict)
 
 
 def _compare_revisions(new: str | int | None, old: str | int | None) -> int | None:
@@ -193,13 +236,56 @@ def decide_current_update(
 # 派生
 # ---------------------------------------------------------------------------
 
+AGGREGATE_GENERATION_STATUSES = frozenset(
+    {"building", "complete", "active", "failed", "incomplete"}
+)
+AGGREGATE_COMPLETENESS = frozenset({"unknown", "complete", "incomplete"})
+
+
+@dataclass(frozen=True)
+class AggregateGeneration:
+    """One durable aggregate rebuild/publication unit.
+
+    ``aggregation_version`` names algorithm semantics; ``generation_id`` names
+    one attempt.  They are deliberately different so retrying version 3 cannot
+    overwrite the evidence or state of an earlier version-3 attempt.
+    """
+
+    generation_id: str
+    subject_id: str
+    signal: str
+    aggregation_kind: str
+    aggregation_version: int
+    requested_start_date: date
+    requested_end_date: date
+    status: str = "building"
+    completeness: str = "unknown"
+    accounted_dates: tuple[date, ...] = ()
+    incomplete_dates: tuple[date, ...] = ()
+    incomplete_reasons: tuple[str, ...] = ()
+    failure_reason: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    activated_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if not self.generation_id.strip():
+            raise ValueError("generation_id must not be empty")
+        if self.requested_end_date < self.requested_start_date:
+            raise ValueError("aggregate generation coverage end precedes start")
+        if self.status not in AGGREGATE_GENERATION_STATUSES:
+            raise ValueError(f"invalid aggregate generation status: {self.status}")
+        if self.completeness not in AGGREGATE_COMPLETENESS:
+            raise ValueError(f"invalid aggregate completeness: {self.completeness}")
+
 @dataclass(frozen=True)
 class DailyAggregate:
     """某一天（或某个窗口）的派生统计。
 
-    唯一身份 ``(subject_id, signal, local_date, aggregation_kind, aggregation_version)``。
+    唯一身份 ``(subject_id, signal, local_date, aggregation_kind, generation_id)``。
 
-    ``aggregation_version`` 是为算法升级准备的：改了口径就换版本号重算，
+    ``aggregation_version`` 是算法口径；``generation_id`` 是一次重建/发布。
+    改了口径就换版本号重算，重试同一口径也必须换 generation，
     **不原地改写旧统计的语义** —— 否则同一张表里的历史数据一半是老口径、
     一半是新口径，而且看不出来。
     """
@@ -210,11 +296,22 @@ class DailyAggregate:
     aggregation_kind: str
     aggregation_version: int
     typed_aggregate: dict[str, Any]
+    #: Publication attempt identity. ``None`` is accepted only as the explicit
+    #: legacy/bootstrap input shape; adapters must persist a concrete identity.
+    generation_id: str | None = None
+    completeness: str = "complete"
+    incomplete_reasons: tuple[str, ...] = ()
     #: 归属用的时区。跨时区之后旧记录保持原时区，不重排。
     timezone_attribution: str | None = None
     #: 这个聚合覆盖了哪些观测（数量、时间范围）。重算时用来判断完整性。
     source_coverage: dict[str, Any] = field(default_factory=dict)
     updated_at: datetime | None = None
+    #: 写入并发版本，独立于算法语义版本 aggregation_version。首次写入为 0。
+    version: int = 0
+
+    def __post_init__(self) -> None:
+        if self.completeness not in {"complete", "incomplete"}:
+            raise ValueError(f"invalid aggregate completeness: {self.completeness}")
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +419,16 @@ class DurableDedupeIdentity:
     #: 它保护的是哪个聚合范围（如 ``daily_added_count``）。
     aggregate_scope: str | None = None
     retain_until: datetime | None = None
+    #: Durable Fact revision authority. None means unmapped legacy identity.
+    fact_key: str | None = None
+    source_revision: str | int | None = None
+    semantic_digest: str | None = None
+    #: v0.8 compatibility evidence: persisted value/availability fingerprint.
+    legacy_content_digest: str | None = None
+    effective_local_date: date | None = None
+    #: Proven Current partition for this accepted revision, retained after detail
+    #: expiry. None is unknown legacy evidence (or a Current-free signal).
+    dimension_key: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +479,14 @@ class EventOutboxEntry:
     claim_token: str | None = None
     budget_reservation_id: str | None = None
     created_at: datetime | None = None
+    #: Value-free canonical Fact revision references, including previous inputs.
+    fact_dependencies: tuple[dict[str, Any], ...] = ()
+    #: False for legacy/scheduled history with unproved complete lineage.
+    #: A same-signal mutation invalidates conservatively when False.
+    fact_dependencies_complete: bool = False
+    dispatch_started_at: datetime | None = None
+    invalidated_at: datetime | None = None
+    invalidation_reason: str | None = None
 
     def __post_init__(self) -> None:
         if self.delivery_state not in delivery.DELIVERY_STATES:
@@ -387,8 +502,10 @@ class EventOutboxEntry:
 
 __all__ = [
     "StoredObservation",
+    "ConflictRecord",
     "CurrentProjection", "REPLACE", "IGNORE", "CONFLICT", "decide_current_update",
-    "DailyAggregate",
+    "AggregateGeneration", "DailyAggregate",
+    "AGGREGATE_GENERATION_STATUSES", "AGGREGATE_COMPLETENESS",
     "CalendarEventMirror", "ReminderItemMirror", "SourceSyncState",
     "DurableDedupeIdentity", "EventOutboxEntry",
 ]

@@ -738,12 +738,11 @@ HEALTH_SLEEP = SignalDefinition(
     schema_version=1,
     capability="health_sleep",
     storage_mode="current_timeline_aggregate",
+    current_policy="none",
     current_ttl_sec=86400.0,
     identity_strategy="source_event_id",
-    # 一个阶段就是一条并列的事实，不是"最新的那条睡眠"。不分维度的话
-    # 三条阶段观测会落到同一个 dimension_key 上互相覆盖，当前值只剩最后
-    # 进来的那个阶段 —— 现在没人读它，但那是给下一个使用者埋的雷。
-    # 聚合层也用这一格当分桶键（见 aggregate.fold_into_day）。
+    # 原始片段只进 Timeline + DailyAggregate，不发布某一片段作为整晚 Current。
+    # 这里的 stage 仅用于聚合分桶（见 aggregate.fold_into_day）。
     dimension_fields=("stage",),
     # 整段归【结束】那天：8月27日 23:40 睡、28日 07:20 醒 → 全算 28 日。
     # 和人说话的方式一致 —— 28 号早上你说"我昨晚睡了七个半小时"。

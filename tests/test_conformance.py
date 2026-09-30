@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 from perceptkit.conformance import (
     GUARANTEES,
     NOT_PROVABLE_IN_MEMORY,
@@ -37,7 +39,90 @@ def test_a_correct_adapter_passes_everything():
 
 
 def test_the_suite_covers_every_guarantee():
-    assert len(GUARANTEES) == 14
+    assert len(GUARANTEES) == 18
+
+
+def test_catches_an_adapter_that_activates_partial_generation():
+    def activate_aggregate_generation(self, **kwargs):
+        scope = (kwargs["subject_id"], kwargs["signal"], kwargs["aggregation_kind"])
+        self.active_aggregate_generations[scope] = kwargs["generation_id"]
+        return True
+    problems = run_storage_conformance(broken(
+        activate_aggregate_generation=activate_aggregate_generation))
+    assert hits(problems, "⑱")
+
+
+def test_catches_report_finalization_that_loses_durable_item_failures():
+    def finalize_report(self, receipt):
+        pass
+    assert hits(run_storage_conformance(broken(finalize_report=finalize_report)), "per-item")
+
+
+PROCESS_ONLY_REPORT_ISSUES = {}
+
+
+def _shared_report_storage(shared_reports, storage_type=InMemoryStorage):
+    storage = storage_type()
+    storage.reports = shared_reports
+    return storage
+
+
+def test_report_issue_restart_conformance_has_independent_prepare_and_verify_phases():
+    from perceptkit import conformance
+
+    prepare = getattr(conformance, "prepare_report_receipt_restart_conformance")
+    verify = getattr(conformance, "verify_report_receipt_restart_conformance")
+    shared_reports = {}
+    assert prepare(_shared_report_storage(shared_reports)) == []
+    assert verify(_shared_report_storage(shared_reports)) == []
+    assert not hasattr(conformance, "run_report_receipt_reopen_conformance")
+
+
+def test_report_issue_restart_verify_catches_module_cache_after_boundary_reset():
+    from perceptkit import conformance
+
+    class ProcessOnlyIssues(InMemoryStorage):
+        def finalize_report(self, receipt):
+            key = (receipt.subject_id, receipt.producer, receipt.report_id)
+            PROCESS_ONLY_REPORT_ISSUES[key] = receipt.observations_rejected
+            super().finalize_report(replace(receipt, observations_rejected=()))
+
+        def claim_report(self, **kwargs):
+            receipt = super().claim_report(**kwargs)
+            key = (kwargs["subject_id"], kwargs["producer"], kwargs["report_id"])
+            if receipt.status == "duplicate" and key in PROCESS_ONLY_REPORT_ISSUES:
+                return replace(
+                    receipt, observations_rejected=PROCESS_ONLY_REPORT_ISSUES[key])
+            return receipt
+
+    PROCESS_ONLY_REPORT_ISSUES.clear()
+    shared_reports = {}
+    writer = _shared_report_storage(shared_reports, ProcessOnlyIssues)
+    assert conformance.prepare_report_receipt_restart_conformance(writer) == []
+
+    # This deliberately demonstrates the old false green: a fresh adapter in
+    # the same process can still read a module/global cache.
+    same_process_reader = _shared_report_storage(shared_reports, ProcessOnlyIssues)
+    assert conformance.verify_report_receipt_restart_conformance(
+        same_process_reader) == []
+
+    # Clearing the fake process cache lets this package test exercise the phase
+    # boundary. It is NOT Host restart evidence; Hosts must invoke verify from a
+    # second interpreter/subprocess against the same real database.
+    PROCESS_ONLY_REPORT_ISSUES.clear()
+    independent_phase_reader = _shared_report_storage(shared_reports, ProcessOnlyIssues)
+    problems = conformance.verify_report_receipt_restart_conformance(
+        independent_phase_reader)
+    assert hits(problems, "process-boundary")
+
+
+def test_catches_receipt_backfill_that_ignores_expected_digest():
+    def backfill_report_digest(self, **kwargs):
+        from dataclasses import replace
+        key = (kwargs["subject_id"], kwargs["producer"], kwargs["report_id"])
+        self.reports[key] = replace(self.reports[key], payload_digest=kwargs["payload_digest"])
+        return True
+    assert hits(run_storage_conformance(broken(backfill_report_digest=backfill_report_digest)), "backfill")
 
 
 # ---------------------------------------------------------------------------

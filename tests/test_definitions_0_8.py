@@ -58,7 +58,9 @@ def fresh_kit(definitions=()) -> tuple[PerceptionKit, InMemoryStorage]:
 def current_value(storage: InMemoryStorage, signal: str) -> dict | None:
     view = queries.get_current(storage, subject_id="u1", signals=[signal],
                                manifest=MINIMAL_SIGNALS, now=at(1000))
-    return view[signal].last_known
+    entries = view[signal]
+    assert len(entries) <= 1
+    return entries[0].last_known if entries else None
 
 
 PLAYING = {"playback_state": "playing", "title": "t", "artist": "a",

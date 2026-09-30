@@ -7,6 +7,12 @@ from __future__ import annotations
 from typing import Sequence
 
 
+# Receipt error code: a legacy hash omitted semantic fields, so it cannot prove
+# equality with a v2 report. Original envelopes can be explicitly migrated by
+# adapters; Kit never guesses the missing original semantics from a retry.
+LEGACY_REPORT_SEMANTICS_UNVERIFIABLE = "legacy_report_semantics_unverifiable"
+
+
 class ContractError(ValueError):
     """契约校验失败。
 
@@ -19,4 +25,61 @@ class ContractError(ValueError):
         super().__init__("; ".join(self.errors))
 
 
-__all__ = ["ContractError"]
+class RetryableProjectionError(RuntimeError):
+    """Projection contention exhausted; the whole transaction must roll back.
+
+    The caller may retry the unchanged report. No accepted receipt is returned.
+    """
+
+    retryable = True
+
+    def __init__(self, projection: str, signal: str, attempts: int) -> None:
+        self.projection = projection
+        self.signal = signal
+        self.attempts = attempts
+        super().__init__(f"{signal}: {projection} CAS exhausted after {attempts} attempts")
+
+
+class RetryableMutationError(RuntimeError):
+    """Ownership/fence failed. Roll back and retry the complete operation."""
+
+    retryable = True
+
+
+class UnsupportedRetractionIdentityError(ContractError):
+    """The deletion protocol cannot apply this canonical Fact identity safely.
+
+    No writes occurred. Retrying the same payload cannot recover missing
+    identity information; the deletion-reference contract must be upgraded.
+    """
+
+    code = "retraction_identity_unsupported"
+    retryable = False
+    recovery_action = "upgrade_retraction_identity_contract"
+
+    def __init__(self, signal: str, identity_strategy: str) -> None:
+        self.signal = signal
+        self.identity_strategy = identity_strategy
+        super().__init__([f"{signal}: {self.code} ({identity_strategy}); "
+                          "Retraction/tombstone/reselection require source-event identity; "
+                          "fallback identity needs an end-to-end canonical Fact reference"])
+
+
+class RuleStateAttributionIncompleteError(ContractError):
+    """Legacy state cannot be safely attributed; restore metadata before mutation."""
+
+    code = "rule_state_attribution_incomplete"
+    retryable = False
+    recovery_action = "restore_rule_state_attribution"
+
+    def __init__(self, subject_id: str, definition_id: str, scope: str) -> None:
+        self.subject_id = subject_id
+        self.definition_id = definition_id
+        self.scope = scope
+        super().__init__([f"{self.code}: {definition_id}/{scope}; restore archived "
+                          "definition or verified RuleState/Event signal and scope metadata"])
+
+
+__all__ = ["ContractError", "RetryableProjectionError", "RetryableMutationError",
+           "UnsupportedRetractionIdentityError", "RuleStateAttributionIncompleteError",
+           "LEGACY_REPORT_SEMANTICS_UNVERIFIABLE"]

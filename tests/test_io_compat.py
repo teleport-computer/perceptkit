@@ -170,10 +170,70 @@ def test_host_reports_produce_byte_identical_results_to_v070():
     靠它找到"这条提醒是被哪条数据触发的"）。**刻意没进投出去的信封** ——
     信封是宿主接的公开契约，多一个键所有接入方都得改。纯新增，没有行为变化。
 
-    再有 diff 一律当成回归，别顺手重新生成 golden。
+    2026-09-28 D01/D03：删除 3 条原始 sleep 片段 Current；aggregate 新增
+    独立写入 version（该 fixture 全为增量写，值为 observations - 1）。
+    除这两项外保持逐字节不变；不是重算或改变 aggregation_version 算法口径。
+
+    2026-09-28 D02：仅增加 77 个 normalized semantic_digest，替换 40 个
+    Report payload_digest 为 v2 全语义摘要。迁移脚本递归拒绝其他任何差异；
+    未重录事实/投影/事件/身份，仍逐字节检查原有产品行为。
+
+    D02 review fix：Report finalization 持久化19份最终回执。
+
+    2026-09-28 durable Report outcome：回执新增结构化、脱敏的
+    observations_rejected；review 后每项补充闭集机器码 `code`，诊断文本不参与
+    恢复决策。1份 mixed report 由错误的 rejected 修正为
+    accepted，合法 sibling 保持提交；同 digest 重放返回 duplicate 和
+    原失败证据。事实、事件和投影全部仍逐字节一致。
+
+    其余 diff 一律当成回归，别顺手重新生成 golden。
     """
     golden = (FIXTURES / "golden_v0.7.0.json").read_text()
-    now = _canonical_json(run_sequence()) + "\n"
+    result = run_sequence()
+    # D08/D09 add audit-only metadata. This fixture declares no source units
+    # and explicitly supplies Asia/Shanghai. Validate new metadata then strip
+    # only those additions; the original golden remains byte-for-byte intact.
+    def check_canonical_metadata(value):
+        if isinstance(value, dict):
+            if "timezone_source" in value:
+                assert value.pop("timezone_source") == "observation"
+                assert value.pop("source_units") == {}
+                assert value.pop("source_values") == {}
+                if "dimension_key" in value:
+                    assert value.pop("timezone") == "Asia/Shanghai"
+            for child in value.values():
+                check_canonical_metadata(child)
+        elif isinstance(value, list):
+            for child in value:
+                check_canonical_metadata(child)
+    check_canonical_metadata(result)
+    # D04-D06 add storage-only provenance/audit metadata. Validate it explicitly
+    # then compare ALL pre-existing behavior to the untouched golden.
+    for entry in result["storage"]["outbox"].values():
+        refs = entry.pop("fact_dependencies")
+        assert entry.pop("fact_dependencies_complete") is True
+        assert refs and all(ref["fact_key"] and ref["observation_id"] for ref in refs)
+        assert any(ref["role"] == "current" for ref in refs)
+        for key in ("dispatch_started_at", "invalidated_at", "invalidation_reason"):
+            assert entry.pop(key) is None
+    for raw in result["storage"]["rule_state"].values():
+        assert raw.pop("signal")
+        assert raw.pop("previous_fact")["fact_key"]
+        assert raw.pop("completeness") == "complete"
+        assert raw.pop("incomplete_reason") is None
+    # D11 adds explicit generation identity/completeness to aggregate storage.
+    # This fixture performs incremental v2 writes only, so strip those verified
+    # metadata additions before comparing pre-existing product behavior.
+    legacy_aggregates = {}
+    for key, raw in result["storage"]["aggregates"].items():
+        assert raw.pop("generation_id") == "legacy-v2"
+        assert raw.pop("completeness") == "complete"
+        assert raw.pop("incomplete_reasons") == []
+        suffix = "\x1flegacy-v2"
+        assert key.endswith(suffix)
+        legacy_aggregates[key[:-len(suffix)]] = raw
+    result["storage"]["aggregates"] = legacy_aggregates
+    now = _canonical_json(result) + "\n"
     if now != golden:
         import difflib
         diff = "\n".join(list(difflib.unified_diff(

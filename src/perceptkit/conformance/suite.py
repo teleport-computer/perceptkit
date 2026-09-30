@@ -11,6 +11,16 @@
         problems = run_storage_conformance(lambda: MyPostgresStorage(fresh_db()))
         assert not problems, "\\n".join(problems)
 
+    # 阶段1：独立进程写入同一个隔离测试数据库。
+    from perceptkit.conformance import prepare_report_receipt_restart_conformance
+    problems = prepare_report_receipt_restart_conformance(MyPostgresStorage(test_db_url))
+    assert not problems, "\\n".join(problems)
+
+    # 阶段2：阶段1进程完全退出后，在新解释器/子进程运行。
+    from perceptkit.conformance import verify_report_receipt_restart_conformance
+    problems = verify_report_receipt_restart_conformance(MyPostgresStorage(test_db_url))
+    assert not problems, "\\n".join(problems)
+
 ---
 
 ## 🔴 这套东西能证明什么、不能证明什么
@@ -26,6 +36,11 @@
                         断言同 report / 同 event / 新旧 current 只有一个赢
     崩溃恢复            需要模拟"wake 已 accepted、回执还没存下来"就断电
 
+Report receipt restart 证据必须把 prepare / verify 分到两个独立解释器
+或子进程，并连接同一隔离后端。同进程创建两个 adapter 仍可能命中
+module/global cache，不是 restart 证据。该 gate 仍不能替代真实断电、
+双连接隔离和 fence 测试。
+
 在内存实现上这三类**永远是绿的** —— 内存天然原子、天然无并发。
 把它们当验过了，是这套东西最危险的用法。
 """
@@ -39,6 +54,8 @@ from ..contracts import delivery as _delivery
 from ..contracts import receipt as _receipt
 from ..contracts.records import (
     CalendarEventMirror,
+    AggregateGeneration,
+    ConflictRecord,
     CurrentProjection,
     DailyAggregate,
     DurableDedupeIdentity,
@@ -104,11 +121,92 @@ def _g1_report_and_observation_idempotency(new: StorageFactory) -> list[str]:
     if again.status != _receipt.INGEST_DUPLICATE:
         problems.append("①: 同 identity 同摘要重传应该 duplicate，不重复处理")
 
+    partial = new()
+    partial_claim = partial.claim_report(
+        subject_id="u1", producer="ios", report_id="partial",
+        payload_digest="v2:partial", received_at=T0)
+    issue = _receipt.ObservationRejection(
+        0, _receipt.OBSERVATION_VALIDATION_FAILED, ("unknown_signal",))
+    partial.finalize_report(replace(
+        partial_claim, observations_applied=1, observations_rejected=(issue,)))
+    partial_retry = partial.claim_report(
+        subject_id="u1", producer="ios", report_id="partial",
+        payload_digest="v2:partial", received_at=T0)
+    if (partial_retry.status != _receipt.INGEST_DUPLICATE
+            or partial_retry.observations_applied != 0
+            or partial_retry.observations_rejected != (issue,)):
+        problems.append("①: finalized per-item failures were not durable on duplicate replay")
+
     s2 = new()
     if not s2.append_observation(_obs()):
         problems.append("①: 第一次写观测应该返回 True")
     if s2.append_observation(_obs()):
         problems.append("①: 同一个 observation_id 重复写应该返回 False 且不重复落库")
+    for status, code in (("conflict", "fact_conflict"),
+                         ("rejected", "fact_revision_details_incomplete")):
+        terminal_store = new()
+        claim = terminal_store.claim_report(subject_id="u1", producer="ios", report_id="terminal",
+                                            payload_digest="v2:terminal", received_at=T0)
+        terminal_store.finalize_report(replace(claim, status=status, error_code=code))
+        retry = terminal_store.claim_report(subject_id="u1", producer="ios", report_id="terminal",
+                                            payload_digest="v2:terminal", received_at=T0)
+        if retry.status != status or retry.error_code != code:
+            problems.append("①: terminal report failure must survive identical retry")
+
+    # Full Kit/adaptor path: mixed and all-invalid Reports are accepted; exact
+    # same-adapter replay returns item outcomes without duplicate Fact/Event writes.
+    # Actual reopen durability is a separate conformance entry point below.
+    try:
+        from ..contracts.context import IngestContext
+        from ..kit import PerceptionKit
+        from ..rules.types import EventDefinition
+        event_rule = EventDefinition.parse({
+            "id": "report-outcome-conformance", "version": 1,
+            "source": {"signal": "steps"},
+            "condition": {"type": "occurrence"},
+            "event": {"type": "report.outcome"},
+        })
+        mixed_store = new()
+        kit = PerceptionKit(mixed_store, definitions=[event_rule])
+        valid = {"signal": "steps", "signal_schema_version": 1,
+                 "occurred_at": T0.isoformat(), "local_date": DAY.isoformat(),
+                 "availability": "observed", "source_event_id": "mixed-valid",
+                 "value": {"step_count": 10}}
+        invalid = {"signal": "unknown", "signal_schema_version": 1,
+                   "occurred_at": T0.isoformat(), "availability": "observed", "value": {}}
+        envelope = {"schema_version": 1, "report_id": "mixed", "producer": "ios",
+                    "observations": [invalid, valid]}
+        first_outcome = kit.ingest(envelope, context=IngestContext("u1", T0))
+        before = (len(mixed_store.list_observations(
+            subject_id="u1", signal="steps", limit=100)[0]),
+                  len(mixed_store.list_events(subject_id="u1", limit=100)))
+        replay_outcome = PerceptionKit(mixed_store, definitions=[event_rule]).ingest(
+            envelope, context=IngestContext("u1", T0))
+        after = (len(mixed_store.list_observations(
+            subject_id="u1", signal="steps", limit=100)[0]),
+                 len(mixed_store.list_events(subject_id="u1", limit=100)))
+        if (first_outcome.receipt.status != _receipt.INGEST_ACCEPTED
+                or first_outcome.receipt.observations_applied != 1
+                or len(first_outcome.receipt.observations_rejected) != 1):
+            problems.append("①: mixed Report did not commit as accepted with one durable item failure")
+        if (replay_outcome.receipt.status != _receipt.INGEST_DUPLICATE
+                or replay_outcome.receipt.observations_rejected
+                != first_outcome.receipt.observations_rejected
+                or replay_outcome.rejected != [(0, first_outcome.receipt.observations_rejected[0].problems)]):
+            problems.append("①: replay did not reproduce the original item failure")
+        if before != after or before != (1, 1):
+            problems.append("①: mixed Report replay duplicated a Fact or Event")
+
+        all_invalid = {"schema_version": 1, "report_id": "all-invalid",
+                       "producer": "ios", "observations": [invalid]}
+        invalid_outcome = PerceptionKit(mixed_store).ingest(
+            all_invalid, context=IngestContext("u1", T0))
+        if (invalid_outcome.receipt.status != _receipt.INGEST_ACCEPTED
+                or invalid_outcome.receipt.observations_applied != 0
+                or len(invalid_outcome.receipt.observations_rejected) != 1):
+            problems.append("①: all-invalid Report was not an accepted zero-Fact item outcome")
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"①: durable mixed Report conformance raised {type(exc).__name__}: {exc}")
     return problems
 
 
@@ -137,11 +235,25 @@ def _g3_same_identity_different_content_conflicts(new: StorageFactory) -> list[s
                    payload_digest="d1", received_at=T0)
     clash = s.claim_report(subject_id="u1", producer="ios", report_id="r1",
                            payload_digest="d2", received_at=T0)
-    if clash.status != _receipt.INGEST_CONFLICT:
+    if (clash.status != _receipt.INGEST_CONFLICT
+            or clash.error_code != "report_digest_conflict"):
         problems.append(
             "③: 同 report_id 不同内容必须 conflict —— 静默挑一个覆盖会让"
             "「到底哪份数据生效了」永远说不清"
         )
+    migrate = new()
+    key = dict(subject_id="u1", producer="ios", report_id="legacy")
+    migrate.claim_report(**key, payload_digest="old", received_at=T0)
+    if migrate.backfill_report_digest(**key, expected_digest="wrong", payload_digest="v2:new"):
+        problems.append("③: receipt backfill must reject wrong expected digest")
+    if migrate.claim_report(**key, payload_digest="old", received_at=T0).status != "duplicate":
+        problems.append("③: failed receipt backfill must not mutate original receipt")
+    if not migrate.backfill_report_digest(**key, expected_digest="old", payload_digest="v2:new"):
+        problems.append("③: receipt backfill must accept the matching original digest")
+    if not migrate.backfill_report_digest(**key, expected_digest="old", payload_digest="v2:new"):
+        problems.append("③: identical receipt backfill must be idempotent")
+    if migrate.backfill_report_digest(**key, expected_digest="v2:new", payload_digest="v2:other"):
+        problems.append("③: receipt backfill must not overwrite migrated semantic content")
     return problems
 
 
@@ -186,6 +298,24 @@ def _g5_atomic_boundary_is_offered(new: StorageFactory) -> list[str]:
             s.append_observation(_obs())
     except Exception as exc:                       # noqa: BLE001
         problems.append(f"⑤: transaction() 不可用：{exc}")
+    rollback = new()
+    try:
+        with rollback.mutation_transaction():
+            claim = rollback.claim_report(
+                subject_id="u1", producer="ios", report_id="rollback-issue",
+                payload_digest="v2:rollback", received_at=T0)
+            rollback.finalize_report(replace(
+                claim, observations_rejected=(
+                    _receipt.ObservationRejection(
+                        0, _receipt.OBSERVATION_VALIDATION_FAILED, ("invalid",)),)))
+            raise RuntimeError("rollback probe")
+    except RuntimeError:
+        pass
+    retry = rollback.claim_report(
+        subject_id="u1", producer="ios", report_id="rollback-issue",
+        payload_digest="v2:rollback", received_at=T0)
+    if retry.status != _receipt.INGEST_ACCEPTED or retry.observations_rejected:
+        problems.append("⑤: rolled-back Report item failure remained durable")
     return problems
 
 
@@ -663,17 +793,329 @@ def _g14_a_repeated_transition_is_a_new_event_a_replay_is_not(
     ).normalized[0]
     ids = []
     for _ in range(2):
-        with s2.transaction():
+        from ..processing.mutation import rule_keys
+        with s2.mutation_transaction() as mutation:
+            mutation.acquire(rule_keys([item], [rule]))
             s2.put_rule_state(subject_id="u1", definition_id=rule.definition_id,
                               scope_key=scope, state=dict(before or {}))
             out = evaluate_and_enqueue(item, context=ctx, storage=s2,
-                                       definitions=[rule])
+                                       definitions=[rule], mutation=mutation)
         ids += [e.event_id for e in out.events]
     if arrivals(s2) != 1 or len(ids) != 1:
         problems.append(
             f"⑭: 同一条观测从同一个状态重放，发件箱里有 {arrivals(s2)} 个事件、"
             f"入队成功 {len(ids)} 次，应该都是 1 —— 崩溃重放会让用户被提醒两次"
         )
+    return problems
+
+
+def _g15_mutation_and_aggregate_cas(new: StorageFactory) -> list[str]:
+    """Sequential contract only; real competing connections remain host proof."""
+    from ..contracts.mutation import aggregate_key, fact_key, RetryableMutationError
+
+    problems = []
+    s = new()
+    row = DailyAggregate(subject_id="u1", signal="steps", local_date=DAY,
+                         aggregation_kind="daily", aggregation_version=7,
+                         typed_aggregate={"n": 1}, updated_at=T0)
+    def get():
+        return next(a for a in s.get_aggregate(subject_id="u1", signal="steps",
+                    start_date=DAY, end_date=DAY) if a.aggregation_version == 7)
+    with s.mutation_transaction() as owner:
+        owner.acquire([aggregate_key("u1", "steps", DAY, "daily", 7)])
+        if not s.compare_and_put_aggregate(row, expected_version=-1) or get().version != 0:
+            problems.append("aggregate CAS: missing=-1, first successful write=0")
+        before = get()
+        if s.compare_and_put_aggregate(replace(row, typed_aggregate={"n": 99}), expected_version=-1) or get() != before:
+            problems.append("aggregate CAS: failed compare must change nothing")
+        if not s.compare_and_put_aggregate(row, expected_version=0) or get().version != 1:
+            problems.append("aggregate CAS: successful compare increments write version")
+        s.put_aggregate(row)
+        if get().version != 2 or get().aggregation_version != 7:
+            problems.append("aggregate CAS: ordinary put increments write version, not algorithm version")
+        before = get()
+        if s.compare_and_put_aggregate(row, expected_version=1) or get() != before:
+            problems.append("aggregate CAS: ordinary put must stale a prior read")
+    # A rollback-only owner must not commit just because application code caught
+    # its failure, and an expired capability must never acquire another lock.
+    try:
+        with s.mutation_transaction() as owner:
+            owner.acquire([aggregate_key("u1", "steps", DAY, "daily", 7)])
+            s.put_aggregate(replace(row, typed_aggregate={"n": 22}))
+            try:
+                owner.acquire([fact_key("u1", "steps", "ios", "late")])
+            except RetryableMutationError:
+                pass
+            else:
+                problems.append("mutation ownership: descending acquisition must abort")
+    except RetryableMutationError:
+        pass
+    else:
+        problems.append("mutation ownership: caught ownership failure still rolls back")
+    if get() != before:
+        problems.append("mutation ownership: aborted operation left a partial write")
+    try:
+        owner.acquire([aggregate_key("u1", "steps", DAY, "daily", 7)])
+    except RetryableMutationError:
+        pass
+    else:
+        problems.append("mutation ownership: owner remained usable after transaction exit")
+    identity = DurableDedupeIdentity(
+        subject_id="u1", signal="anchor", source="ios", source_event_identity_digest="partition-evidence",
+        first_applied_at=T0, fact_key="fact", source_revision=1, semantic_digest="content")
+    s.remember_identity(identity)
+    proven = replace(identity, dimension_key="anchor\x1fA")
+    s.backfill_identity(proven)
+    def identities():
+        return list(s.list_identities(subject_id="u1", signal="anchor", source="ios", fact_key="fact"))
+    if identities() != [proven]:
+        problems.append("dimension backfill: fill unknown partition without changing Fact metadata")
+    try:
+        s.backfill_identity(replace(proven, dimension_key="anchor\x1fB"))
+    except ValueError:
+        pass
+    else:
+        problems.append("dimension backfill: refuse replacing a known partition")
+    if identities() != [proven]:
+        problems.append("dimension backfill: rejected metadata change must leave original evidence intact")
+    return problems
+
+
+def _g16_dispatch_fence_and_invalidation(factory: StorageFactory) -> list[str]:
+    """Sequential executable adapter obligations, not database race evidence."""
+    from ..contracts.mutation import event_key
+    problems = []
+    s = factory()
+    ref = dict(subject_id="u1", signal="weight", source="ios", source_event_id="a",
+               fact_key="fact-a", observation_id="obs-a", source_revision=1, role="previous")
+    s.enqueue_event(_entry(event_id="revocable", fact_snapshot={
+        "signal": "weight", "previous": 70, "current": 72,
+        "context": {"reason": "70 -> 72", "scope": "forever@v1"}},
+        fact_dependencies=(ref,), fact_dependencies_complete=True))
+    first = s.claim_pending_event(worker_id="a", now=T0, lease_seconds=1)
+    second = s.claim_pending_event(worker_id="b", now=T0 + timedelta(seconds=2), lease_seconds=60)
+    if s.begin_event_dispatch(event_id=first.event_id, claim_token=first.claim_token,
+                               now=T0 + timedelta(seconds=2)) is not None:
+        problems.append("dispatch fence: stale token started external delivery")
+    started = s.begin_event_dispatch(event_id=second.event_id, claim_token=second.claim_token,
+                                     now=T0 + timedelta(seconds=2))
+    if started is None or not started.dispatch_started_at:
+        problems.append("dispatch fence: current owner did not persist start")
+    if s.begin_event_dispatch(event_id=second.event_id, claim_token=second.claim_token,
+                               now=T0 + timedelta(seconds=2)) is not None:
+        problems.append("dispatch fence: one claim started twice")
+    with s.mutation_transaction() as owner:
+        owner.acquire((event_key("u1", "weight"),))
+        s.scrub_event_snapshots(subject_id="u1", signal="weight", source="ios",
+                                 source_event_id="a", now=T0 + timedelta(seconds=3))
+    entry = s.list_events(subject_id="u1")[0]
+    if (entry.delivery_state != _delivery.UNKNOWN or not entry.invalidated_at
+            or entry.fact_snapshot.get("previous") is not None
+            or entry.fact_snapshot.get("current") is not None
+            or entry.fact_snapshot.get("context", {}).get("reason")):
+        problems.append("event invalidation: started previous-dependency event was not scrubbed/unknown")
+    if s.claim_pending_event(worker_id="c", now=T0 + timedelta(days=1), lease_seconds=60) is not None:
+        problems.append("dispatch fence: unknown attempt was automatically reclaimed")
+    return problems
+
+
+def _g17_durable_conflicts_and_metadata(new: StorageFactory) -> list[str]:
+    from ..contracts.mutation import fact_key
+
+    s = new()
+    problems = []
+    candidate = StoredObservation("conflict-candidate", "u1", "weight", 1, "ios", T0, T0,
+                                  "observed", DAY, typed_value={"kg": 150}, timezone="UTC",
+                                  source_event_id="sample", source_revision=1,
+                                  source_units={"kg": "g"}, source_values={"kg": 150000},
+                                  timezone_source="host_fallback")
+    row = ConflictRecord("conflict-1", "u1", "weight", "ios", "fact", 1, "semantic", "content",
+                         "relative_jump", "max_relative_jump: kg", candidate, T0, T0)
+    lock = fact_key("u1", "weight", "ios", "sample")
+    with s.mutation_transaction() as owner:
+        owner.acquire((lock,))
+        if s.put_conflict(row) != row:
+            problems.append("conflict insert did not return durable candidate")
+        if s.put_conflict(replace(row, updated_at=T0 + timedelta(seconds=1))) != row:
+            problems.append("conflict retry overwrote original evidence")
+    found = list(s.list_conflicts(subject_id="u1", signal="weight", source="ios", fact_key="fact", status="pending"))
+    if found != [row]:
+        problems.append("conflict insert/query/metadata did not round-trip")
+    if (s.list_conflicts(subject_id="u2") or s.list_conflicts(subject_id="u1", signal="other")
+            or s.list_conflicts(subject_id="u1", source="other")
+            or s.list_conflicts(subject_id="u1", fact_key="other")
+            or s.list_conflicts(subject_id="u1", status="resolved")):
+        problems.append("conflict query leaked subject/filter")
+
+    args = dict(subject_id="u1", conflict_id=row.conflict_id,
+                semantic_digest="resolved-semantic", observation_id="replacement", resolved_at=T0)
+    with s.mutation_transaction() as owner:
+        owner.acquire((lock,))
+        for revision in (0, 1, "opaque"):
+            if s.resolve_conflict(**args, revision=revision):
+                problems.append("conflict resolved without higher comparable revision")
+    try:
+        with s.mutation_transaction() as owner:
+            owner.acquire((lock,))
+            s.put_conflict(replace(row, conflict_id="rolled-back"))
+            s.resolve_conflict(**args, revision=2)
+            raise RuntimeError("conformance rollback")
+    except RuntimeError:
+        pass
+    if list(s.list_conflicts(subject_id="u1")) != [row]:
+        problems.append("conflict insert/resolution survived transaction rollback")
+    with s.mutation_transaction() as owner:
+        owner.acquire((lock,))
+        if not s.resolve_conflict(**args, revision=2):
+            problems.append("conflict resolution failed")
+        if not s.resolve_conflict(**args, revision=2):
+            problems.append("conflict identical resolution is not idempotent")
+        if s.resolve_conflict(**args, revision=3):
+            problems.append("conflict resolution audit was overwritten")
+    resolved = list(s.list_conflicts(subject_id="u1", status="resolved"))
+    expected = replace(row, status="resolved", resolved_at=T0, resolution_revision=2,
+                       resolution_semantic_digest="resolved-semantic",
+                       resolution_observation_id="replacement")
+    if resolved != [expected] or s.list_conflicts(subject_id="u1", status="pending"):
+        problems.append("conflict resolution not durable or candidate audit changed")
+
+    # Persist the same audit fields for accepted Observation and Current-only
+    # values; adapter schema migrations must not silently discard them.
+    s.append_observation(candidate)
+    current = CurrentProjection("u1", "weight", "weight", {"kg": 150}, "observed", T0, T0,
+                                timezone="UTC", timezone_source="host_fallback",
+                                source_units={"kg": "g"}, source_values={"kg": 150000})
+    s.compare_and_put_current(current, expected_version=-1)
+    if list(s.list_observations(subject_id="u1", signal="weight")[0]) != [candidate]:
+        problems.append("conflict source unit/timezone metadata lost on Observation")
+    if list(s.get_current(subject_id="u1", signals=["weight"])["weight"]) != [current]:
+        problems.append("conflict source unit/timezone metadata lost on Current")
+    s.delete_observations(subject_id="u1", signal="weight", before=T0 + timedelta(days=1))
+    if list(s.list_conflicts(subject_id="u1")) != [expected]:
+        problems.append("conflict audit did not survive detail retention")
+    s.purge_subject(subject_id="u1")
+    if s.list_conflicts(subject_id="u1"):
+        problems.append("conflict audit escaped subject purge")
+    return problems
+
+
+def _g18_aggregate_generation_cutover(new: StorageFactory) -> list[str]:
+    """Sequential D11/D13 semantics; real concurrent CAS remains host proof."""
+    problems = []
+    s = new()
+    old_row = DailyAggregate("u1", "steps", DAY, "daily", 2, {"n": 1}, updated_at=T0)
+    s.put_aggregate(old_row)
+    old = s.get_active_aggregate_generation(
+        subject_id="u1", signal="steps", aggregation_kind="daily")
+    if old is None or old.aggregation_version != 2:
+        return ["generation bootstrap did not establish explicit active pointer"]
+    tomorrow = DAY + timedelta(days=1)
+    candidate = AggregateGeneration(
+        "candidate", "u1", "steps", "daily", 3, DAY, tomorrow,
+        created_at=T0, updated_at=T0)
+    s.put_aggregate_generation(candidate)
+    s.put_aggregate(DailyAggregate("u1", "steps", DAY, "daily", 3, {"n": 10},
+                                   generation_id="candidate", updated_at=T0))
+    partial = replace(candidate, status="complete", completeness="complete",
+                      accounted_dates=(DAY,))
+    s.update_aggregate_generation(partial)
+    if s.activate_aggregate_generation(
+            subject_id="u1", signal="steps", aggregation_kind="daily",
+            generation_id="candidate", expected_active_generation_id=old.generation_id,
+            activated_at=T0):
+        problems.append("partial generation activated")
+    if s.get_active_aggregate_generation(
+            subject_id="u1", signal="steps", aggregation_kind="daily") != old:
+        problems.append("failed activation changed old active pointer")
+    s.put_aggregate(DailyAggregate("u1", "steps", tomorrow, "daily", 3, {"n": 20},
+                                   generation_id="candidate", updated_at=T0))
+    complete = replace(partial, accounted_dates=(DAY, tomorrow))
+    s.update_aggregate_generation(complete)
+    if not s.activate_aggregate_generation(
+            subject_id="u1", signal="steps", aggregation_kind="daily",
+            generation_id="candidate", expected_active_generation_id=old.generation_id,
+            activated_at=T0):
+        problems.append("complete generation did not activate")
+    active = s.get_active_aggregate_generation(
+        subject_id="u1", signal="steps", aggregation_kind="daily")
+    if active is None or active.generation_id != "candidate":
+        problems.append("activation pointer did not select candidate")
+    narrow = AggregateGeneration(
+        "narrow", "u1", "steps", "daily", 4, tomorrow, tomorrow,
+        status="complete", completeness="complete", accounted_dates=(tomorrow,),
+        created_at=T0, updated_at=T0)
+    s.put_aggregate_generation(narrow)
+    s.put_aggregate(DailyAggregate("u1", "steps", tomorrow, "daily", 4, {"n": 99},
+                                   generation_id="narrow", updated_at=T0))
+    if s.activate_aggregate_generation(
+            subject_id="u1", signal="steps", aggregation_kind="daily",
+            generation_id="narrow", expected_active_generation_id="candidate",
+            activated_at=T0):
+        problems.append("narrow candidate collapsed broader active history")
+    if not s.mark_active_aggregate_incomplete(
+            subject_id="u1", signal="steps", aggregation_kind="daily",
+            local_date=DAY, reason="detail_retention_expired", updated_at=T0):
+        problems.append("active incomplete marker was not persisted")
+    marked = s.get_active_aggregate_generation(
+        subject_id="u1", signal="steps", aggregation_kind="daily")
+    if marked is None or DAY not in marked.incomplete_dates or marked.completeness != "incomplete":
+        problems.append("active generation still claims complete after lost detail")
+
+    # Sparse raw inserts are not proof that the dates between endpoints were
+    # inspected. The adapter must surface the gap rather than claim it complete.
+    sparse = new()
+    sparse.put_aggregate(DailyAggregate(
+        "u1", "steps", DAY, "daily", 2, {"n": 1}, updated_at=T0))
+    sparse_active = sparse.get_active_aggregate_generation(
+        subject_id="u1", signal="steps", aggregation_kind="daily")
+    gap_end = DAY + timedelta(days=2)
+    sparse.put_aggregate(DailyAggregate(
+        "u1", "steps", gap_end, "daily", 2, {"n": 2},
+        generation_id=sparse_active.generation_id, updated_at=T0))
+    sparse_active = sparse.get_active_aggregate_generation(
+        subject_id="u1", signal="steps", aggregation_kind="daily")
+    if (sparse_active.completeness != "incomplete"
+            or DAY + timedelta(days=1) not in sparse_active.incomplete_dates):
+        problems.append("sparse bootstrap inferred contiguous complete coverage")
+    from ..queries.api import get_daily_aggregates
+    visible = get_daily_aggregates(
+        sparse, subject_id="u1", signal="steps", start_date=DAY, end_date=gap_end)
+    gap = [row for row in visible if row.date == (DAY + timedelta(days=1)).isoformat()]
+    if len(gap) != 1 or gap[0].has_data or gap[0].completeness != "incomplete":
+        problems.append("generation incomplete date was absent from ordinary daily reads")
+
+    # Retention narrows what remains readable; a replacement covering exactly
+    # that retained scope must no longer be rejected against deleted history.
+    sparse.delete_aggregates(subject_id="u1", signal="steps", before=gap_end)
+    retained = sparse.get_active_aggregate_generation(
+        subject_id="u1", signal="steps", aggregation_kind="daily")
+    if retained is None or retained.requested_start_date != gap_end:
+        problems.append("retention did not reconcile active generation coverage")
+
+    # A row may never borrow a generation id while carrying another algorithm
+    # version. If a legacy adapter accepts it, activation must still fail closed.
+    binding = new()
+    bound_generation = AggregateGeneration(
+        "bound-v3", "u1", "steps", "daily", 3, DAY, DAY,
+        status="complete", completeness="complete", accounted_dates=(DAY,),
+        created_at=T0, updated_at=T0)
+    binding.put_aggregate_generation(bound_generation)
+    mismatch = DailyAggregate(
+        "u1", "steps", DAY, "daily", 2, {"n": 999},
+        generation_id="bound-v3", updated_at=T0)
+    accepted_mismatch = False
+    try:
+        binding.put_aggregate(mismatch)
+    except ValueError:
+        pass
+    else:
+        accepted_mismatch = True
+        problems.append("aggregate row accepted a mismatched generation algorithm version")
+    if accepted_mismatch and binding.activate_aggregate_generation(
+            subject_id="u1", signal="steps", aggregation_kind="daily",
+            generation_id="bound-v3", expected_active_generation_id=None,
+            activated_at=T0):
+        problems.append("activation published a row with mismatched generation metadata")
     return problems
 
 
@@ -692,6 +1134,10 @@ GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
     "⑫终态可查与翻页下推": _g12_terminal_events_and_offsets_are_queryable,
     "⑬删除只命中自己的范围": _g13_deletes_hit_exactly_their_own_scope,
     "⑭同一跳变再发生是新事件": _g14_a_repeated_transition_is_a_new_event_a_replay_is_not,
+    "⑮mutation ownership与aggregate CAS": _g15_mutation_and_aggregate_cas,
+    "⑯dispatch fence与event invalidation": _g16_dispatch_fence_and_invalidation,
+    "⑰durable conflict与canonical metadata": _g17_durable_conflicts_and_metadata,
+    "⑱aggregate generation原子切换与incomplete": _g18_aggregate_generation_cutover,
 }
 
 #: 这几条在内存实现上**永远是绿的**，因为内存天然原子、天然无并发。
@@ -699,12 +1145,64 @@ GUARANTEES: dict[str, Callable[[StorageFactory], list[str]]] = {
 NOT_PROVABLE_IN_MEMORY: frozenset[str] = frozenset({"⑤提供原子边界"})
 
 
+def _restart_receipt_issue() -> _receipt.ObservationRejection:
+    return _receipt.ObservationRejection(
+        0, _receipt.OBSERVATION_VALIDATION_FAILED, ("unknown_signal",))
+
+
+def prepare_report_receipt_restart_conformance(storage: Any) -> list[str]:
+    """Phase 1: write a fixed Report outcome, then terminate this process.
+
+    The backend must be an isolated empty test database that phase 2 can open.
+    A successful return proves only the write call completed, not durability.
+    """
+    problems: list[str] = []
+    expected = _restart_receipt_issue()
+    try:
+        with storage.mutation_transaction():
+            claim = storage.claim_report(
+                subject_id="reopen-user", producer="reopen-producer",
+                report_id="reopen-report", payload_digest="v2:reopen", received_at=T0)
+            if claim.status != _receipt.INGEST_ACCEPTED:
+                problems.append(
+                    "process-boundary prepare requires an empty isolated backend")
+                return problems
+            storage.finalize_report(replace(
+                claim, observations_applied=1, observations_rejected=(expected,)))
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"process-boundary prepare raised {type(exc).__name__}: {exc}")
+    return problems
+
+
+def verify_report_receipt_restart_conformance(storage: Any) -> list[str]:
+    """Phase 2: in a new process, verify phase 1 only from durable state."""
+    problems: list[str] = []
+    expected = _restart_receipt_issue()
+    try:
+        replay = storage.claim_report(
+            subject_id="reopen-user", producer="reopen-producer",
+            report_id="reopen-report", payload_digest="v2:reopen", received_at=T0)
+        if (replay.status != _receipt.INGEST_DUPLICATE
+                or replay.observations_applied != 0
+                or replay.observations_rejected != (expected,)):
+            problems.append(
+                "process-boundary verify lost durable Report observation issues")
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"process-boundary verify raised {type(exc).__name__}: {exc}")
+    return problems
+
+
 def run_storage_conformance(factory: StorageFactory) -> list[str]:
-    """跑全部十四条，返回问题清单（空 = 通过）。
+    """跑全部十八条，返回问题清单（空 = 通过）。
 
     返回列表而不是抛异常：一次看到全部缺口，比逐个修再重跑快得多。
     """
     problems: list[str] = []
+    from ..ports.storage import require_aggregate_generation_storage
+    try:
+        require_aggregate_generation_storage(factory())
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"v0.10 aggregate-generation adapter readiness: {type(exc).__name__}: {exc}")
     for name, check in GUARANTEES.items():
         try:
             problems += [f"{name} {p}" for p in check(factory)]
@@ -713,4 +1211,8 @@ def run_storage_conformance(factory: StorageFactory) -> list[str]:
     return problems
 
 
-__all__ = ["run_storage_conformance", "GUARANTEES", "NOT_PROVABLE_IN_MEMORY"]
+__all__ = [
+    "run_storage_conformance", "prepare_report_receipt_restart_conformance",
+    "verify_report_receipt_restart_conformance",
+    "GUARANTEES", "NOT_PROVABLE_IN_MEMORY",
+]

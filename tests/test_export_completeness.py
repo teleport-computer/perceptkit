@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from perceptkit import IngestContext, PerceptionKit
 from perceptkit.conformance import InMemoryStorage
 from perceptkit.manifest import MINIMAL_SIGNALS
@@ -67,3 +69,52 @@ def test_export_includes_the_daily_aggregates():
     dump = kit.export_subject(subject_id="u")
     assert "daily_aggregates" in dump, "导出里没有日聚合"
     assert dump["daily_aggregates"], "日聚合是空的 —— 实际有数据"
+
+
+def _seed_export_collection(storage, collection, count):
+    from perceptkit.contracts.records import CalendarEventMirror, EventOutboxEntry, ReminderItemMirror
+    from test_acceptance_regressions_0_9 import weigh
+    kit = _kit(storage)
+    for i in range(count):
+        if collection == "health_weight":
+            weigh(kit, 70 + i, eid=str(i), at=T0 + timedelta(minutes=i))
+        elif collection == "calendar_events":
+            storage.upsert_calendar_events(subject_id="u", events=[CalendarEventMirror(
+                "u", "ios", "account", "calendar", str(i), {"title": str(i), "start_at": T0})])
+        elif collection == "reminders":
+            storage.upsert_reminders(subject_id="u", items=[ReminderItemMirror(
+                "u", "ios", "account", "list", str(i), {"title": str(i), "is_completed": False})])
+        else:
+            storage.enqueue_event(EventOutboxEntry(
+                event_id=str(i), subject_id="u", definition_id="d", definition_version=1,
+                event_type="example", occurred_at=T0, detected_at=T0, fact_snapshot={}))
+    return kit
+
+
+@pytest.mark.parametrize("collection", ["health_weight", "calendar_events", "reminders", "events"])
+def test_acceptance_A19_exact_export_cap_is_not_truncated(collection):
+    kit = _seed_export_collection(InMemoryStorage(), collection, 1)
+    dump = kit.export_subject(subject_id="u", per_signal_limit=1)
+    rows = dump["observations"][collection] if collection == "health_weight" else dump[collection]
+    assert len(rows) == 1
+    assert dump["truncated"] == [], dump["truncated"]
+
+
+@pytest.mark.parametrize("collection", ["health_weight", "calendar_events", "reminders", "events"])
+def test_acceptance_A20_over_export_cap_names_each_truncated_collection(collection):
+    kit = _seed_export_collection(InMemoryStorage(), collection, 2)
+    dump = kit.export_subject(subject_id="u", per_signal_limit=1)
+    rows = dump["observations"][collection] if collection == "health_weight" else dump[collection]
+    assert len(rows) == 1
+    assert dump["truncated"] == [collection], dump["truncated"]
+
+
+def test_acceptance_A20_export_aggregate_window_matches_observation_window():
+    from test_acceptance_regressions_0_9 import weigh
+    storage = InMemoryStorage()
+    kit = _kit(storage)
+    weigh(kit, 70, eid="inside", at=T0)
+    weigh(kit, 71, eid="outside", at=T0 + timedelta(days=2))
+    dump = kit.export_subject(subject_id="u", start=T0 - timedelta(hours=1), end=T0 + timedelta(hours=1))
+    assert len(dump["observations"]["health_weight"]) == 1
+    assert [a["date"] for a in dump["daily_aggregates"]["health_weight"]] == ["2026-09-06"]

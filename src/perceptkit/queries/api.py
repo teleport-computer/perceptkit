@@ -22,14 +22,16 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timezone
 from typing import Any, Mapping, Sequence
 
 from ..algorithms import history as _history
 from ..algorithms import trend_models as _trend
 from ..manifest.types import SignalDefinition
-from ..ports.storage import StoragePort
+from ..manifest.checks import require_public_dimension_fields
+from ..ports.storage import StoragePort, require_aggregate_generation_storage
+from ..contracts.records import DailyAggregate
 from ..processing.retract import drop_retracted
 from ..processing import recurrence as _recurrence
 
@@ -107,10 +109,11 @@ def project(sig: SignalDefinition, value: Mapping[str, Any] | None,
 
 @dataclass(frozen=True)
 class CurrentView:
-    """一个信号的当前状态，以及"它还算不算当前"。"""
+    """一个信号维度的状态；同一信号的其他维度独立判断。"""
 
     signal: str
-    #: ``fresh`` / ``stale`` / ``unavailable`` / ``no_data``
+    dimension_key: str
+    #: ``fresh`` / ``stale`` / ``unavailable`` / ``last_known``
     state: str
     value: dict[str, Any] | None
     #: 最后一次可靠值。**stale 时也给**，但必须带 ``as_of``，不能冒充当前。
@@ -122,52 +125,49 @@ def get_current(
     storage: StoragePort, *, subject_id: str, signals: Sequence[str],
     manifest: Mapping[str, SignalDefinition], now: datetime,
     on_demand: bool = True,
-) -> dict[str, CurrentView]:
-    """取当前值，带 TTL 判定和隐私投影。"""
-    out: dict[str, CurrentView] = {}
+) -> dict[str, list[CurrentView]]:
+    """v0.10: signal -> entries[]，按 dimension_key 排序；无当前值返回 []。"""
+    require_public_dimension_fields(manifest)
+    out: dict[str, list[CurrentView]] = {}
     raw = storage.get_current(subject_id=subject_id, signals=list(signals))
     for signal in signals:
         sig = manifest.get(signal)
         projections = raw.get(signal) or []
-        if sig is None or not projections:
-            out[signal] = CurrentView(signal, "no_data", None)
+        if sig is None or sig.current_policy == "none" or not projections:
+            out[signal] = []
             continue
-        proj = max(projections, key=lambda p: p.observed_at)
-        visible = project(sig, proj.typed_value, on_demand=on_demand)
-        fresh = proj.expires_at is None or proj.expires_at > now
-        if proj.availability != "observed":
-            state = "unavailable"
-        else:
-            state = "fresh" if fresh else "stale"
-        out[signal] = CurrentView(
-            signal=signal,
-            state=state,
-            value=visible if state == "fresh" else None,
-            last_known=visible,
-            as_of=proj.observed_at.isoformat(),
-        )
+        out[signal] = []
+        for proj in sorted(projections, key=lambda p: p.dimension_key):
+            visible = project(sig, proj.typed_value, on_demand=on_demand)
+            fresh = proj.expires_at is None or proj.expires_at > now
+            state = "unavailable" if proj.availability != "observed" else ("fresh" if fresh else "stale")
+            out[signal].append(CurrentView(
+                signal=signal, dimension_key=proj.dimension_key, state=state,
+                value=visible if state == "fresh" else None, last_known=visible,
+                as_of=proj.observed_at.isoformat(),
+            ))
     return out
 
 
 def get_last_known(
     storage: StoragePort, *, subject_id: str, signal: str,
     manifest: Mapping[str, SignalDefinition], on_demand: bool = True,
-) -> CurrentView:
+) -> list[CurrentView]:
     """最后一次可靠值，**不判 TTL**。
 
     和 ``get_current`` 的区别是意图：这个函数的调用方已经知道自己要的是
     "最后一次"，不是"现在"。所以永远带 ``as_of``，永远不说 fresh。
     """
+    require_public_dimension_fields(manifest)
     sig = manifest.get(signal)
     projections = storage.get_current(subject_id=subject_id, signals=[signal]).get(signal)
-    if sig is None or not projections:
-        return CurrentView(signal, "no_data", None)
-    proj = max(projections, key=lambda p: p.observed_at)
-    return CurrentView(
-        signal=signal, state="last_known", value=None,
+    if sig is None or sig.current_policy == "none" or not projections:
+        return []
+    return [CurrentView(
+        signal=signal, dimension_key=proj.dimension_key, state="last_known", value=None,
         last_known=project(sig, proj.typed_value, on_demand=on_demand),
         as_of=proj.observed_at.isoformat(),
-    )
+    ) for proj in sorted(projections, key=lambda p: p.dimension_key)]
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +219,55 @@ class DailyView:
     value: dict[str, Any]
     #: 这一天有没有数据。**空缺的日子不补零** —— `no_data` 不是 0。
     has_data: bool = True
+    completeness: str = "complete"
+    incomplete_reasons: tuple[str, ...] = ()
+
+
+def _active_aggregate_rows(storage, *, subject_id, signal, start_date, end_date,
+                           aggregation_kind="daily", include_incomplete=True):
+    """Read one explicit active generation; never infer ``max(version)``."""
+    require_aggregate_generation_storage(storage)
+    active = storage.get_active_aggregate_generation(
+        subject_id=subject_id, signal=signal, aggregation_kind=aggregation_kind)
+    if active is None:
+        return []
+    rows = storage.get_aggregate(
+        subject_id=subject_id, signal=signal, start_date=start_date,
+        end_date=end_date, aggregation_kind=aggregation_kind,
+    )
+    rows = [row for row in rows if row.generation_id == active.generation_id]
+    by_day = {row.local_date: row for row in rows}
+    incomplete_days = {
+        day for day in active.incomplete_dates if start_date <= day <= end_date
+    }
+    for day in incomplete_days:
+        row = by_day.get(day)
+        if row is None:
+            by_day[day] = DailyAggregate(
+                subject_id=subject_id, signal=signal, local_date=day,
+                aggregation_kind=aggregation_kind,
+                aggregation_version=active.aggregation_version,
+                typed_aggregate={}, generation_id=active.generation_id,
+                completeness="incomplete",
+                incomplete_reasons=active.incomplete_reasons,
+                source_coverage={"generation_incomplete_placeholder": True},
+                updated_at=active.updated_at,
+            )
+        elif row.completeness == "complete":
+            by_day[day] = replace(
+                row, completeness="incomplete",
+                incomplete_reasons=tuple(sorted(set(row.incomplete_reasons)
+                                                | set(active.incomplete_reasons))))
+    rows = list(by_day.values())
+    if not include_incomplete:
+        rows = [row for row in rows if row.completeness == "complete"]
+    # Rebuild coverage includes no-data days as accounted rows; ordinary daily
+    # history keeps its long-standing no-zero/no-placeholder contract.
+    return [row for row in rows if not (
+        row.source_coverage.get("recomputed") is True
+        and int(row.source_coverage.get("observations", 0)) == 0
+        and row.local_date not in incomplete_days
+    )]
 
 
 def get_daily_aggregates(
@@ -230,12 +279,15 @@ def get_daily_aggregates(
     补零是这类系统最常见的一个静默错误：十四天里两天没戴表，补两个 0 进去，
     平均睡眠时长立刻被拉垮，而且没有任何地方报错。
     """
-    rows = storage.get_aggregate(
-        subject_id=subject_id, signal=signal,
+    rows = _active_aggregate_rows(
+        storage, subject_id=subject_id, signal=signal,
         start_date=start_date, end_date=end_date, aggregation_kind="daily",
     )
     return [
-        DailyView(date=r.local_date.isoformat(), value=r.typed_aggregate)
+        DailyView(date=r.local_date.isoformat(), value=r.typed_aggregate,
+                  has_data=not r.source_coverage.get("generation_incomplete_placeholder", False),
+                  completeness=r.completeness,
+                  incomplete_reasons=r.incomplete_reasons)
         for r in sorted(rows, key=lambda r: r.local_date)
     ]
 
@@ -259,16 +311,21 @@ def get_trend(
     if fd.query_visibility == "never":
         return {"model": "none", "reason": "这个字段不对 agent 开放"}
 
-    rows = storage.get_aggregate(
-        subject_id=subject_id, signal=signal,
+    all_active_rows = _active_aggregate_rows(
+        storage, subject_id=subject_id, signal=signal,
         start_date=start_date, end_date=end_date, aggregation_kind="daily",
     )
+    incomplete_days = {row.local_date for row in all_active_rows
+                       if row.completeness != "complete"}
+    rows = [row for row in all_active_rows if row.completeness == "complete"]
     docs = [
         {"date": r.local_date.isoformat(), "doc": r.typed_aggregate}
         for r in sorted(rows, key=lambda r: r.local_date)
     ]
     span = (end_date - start_date).days + 1
-    coverage = {"days_with_data": len(docs), "days_missing": max(0, span - len(docs))}
+    coverage = {"days_with_data": len(docs),
+                "days_missing": max(0, span - len(docs) - len(incomplete_days)),
+                "days_incomplete": len(incomplete_days)}
 
     if not docs:
         return {"model": fd.trend_model, "reason": "这段时间一条数据都没有", **coverage}
@@ -315,9 +372,10 @@ def list_calendar_events(
     # 展开会把一条基础日程变成几十条，所以"读了几条"和"产出几条"对不上，
     # 游标必须记两个位置：读到第几条基础日程、以及那一条展开后消费到第几个。
     while True:
+        chunk = min(_BASE_CHUNK, size - len(out))
         rows = storage.list_calendar_events(
             subject_id=subject_id, start=start, end=end,
-            limit=_BASE_CHUNK, offset=base_at,
+            limit=chunk, offset=base_at,
         )
         if not rows:
             return out, None
@@ -360,7 +418,7 @@ def list_calendar_events(
             base_at += 1
             if len(out) >= size:
                 return out, _join_cursor(base_at, 0)
-        if len(rows) < _BASE_CHUNK:
+        if len(rows) < chunk:
             return out, None
 
 
@@ -461,9 +519,10 @@ def _drain(fetch, *, cap: int | None) -> tuple[list[Any], bool]:
     out: list[Any] = []
     cursor = None
     while True:
-        rows, cursor = fetch(cursor, MAX_LIMIT)
+        size = MAX_LIMIT if cap is None else min(MAX_LIMIT, cap + 1 - len(out))
+        rows, cursor = fetch(cursor, size)
         out.extend(rows)
-        if cap is not None and len(out) >= cap:
+        if cap is not None and len(out) > cap:
             return out[:cap], True
         if not cursor:
             return out, False
@@ -489,9 +548,13 @@ def export_subject(
     它自己的业务表）要由宿主追加进来 —— 返回值里的 ``kit_managed_only``
     就是提醒这件事的。
     """
+    require_public_dimension_fields(manifest)
+    if per_signal_limit is not None and (type(per_signal_limit) is not int or per_signal_limit < 1):
+        raise ValueError("per_signal_limit must be a positive integer or None")
     signals = sorted(manifest)
     observations: dict[str, list[dict[str, Any]]] = {}
     daily: dict[str, list[dict[str, Any]]] = {}
+    generations: dict[str, list[dict[str, Any]]] = {}
     truncated: list[str] = []
     for signal in signals:
         rows, cut = _drain(
@@ -512,54 +575,111 @@ def export_subject(
         # 日聚合也得给。明细有保留期、日统计是永久的 —— 明细清掉之后，
         # 日统计就是用户那段历史**仅剩**的东西。不给等于把留存最久的
         # 那一份漏掉了，而且没人会发现。
-        aggs = storage.get_aggregate(
-            subject_id=subject_id, signal=signal,
-            start_date=_ALL_TIME_START, end_date=_ALL_TIME_END,
-            aggregation_kind="daily",
+        aggs, cut = _drain(
+            lambda cursor, limit, _s=signal: _offset_page(
+                storage.get_aggregate, cursor=cursor, limit=limit,
+                subject_id=subject_id, signal=_s,
+                start_date=start.date() if start else _ALL_TIME_START,
+                end_date=end.date() if end else _ALL_TIME_END,
+                aggregation_kind="daily"),
+            cap=per_signal_limit,
         )
+        if cut:
+            truncated.append(f"daily_aggregates:{signal}")
         if aggs:
             daily[signal] = [
-                {"date": a.local_date.isoformat(), "value": a.typed_aggregate,
-                 "aggregation_version": a.aggregation_version}
+                {"date": a.local_date.isoformat(), "value": project(manifest[signal], a.typed_aggregate),
+                 "aggregation_version": a.aggregation_version,
+                 "generation_id": a.generation_id,
+                 "completeness": a.completeness,
+                 "incomplete_reasons": list(a.incomplete_reasons)}
                 for a in sorted(aggs, key=lambda a: (a.local_date,
                                                      a.aggregation_version))
             ]
 
+        attempts, cut = _drain(
+            lambda cursor, limit, _s=signal: _offset_page(
+                storage.list_aggregate_generations,
+                cursor=cursor, limit=limit,
+                subject_id=subject_id, signal=_s, aggregation_kind="daily",
+                start_date=start.date() if start else None,
+                end_date=end.date() if end else None),
+            cap=per_signal_limit,
+        )
+        if cut:
+            truncated.append(f"aggregate_generations:{signal}")
+        if attempts:
+            generations[signal] = [_json_value(asdict(g)) for g in attempts]
+
     current = {
-        signal: {"state": view.state, "value": view.value,
-                 "last_known": view.last_known, "as_of": view.as_of}
-        for signal, view in get_current(
+        signal: [asdict(view) for view in entries]
+        for signal, entries in get_current(
             storage, subject_id=subject_id, signals=signals,
             manifest=manifest, now=end or _far_future(),
         ).items()
-        if view.state != "no_data"
+        if entries
     }
+    collections = {}
+    for name, fetch in {
+        "calendar_events": lambda cursor, limit: list_calendar_events(
+            storage, subject_id=subject_id, start=start, end=end, cursor=cursor, limit=limit),
+        # Reminders have no universal occurrence time; start/end do not apply.
+        "reminders": lambda cursor, limit: _offset_page(
+            storage.list_reminders, subject_id=subject_id, include_completed=True, cursor=cursor, limit=limit),
+        "events": lambda cursor, limit: _offset_page(
+            storage.list_events, subject_id=subject_id, start=start, end=end, cursor=cursor, limit=limit),
+        "conflicts": lambda cursor, limit: _offset_page(
+            storage.list_conflicts, subject_id=subject_id, start=start, end=end,
+            cursor=cursor, limit=limit),
+    }.items():
+        rows, cut = _drain(fetch, cap=per_signal_limit)
+        if name == "conflicts":
+            collections[name] = [_conflict_export(r) for r in rows]
+        elif name == "reminders":
+            collections[name] = [{"source_reminder_id": r.source_reminder_id, **r.reminder_fields} for r in rows]
+        elif name == "events":
+            collections[name] = [{"event_id": e.event_id, "type": e.event_type,
+                                  "occurred_at": e.occurred_at.isoformat(),
+                                  "delivery_state": e.delivery_state, "attempts": e.attempt_count} for e in rows]
+        else:
+            collections[name] = rows
+        if cut:
+            truncated.append(name)
 
-    return {
+    return _json_value({
         "subject_id": subject_id,
         "kit_managed_only": True,
         "current": current,
         "observations": observations,
         "daily_aggregates": daily,
+        "aggregate_generations": generations,
         # 哪几类被 per_signal_limit 截断了。**空列表 = 真的是全部**，
         # 不给这一栏的话，"少给了一截"和"本来就这么多"分辨不出来。
-        "truncated": truncated,
-        "calendar_events": _drain(
-            lambda cursor, limit: list_calendar_events(
-                storage, subject_id=subject_id, start=start, end=end,
-                cursor=cursor, limit=limit),
-            cap=per_signal_limit)[0],
-        "reminders": _drain(
-            lambda cursor, limit: list_reminders(
-                storage, subject_id=subject_id, include_completed=True,
-                cursor=cursor, limit=limit),
-            cap=per_signal_limit)[0],
-        # 待投递的事件不是"用户的数据"，是我们还没送到的东西，列在这里只为完整。
-        "pending_events": _drain(
-            lambda cursor, limit: list_events(
-                storage, subject_id=subject_id, cursor=cursor, limit=limit),
-            cap=per_signal_limit)[0],
-    }
+        "truncated": sorted(truncated),
+        **collections,
+    })
+
+
+def _offset_page(fetch, *, cursor, limit, **kwargs):
+    """Bounded page, allowing a final empty probe instead of fetching ahead twice."""
+    at = _offset(cursor)
+    rows = list(fetch(**kwargs, limit=limit, offset=at))
+    return rows, str(at + len(rows)) if len(rows) == limit else None
+
+
+def _json_value(value):
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _json_value(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_json_value(item) for item in value]
+    return value
+
+
+def _conflict_export(record):
+    """Export audit metadata as JSON-compatible data, matching other exports."""
+    return _json_value(asdict(record))
 
 
 #: 导出时拿"全时段"去取聚合 —— 这个包不读时钟，所以用固定边界而不是 today()。

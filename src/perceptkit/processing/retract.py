@@ -30,6 +30,9 @@ from ..contracts.records import CurrentProjection
 from ..contracts.retraction import Retraction
 from ..manifest.types import SignalDefinition
 from ..ports.storage import StoragePort
+from ..contracts.errors import RetryableProjectionError
+from ..contracts.mutation import (current_key, aggregate_generation_key,
+                                  aggregate_key, canonical_keys, event_key)
 
 
 #: 当前值写入撞车时重读重判几次。和 ingest 那条路同一个数量级 ——
@@ -48,10 +51,11 @@ class RetractionOutcome:
 
     recorded: int = 0
     reselected: int = 0
-    #: 当前值连续写入竞争失败的次数。**不算成功。**
+    #: Legacy compatibility field, always 0: exhausted CAS now raises and rolls
+    #: back the entire retraction, rather than returning a partially applied job.
     contended: int = 0
     affected_days: set[tuple[str, str, date]] = field(default_factory=set)
-    #: 顺带抹掉了几条事件记录里的原值（宿主没实现那个可选端口时恒为 0）。
+    #: 同事务失效并脱敏的事件数；端口缺失/失败会回滚整个操作。
     scrubbed_events: int = 0
     #: 撤回记下了，但信号不在 manifest 里，没法重选。
     unknown_signals: list[str] = field(default_factory=list)
@@ -64,6 +68,7 @@ def apply_retractions(
     signals: dict[str, SignalDefinition],
     now: datetime,
     on_affected_day: Callable[[str, str, date], None] | None = None,
+    definitions_for=None, definition_at=None, extra_evaluators=None,
 ) -> RetractionOutcome:
     """记下撤回，重选当前值，报出受影响的日期。
 
@@ -74,7 +79,81 @@ def apply_retractions(
     """
     outcome = RetractionOutcome()
 
-    with storage.transaction():
+    from .pipeline import AGGREGATION_VERSION
+    from .mutation import persisted_current_dimensions, retraction_fact_identity
+
+    # Preflight the complete batch before a transaction or any write. The
+    # raw-source-ID deletion protocol cannot operate on fallback Fact identity.
+    identities = {r: retraction_fact_identity(r, signals.get(r.signal)) for r in retractions}
+
+    with storage.mutation_transaction() as mutation:
+        mutation.acquire(canonical_keys([key for key, _ in identities.values()]))
+        affected = {(r.subject_id, r.signal, r.source, r.source_event_id): _affected_days(storage, r)
+                    for r in retractions}
+        # Detail retention can make _affected_days empty. Durable Fact identity
+        # still knows which projection date became suspect; include it before
+        # aggregate locks so the same transaction can mark coverage incomplete.
+        for r in retractions:
+            key = (r.subject_id, r.signal, r.source, r.source_event_id)
+            for identity in storage.list_identities(
+                    subject_id=r.subject_id, signal=r.signal, source=r.source,
+                    fact_key=identities[r][1]):
+                if identity.fact_key == identities[r][1] and identity.effective_local_date:
+                    affected[key].add(identity.effective_local_date)
+        current_resources = set()
+        backfills = {}
+        for r in retractions:
+            sig = signals.get(r.signal)
+            if sig is None:
+                continue
+            dimensions, updates = persisted_current_dimensions(
+                storage, sig, subject=r.subject_id, source=r.source,
+                event_id=r.source_event_id,
+                fact_digest=identities[r][1])
+            current_resources.update(current_key(r.subject_id, r.signal, dimension)
+                                     for dimension in dimensions)
+            for update in updates:
+                backfills[(update.subject_id, update.signal, update.source,
+                           update.source_event_identity_digest)] = update
+        mutation.acquire(canonical_keys(list(current_resources)))
+        mutation.acquire(canonical_keys([
+            aggregate_generation_key(r.subject_id, r.signal, "daily")
+            for r in retractions
+        ]))
+        active_versions = {}
+        for r in retractions:
+            active = storage.get_active_aggregate_generation(
+                subject_id=r.subject_id, signal=r.signal, aggregation_kind="daily")
+            active_versions[(r.subject_id, r.signal)] = (
+                active.aggregation_version if active else AGGREGATION_VERSION)
+        mutation.acquire(canonical_keys([
+            aggregate_key(r.subject_id, r.signal, day, "daily",
+                          active_versions[(r.subject_id, r.signal)])
+            for r in retractions
+            for day in affected[(r.subject_id, r.signal, r.source, r.source_event_id)]
+        ]))
+        from .rule_repair import repair_scopes, repair_keys, rebuild_rules
+        plans = {}
+        planned_days = {}
+        for r in retractions:
+            # Includes durable dates even when details expired.
+            days = set(affected[(r.subject_id, r.signal, r.source, r.source_event_id)])
+            plans[r] = repair_scopes(storage, subject=r.subject_id, signal=r.signal,
+                                     definitions=definitions_for(r.subject_id) if definitions_for else (),
+                                     definition_at=definition_at, days=days or None)
+            planned_days[r] = days or None
+        mutation.acquire(canonical_keys([key for r, scopes in plans.items()
+                                          for key in repair_keys(r.subject_id, scopes)]))
+        mutation.acquire(canonical_keys([event_key(r.subject_id, r.signal) for r in retractions]))
+        from ..contracts.errors import RetryableMutationError
+        for r in retractions:
+            refreshed = repair_scopes(storage, subject=r.subject_id, signal=r.signal,
+                                       definitions=definitions_for(r.subject_id) if definitions_for else (),
+                                       definition_at=definition_at, days=planned_days[r])
+            if not set(repair_keys(r.subject_id, refreshed)) <= set(repair_keys(r.subject_id, plans[r])):
+                raise RetryableMutationError("RuleState scope set changed during retraction planning")
+        for update in backfills.values():
+            storage.backfill_identity(update)
         for r in retractions:
             # 🔴 已经记过**不等于收尾做完了**。
             #
@@ -90,29 +169,33 @@ def apply_retractions(
                 # 但没法重选 —— 不知道这个信号的当前值长什么样。
                 outcome.unknown_signals.append(r.signal)
                 continue
-            for day in _affected_days(storage, r):
+            for day in affected[(r.subject_id, r.signal, r.source, r.source_event_id)]:
                 outcome.affected_days.add((r.subject_id, r.signal, day))
                 if on_affected_day is not None:
                     # 🔴 **在同一个事务里重算。** 放到事务外面的话，撤回提交了、
                     #    重算崩了，两边就再也对不上，而下一轮以为上一轮成功了。
                     on_affected_day(r.subject_id, r.signal, day)
-            # 引用这条事实的提醒记录，里面的原值也抹掉。宿主没实现这个
-            # 可选端口时跳过 —— 那是已知缺口（事件里的旧值还留着），不是故障。
-            scrub = getattr(storage, "scrub_event_snapshots", None)
-            if callable(scrub) and r.source_event_id:
-                try:
-                    outcome.scrubbed_events += scrub(
-                        subject_id=r.subject_id, signal=r.signal,
-                        source=r.source, source_event_id=r.source_event_id,
-                    ) or 0
-                except NotImplementedError:
-                    pass
+            # Required: remove every previous/current dependency and prevent
+            # an unstarted event from escaping to WakePort in the same commit.
+            outcome.scrubbed_events += storage.scrub_event_snapshots(
+                subject_id=r.subject_id, signal=r.signal, source=r.source,
+                source_event_id=r.source_event_id, now=now,
+            )
 
             state = _reselect_current(storage, r, sig, now=now)
             if state == "reselected":
                 outcome.reselected += 1
-            elif state == "contended":
-                outcome.contended += 1
+
+        # Batch tombstones land before replay, so order cannot change the result.
+        for subject, signal in {(r.subject_id, r.signal) for r in retractions}:
+            sig = signals.get(signal)
+            if sig is None:
+                continue
+            scopes = {(did, scope): (did, scope, definition)
+                      for r, plan in plans.items() if (r.subject_id, r.signal) == (subject, signal)
+                      for did, scope, definition in plan}
+            rebuild_rules(storage, subject=subject, signal=sig, scopes=list(scopes.values()),
+                          extra_evaluators=extra_evaluators)
 
     return outcome
 
@@ -207,6 +290,10 @@ def _reselect_current(storage: StoragePort, r: Retraction,
                     source=winner.source if winner else None,
                     source_event_id=winner.source_event_id if winner else None,
                     source_revision=winner.source_revision if winner else None,
+                    timezone=winner.timezone if winner else None,
+                    timezone_source=winner.timezone_source if winner else "missing",
+                    source_units=winner.source_units if winner else {},
+                    source_values=winner.source_values if winner else {},
                     version=current.version + 1,
                     # 指纹描述的必须是**它自己**。照抄被删掉那条的指纹，
                     # 等于给靠指纹判"值变没变"的下游一个错的判据。
@@ -224,7 +311,7 @@ def _reselect_current(storage: StoragePort, r: Retraction,
                 break
         if not lost:
             return "reselected"
-    return "contended"
+    raise RetryableProjectionError("current", r.signal, _MAX_CAS_RETRIES)
 
 
 __all__ = ["apply_retractions", "RetractionOutcome"]

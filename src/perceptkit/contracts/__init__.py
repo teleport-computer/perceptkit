@@ -30,7 +30,7 @@ from .availability import (
 )
 from . import delivery, records
 from .context import IngestContext
-from .errors import ContractError
+from .errors import ContractError, RetryableMutationError, UnsupportedRetractionIdentityError, RuleStateAttributionIncompleteError
 from .event import EventCondition, PerceptionEvent
 from .observation import Observation
 from .receipt import (
@@ -38,6 +38,12 @@ from .receipt import (
     INGEST_CONFLICT,
     INGEST_DUPLICATE,
     INGEST_REJECTED,
+    OBSERVATION_FACT_CONFLICT,
+    OBSERVATION_FACT_REVISION_DETAILS_INCOMPLETE,
+    OBSERVATION_ISSUE_CODES,
+    OBSERVATION_STALE_FACT_REVISION,
+    OBSERVATION_VALIDATION_FAILED,
+    ObservationRejection,
     WAKE_ACCEPTED,
     WAKE_DUPLICATE,
     WAKE_ENQUEUE_FAILED,
@@ -52,6 +58,8 @@ from .records import (
     IGNORE,
     REPLACE,
     CalendarEventMirror,
+    AggregateGeneration,
+    ConflictRecord,
     CurrentProjection,
     DailyAggregate,
     DurableDedupeIdentity,
@@ -78,15 +86,19 @@ __all__ = [
     # envelopes
     "ReportEnvelope", "Observation", "PerceptionEvent", "EventCondition",
     # trusted context + receipts
-    "IngestContext", "IngestReceipt", "WakeReceipt",
+    "IngestContext", "IngestReceipt", "ObservationRejection", "WakeReceipt",
     "INGEST_ACCEPTED", "INGEST_DUPLICATE", "INGEST_CONFLICT", "INGEST_REJECTED",
+    "OBSERVATION_VALIDATION_FAILED", "OBSERVATION_FACT_CONFLICT",
+    "OBSERVATION_FACT_REVISION_DETAILS_INCOMPLETE", "OBSERVATION_STALE_FACT_REVISION",
+    "OBSERVATION_ISSUE_CODES",
     "WAKE_ACCEPTED", "WAKE_DUPLICATE", "WAKE_SUPPRESSED",
     "WAKE_ENQUEUE_FAILED", "WAKE_REJECTED", "WAKE_RETRYABLE",
     # versioning
     "REPORT_SCHEMA_VERSION", "EVENT_SCHEMA_VERSION", "SUPPORTED_REPORT_VERSIONS",
     "UnsupportedSchemaVersion", "check_report_version",
     # 逻辑存储对象
-    "StoredObservation", "CurrentProjection", "DailyAggregate",
+    "StoredObservation", "CurrentProjection", "AggregateGeneration", "DailyAggregate",
+    "ConflictRecord",
     "CalendarEventMirror", "ReminderItemMirror", "SourceSyncState",
     "DurableDedupeIdentity", "EventOutboxEntry",
     "decide_current_update", "REPLACE", "IGNORE", "CONFLICT",
@@ -94,4 +106,7 @@ __all__ = [
     "delivery", "records",
     # errors
     "ContractError",
+    "RetryableMutationError",
+    "UnsupportedRetractionIdentityError",
+    "RuleStateAttributionIncompleteError",
 ]

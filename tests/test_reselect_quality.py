@@ -67,7 +67,7 @@ def test_a_reselected_value_still_expires():
         "过期时间不是按这个值自己的观测时刻算的"
 
     view = kit.get_current(subject_id="u", signals=["health_weight"],
-                           now=T0 + timedelta(days=600))["health_weight"]
+                           now=T0 + timedelta(days=600))["health_weight"][0]
     assert view.state != "fresh", "600 天前的旧体重还在冒充「现在」"
 
 
@@ -97,7 +97,14 @@ def test_reselection_picks_the_newest_revision_of_a_fact():
     """
     s = InMemoryStorage(); kit = _kit(s)
     _weigh(kit, 68.0, at=T0 + timedelta(hours=1), eid="hk-A", rev=2)   # 新版本，时间靠前
-    _weigh(kit, 70.5, at=T0 + timedelta(hours=2), eid="hk-A", rev=1)   # 旧版本，时间靠后
+    # Legacy stores can already contain the stale revision. New D02 ingestion
+    # rejects it before projection, so seed that old state directly to keep
+    # testing the independent reselect/canonicalization path.
+    from dataclasses import replace
+    existing = next(iter(s.observations.values()))
+    s.append_observation(replace(existing, observation_id="legacy-stale-revision",
+                                 typed_value={"weight_kg": 70.5}, source_revision=1,
+                                 occurred_at=T0 + timedelta(hours=2)))
     _weigh(kit, 72.0, at=T0 + timedelta(hours=3), eid="hk-B")
     kit.apply_retractions(
         [Retraction("u", "health_weight", "hk-B", "ios", T0 + timedelta(hours=4))],

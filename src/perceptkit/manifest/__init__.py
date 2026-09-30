@@ -15,6 +15,7 @@ manifest 只声明属性，不实现算法 —— 但它声明的每个名字都
 from __future__ import annotations
 
 from .checks import (
+    check_public_dimension_fields,
     check_history_has_retention,
     check_named_implementations_exist,
     check_types_and_units,
@@ -54,4 +55,5 @@ __all__ = [
     "check_named_implementations_exist",
     "check_wake_eligible_fields_have_comparators",
     "check_projections_do_not_drift",
+    "check_public_dimension_fields",
 ]

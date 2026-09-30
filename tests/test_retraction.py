@@ -92,6 +92,7 @@ def test_an_unavailable_report_still_keeps_last_known():
             "occurred_at": (T0 + timedelta(hours=1)).isoformat(),
             "availability": "unavailable", "timezone": "Asia/Shanghai",
             "source_event_id": "hk-A",
+            "source_revision": 1,  # D02: availability changes revise the Fact.
         }],
     }, context=IngestContext("u", T0 + timedelta(hours=1)))
     value, availability = _current(s)
@@ -145,7 +146,9 @@ def test_a_retracted_fact_is_left_out_of_the_recomputed_day():
     from perceptkit.processing.recompute import recompute_day
     s = InMemoryStorage(); kit = _kit(s)
     _weigh(kit, s, 70.5, at=T0, eid="hk-A")
-    _weigh(kit, s, 90.0, at=T0 + timedelta(hours=2), eid="hk-bogus")
+    # D08 enforces the 20% anomaly threshold; use an accepted but later deleted
+    # measurement so this still tests retraction of an actually applied Fact.
+    _weigh(kit, s, 72.0, at=T0 + timedelta(hours=2), eid="hk-bogus")
 
     agg = recompute_day(s, MINIMAL_SIGNALS["health_weight"], subject_id="u",
                         day=DAY, version=1, updated_at=T0)
@@ -243,14 +246,14 @@ def test_the_stored_aggregate_is_actually_rewritten():
     """
     s = InMemoryStorage(); kit = _kit(s)
     _weigh(kit, s, 70.5, at=T0, eid="hk-A")
-    _weigh(kit, s, 90.0, at=T0 + timedelta(hours=2), eid="hk-bogus")
+    _weigh(kit, s, 72.0, at=T0 + timedelta(hours=2), eid="hk-bogus")
 
     def stored():
         rows = s.get_aggregate(subject_id="u", signal="health_weight",
                                start_date=DAY, end_date=DAY)
         return rows[0].typed_aggregate.get("weight_kg") if rows else None
 
-    assert stored() == 90.0                     # main_of_day：当天最后一条
+    assert stored() == 72.0                     # main_of_day：当天最后一条
     kit.apply_retractions(
         [Retraction("u", "health_weight", "hk-bogus", "ios", T0)],
         now=T0 + timedelta(hours=5))

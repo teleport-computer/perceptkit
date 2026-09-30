@@ -63,6 +63,8 @@ class RecordingRuntime:
             status = contracts.WAKE_DUPLICATE
         elif self.behaviour == "boom":
             raise RuntimeError("队列挂了")
+        elif self.behaviour == "enqueue_failed":
+            status = contracts.WAKE_ENQUEUE_FAILED
         elif self.behaviour == "busy":
             status = contracts.WAKE_SUPPRESSED
         else:
@@ -130,8 +132,8 @@ def test_current_and_history_are_queryable_after_ingest():
     kit.ingest(steps_report(3012), context=IngestContext("u1", now("10:30")))
 
     current = kit.get_current(subject_id="u1", signals=["steps"], now=now("10:35"))
-    assert current["steps"].state == "fresh"
-    assert current["steps"].value["step_count"] == 3012
+    assert current["steps"][0].state == "fresh"
+    assert current["steps"][0].value["step_count"] == 3012
 
     daily = kit.get_daily(subject_id="u1", signal="steps",
                           start=date(2026, 8, 27), end=date(2026, 8, 27))
@@ -145,16 +147,16 @@ def test_a_stale_current_value_does_not_pretend_to_be_now():
                context=IngestContext("u1", now("10:30")))
     # steps 的 TTL 是 1 小时
     later = kit.get_current(subject_id="u1", signals=["steps"], now=now("13:00"))
-    assert later["steps"].state == "stale"
-    assert later["steps"].value is None                      # 不冒充当前
-    assert later["steps"].last_known["step_count"] == 3012   # 但最后一次值还给
-    assert later["steps"].as_of.startswith("2026-08-27T10:30")
+    assert later["steps"][0].state == "stale"
+    assert later["steps"][0].value is None                      # 不冒充当前
+    assert later["steps"][0].last_known["step_count"] == 3012   # 但最后一次值还给
+    assert later["steps"][0].as_of.startswith("2026-08-27T10:30")
 
 
 def test_a_signal_with_no_data_reports_that_instead_of_guessing():
     _, _, kit = make()
     got = kit.get_current(subject_id="u1", signals=["battery"], now=now("10:00"))
-    assert got["battery"].state == "no_data"
+    assert got["battery"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +240,7 @@ def test_the_event_id_is_stable_so_replays_collapse():
 # ---------------------------------------------------------------------------
 
 def test_a_failed_delivery_goes_back_to_pending_with_backoff():
-    storage, runtime, kit = make("boom")
+    storage, runtime, kit = make("enqueue_failed")
     kit.ingest(steps_report(2999, hhmm="09:00"),
                context=IngestContext("u1", now("09:00")))
     kit.ingest(steps_report(3012, rid="r2"), context=IngestContext("u1", now("10:30")))
@@ -250,15 +252,17 @@ def test_a_failed_delivery_goes_back_to_pending_with_backoff():
     assert entry.next_attempt_at > now("10:31")     # 退避了，不是立刻重试
 
 
-def test_a_wake_port_that_raises_is_treated_as_failure_not_success():
-    """"结果未知"和"失败"要走同一条路 —— 盲目当成功会让事件永远送不到。"""
+def test_a_wake_port_that_raises_requires_receipt_reconciliation():
+    """D04: an exception cannot establish whether Runtime accepted the request."""
     storage, _, kit = make("boom")
     kit.ingest(steps_report(2999, hhmm="09:00"),
                context=IngestContext("u1", now("09:00")))
     kit.ingest(steps_report(3012, rid="r2"), context=IngestContext("u1", now("10:30")))
     kit.dispatch_pending(worker_id="w1", now=now("10:31"))
-    assert storage.receipts[-1].status == "enqueue_failed"
-    assert not storage.receipts[-1].consumes_budget
+    assert not storage.receipts
+    entry = next(iter(storage.outbox.values()))
+    assert entry.delivery_state == "unknown" and entry.dispatch_started_at
+    assert storage.list_pending_events() == []
 
 
 def test_a_suppressed_wake_is_terminal_and_costs_no_budget():
@@ -288,7 +292,7 @@ def test_only_a_delivered_event_keeps_its_budget_reservation():
 
 
 def test_retries_eventually_stop_instead_of_looping_forever():
-    storage, _, kit = make("boom")
+    storage, _, kit = make("enqueue_failed")
     kit.ingest(steps_report(2999, hhmm="09:00"),
                context=IngestContext("u1", now("09:00")))
     kit.ingest(steps_report(3012, rid="r2"), context=IngestContext("u1", now("10:30")))

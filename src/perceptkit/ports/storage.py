@@ -20,6 +20,8 @@ from typing import Any, ContextManager, Protocol, Sequence, runtime_checkable
 
 from ..contracts.records import (
     CalendarEventMirror,
+    AggregateGeneration,
+    ConflictRecord,
     CurrentProjection,
     DailyAggregate,
     DurableDedupeIdentity,
@@ -30,6 +32,26 @@ from ..contracts.records import (
 )
 from ..contracts.receipt import IngestReceipt, WakeReceipt
 from ..contracts.retraction import Retraction
+from ..contracts.mutation import MutationOwner
+
+
+AGGREGATE_GENERATION_METHODS = (
+    "put_aggregate_generation", "update_aggregate_generation",
+    "get_aggregate_generation", "list_aggregate_generations",
+    "get_active_aggregate_generation", "activate_aggregate_generation",
+    "mark_active_aggregate_incomplete", "account_active_aggregate_range",
+)
+
+
+def require_aggregate_generation_storage(storage: object) -> None:
+    """Fail fast when a v0.10 adapter cannot preserve generation semantics."""
+    missing = [name for name in AGGREGATE_GENERATION_METHODS
+               if not callable(getattr(storage, name, None))]
+    if missing:
+        raise TypeError(
+            "aggregate-generation storage contract is incomplete; missing: "
+            + ", ".join(missing)
+        )
 
 
 @runtime_checkable
@@ -41,15 +63,87 @@ class StoragePort(Protocol):
 
     # -- 事务 ------------------------------------------------------------
 
+    def put_conflict(self, record: ConflictRecord) -> ConflictRecord:
+        """Insert-if-absent on (subject_id, conflict_id), return durable record.
+
+        Caller holds the canonical Fact mutation owner. Never overwrite original
+        evidence/timestamps/resolution on retry. Commit atomically with Report.
+        These records survive detail retention and belong to subject purge/export.
+        """
+        ...
+
+    def list_conflicts(self, *, subject_id: str, signal: str | None = None,
+                       source: str | None = None, fact_key: str | None = None,
+                       status: str | None = None,
+                       start: datetime | None = None, end: datetime | None = None,
+                       limit: int | None = None, offset: int = 0) -> Sequence[ConflictRecord]:
+        """Subject-isolated, ordered by (created_at, conflict_id), no implicit cap.
+
+        Fact mutation reads use source/fact_key under the same owner. Returning
+        detached records must not permit a caller to mutate durable evidence.
+        start/end inclusively filter created_at (quarantine detection time),
+        before applying offset/limit. None limit preserves the full query.
+        Database adapters must push filtering, stable ordering and paging down.
+        """
+        ...
+
+    def resolve_conflict(self, *, subject_id: str, conflict_id: str,
+                         revision: str | int | None, semantic_digest: str,
+                         observation_id: str, resolved_at: datetime) -> bool:
+        """Under Fact owner, pending -> resolved iff revision strictly higher.
+
+        Store resolution revision/digest/observation/time without replacing the
+        candidate evidence. Identical resolved retry returns True; a conflicting
+        resolution or non-comparable/lower/equal revision returns False. This
+        write and the accepted replacement Fact must share a transaction.
+        """
+        ...
+
+    def mutation_transaction(self) -> ContextManager[MutationOwner]:
+        """Atomic transaction with explicit resource ownership, held through commit.
+
+        Every invocation is a distinct operation/owner, including nested calls.
+        Kit acquires all Fact keys first, discovers old revision dates under
+        those locks, then acquires Current (subject/signal/dimension_key),
+        Aggregate, RuleState and Event (subject/signal) batches in
+        global tuple order. All Fact/projection/rule writes follow acquisition
+        of the complete set; the preceding atomic report claim rolls back too.
+        Fact resources use source_id only for that manifest strategy; optional
+        source IDs on deterministic/singleton signals do not replace canonical
+        fallback ownership. Retraction preflights this same identity contract;
+        unresolved deterministic deletion references fail before any write.
+        Standalone recompute starts at Aggregate; it never acquires Fact later.
+        After Event ownership, revalidate planned RuleState keys; a newly
+        visible scope requires whole-transaction retry, never descending locks.
+        Internal helpers reuse the explicit owner; do NOT infer reentrancy from
+        a thread, connection, or Python RLock. Unrelated resources may proceed.
+
+        PostgreSQL example: a dedicated transaction/connection per owner,
+        pg_try_advisory_xact_lock over a stable collision-safe key mapping (or
+        lock rows), READ COMMITTED reads AFTER locks, locks held until COMMIT or
+        ROLLBACK. Hash collisions may only cause extra contention, never unsafe
+        sharing; never use process-random Python hash. Fresh snapshots after a
+        wait are required; stale REPEATABLE READ snapshots need serialization
+        validation and full retry. A lease implementation must fence EVERY
+        protected write and commit; an expired lease cannot commit old work.
+
+        Contention/deadlock/serialization/fence failure is RetryableMutationError
+        and aborts the entire operation, including reports/identities/outbox.
+        The acquire contract forbids descending lock order and marks failures
+        rollback-only. Ordinary transaction() alone does not provide ownership.
+        Real two-connection isolation/fencing tests are required in each host;
+        sequential conformance and InMemory are NOT that evidence.
+        """
+        ...
+
     def transaction(self) -> ContextManager[None]:
         """一个原子边界。
 
         kit 会把"写规则状态 + 写待发件箱"这类**必须一起成功**的操作包在
-        同一个 ``with`` 里。宿主如果做不到真正的单事务，必须提供可证明的
-        补偿/对账机制，并在一致性测试里证明它 —— 不能默认它不会出问题。
-
-        产品规范这里留了活口（"处于同一原子边界，**或有可证明的恢复机制**"），
-        所以不强制单事务，但强制"能证明"。
+        同一个 ``with`` 里。异常（包括 RetryableProjectionError）退出时，
+        本次 report、Observation、identity、Current、Aggregate、RuleState、
+        Outbox 必须全部回滚；其他事务不能看到部分提交。调用方重试整个 report。
+        当前同步协议没有 durable rebuild，因此不能用 warning 或补偿承诺代替回滚。
         """
         ...
 
@@ -61,7 +155,8 @@ class StoragePort(Protocol):
     ) -> IngestReceipt:
         """认领一批上报，同时回答"这批处理过没有"。
 
-        同 identity + 同摘要 → 返回原来那份回执（``duplicate``），**不重复处理**。
+        同 identity + 同摘要 → 返回 ``duplicate``，``observations_applied=0``，
+        同时原样返回已持久化的 ``observations_rejected``，**不重复处理**。
         同 identity + 异摘要 → ``conflict``，不能静默挑一个覆盖。
         没见过         → ``accepted``，并占住这个 identity。
 
@@ -71,6 +166,42 @@ class StoragePort(Protocol):
         ...
 
     # -- 观测 ------------------------------------------------------------
+
+    def finalize_report(self, receipt: IngestReceipt) -> None:
+        """Persist the durable Report outcome in the same transaction as Facts.
+
+        Match the claimed identity AND digest; mismatches must raise/roll back.
+        Item-level validation and Fact conflicts are stored as sanitized
+        ``observations_rejected`` entries while the Report stays accepted and
+        valid siblings commit. Exact replay returns duplicate/applied=0 plus
+        those original entries. Whole-batch preflight rejection happens before
+        claim and writes neither Report nor Facts. Report digest conflict is a
+        separate ``report_digest_conflict`` result from ``claim_report``.
+
+        Each item has one closed machine ``code`` and one-or-more sanitized
+        diagnostics. Diagnostics are never parsed for recovery behavior. Host
+        Hosts prove durability by running
+        ``prepare_report_receipt_restart_conformance`` and
+        ``verify_report_receipt_restart_conformance`` in two separate
+        interpreters/subprocesses over the same isolated database. Two adapter
+        objects in one process can share a module cache and are not restart
+        evidence.
+        """
+        ...
+
+    def backfill_report_digest(
+        self, *, subject_id: str, producer: str, report_id: str,
+        expected_digest: str, payload_digest: str,
+    ) -> bool:
+        """CAS-migrate a receipt when host holds the ORIGINAL immutable envelope.
+
+        Host must compute expected_digest with the released algorithm and the
+        v2 payload_digest from that same trusted original, never from a retry.
+        Preserve status, time and applied count. Return False for missing/wrong
+        old digest or any overwrite of an already-v2 digest; same target digest
+        is idempotent. This is a one-way legacy migration, not a report update.
+        """
+        ...
 
     def append_observation(self, observation: StoredObservation) -> bool:
         """追加一条观测。已经存在（同一去重身份）时返回 ``False`` 且不重复写。
@@ -138,6 +269,11 @@ class StoragePort(Protocol):
 
         🔴 **``aggregate_retention_days`` 是 PERMANENT 的信号绝不能进来。**
         判定在 kit 里（``run_retention``），不指望每个宿主自己记得。
+
+        Deleting active rows must atomically reconcile the active generation's
+        readable coverage, or clear its pointer when nothing remains. Later
+        activation compares candidate coverage with retained scope, not dates
+        policy has already deleted. Failed/zero-row attempt audit remains.
         """
         ...
 
@@ -145,15 +281,114 @@ class StoragePort(Protocol):
         self, *, subject_id: str, signal: str,
         start_date: date, end_date: date,
         aggregation_kind: str | None = None,
+        limit: int | None = None, offset: int = 0,
     ) -> Sequence[DailyAggregate]:
+        """Inclusive local-date window, ordered by (local_date, kind, version).
+
+        Optional limit/offset are applied after filtering in storage. None limit
+        preserves full reads. Export is a versioned audit; ordinary active-version
+        selection is a separate query concern.
+        """
+        ...
+
+    def put_aggregate_generation(self, generation: AggregateGeneration) -> bool:
+        """Insert one immutable rebuild attempt; equivalent retry is idempotent.
+
+        The immutable identity fields are generation id, scope, algorithm
+        version and requested coverage. Conflicting reuse must fail closed.
+        Returns True for a new record and False for an equivalent existing one.
+        """
+        ...
+
+    def update_aggregate_generation(self, generation: AggregateGeneration) -> None:
+        """Persist status/completeness for an existing generation.
+
+        Immutable identity/coverage fields cannot change. Adapters must reject
+        backward or conflicting state transitions.
+        """
+        ...
+
+    def get_aggregate_generation(
+        self, *, subject_id: str, signal: str, aggregation_kind: str,
+        generation_id: str,
+    ) -> AggregateGeneration | None:
+        ...
+
+    def list_aggregate_generations(
+        self, *, subject_id: str, signal: str, aggregation_kind: str,
+        start_date: date | None = None, end_date: date | None = None,
+        limit: int | None = None, offset: int = 0,
+    ) -> Sequence[AggregateGeneration]:
+        """Audit attempts whose requested coverage overlaps the date window.
+
+        Filter before stable ordering/paging. Failed and zero-row attempts are
+        records in their own right and must not be inferred from aggregate rows.
+        """
+        ...
+
+    def get_active_aggregate_generation(
+        self, *, subject_id: str, signal: str, aggregation_kind: str,
+    ) -> AggregateGeneration | None:
+        """Return the explicit active pointer, never max(version)."""
+        ...
+
+    def activate_aggregate_generation(
+        self, *, subject_id: str, signal: str, aggregation_kind: str,
+        generation_id: str, expected_active_generation_id: str | None,
+        activated_at: datetime,
+    ) -> bool:
+        """Atomically CAS the active pointer after validating full coverage.
+
+        Candidate must be complete, account for every requested day, contain a
+        complete aggregate row for every accounted data day, and belong to the
+        requested scope. Every candidate row must defensively match the
+        generation's subject, signal, kind, generation id, and algorithm
+        version; legacy/corrupt mismatches fail activation. Failure leaves the
+        old pointer untouched.
+        """
+        ...
+
+    def mark_active_aggregate_incomplete(
+        self, *, subject_id: str, signal: str, aggregation_kind: str,
+        local_date: date, reason: str, updated_at: datetime,
+    ) -> bool:
+        """Durably flag stale active coverage without publishing partial data."""
+        ...
+
+    def account_active_aggregate_range(
+        self, *, subject_id: str, signal: str, aggregation_kind: str,
+        start_date: date, end_date: date, updated_at: datetime,
+    ) -> None:
+        """Explicitly account a live no-data/data range before aggregate writes.
+
+        This is the only operation that may widen active coverage as complete.
+        A raw sparse row insert is not evidence that intervening dates were read.
+        """
         ...
 
     def put_aggregate(self, aggregate: DailyAggregate) -> None:
         """写入或替换一个聚合。
 
-        按 ``(subject, signal, date, kind, aggregation_version)`` 覆盖 ——
-        换了 ``aggregation_version`` 就是新的一份，旧的留着，**不原地改写
-        旧统计的语义**。
+        按 ``(subject, signal, date, kind, generation_id)`` 覆盖 ——
+        换了 generation（包括同一算法重试）就是新的一份，旧的留着，
+        **不原地改写旧统计的语义**。每次写入必须将写入 version 从现存值
+        加一（新行为 0），
+        使已读旧值的增量 CAS 失败并重读。重算与事实变更仍须由调用方序列化。
+        扩大 active coverage 前必须先调用 ``account_active_aggregate_range``；
+        raw sparse writes 不能拿两个端点行推断中间日期已完整核对。
+        If ``generation_id`` already exists in this row's scope, its algorithm
+        version must equal the generation record; reject mismatches at write.
+        """
+        ...
+
+    def compare_and_put_aggregate(
+        self, aggregate: DailyAggregate, *, expected_version: int,
+    ) -> bool:
+        """原子比较同一 aggregate key 的写入 version 并写入。
+
+        不存在以 -1 比较；成功写入 version=expected_version+1。
+        失败返回 False 且不得改写；Kit 重读后重新 fold，耗尽则回滚整个事务。
+        aggregation_version 是算法口径，不能当作并发 version。
         """
         ...
 
@@ -170,6 +405,36 @@ class StoragePort(Protocol):
         self, *, subject_id: str, signal: str, source: str, digest: str,
     ) -> bool:
         """这条处理过没有。明细已按保留期删掉之后，这是唯一还能回答的东西。"""
+        ...
+
+    def list_identities(
+        self, *, subject_id: str, signal: str, source: str | None = None,
+        fact_key: str | None = None,
+    ) -> Sequence[DurableDedupeIdentity]:
+        """Return this Fact's revisions plus unmapped legacy identities in scope.
+
+        Fact revision metadata must survive detail retention. Old opaque digests
+        have fact_key=None; never silently omit them or infer their source time
+        from an incoming upload. Adapters should index fact_key and the unmapped
+        subset, not scan all permanent identities for every new observation.
+        Omit source/fact_key for completeness checking during signal replay.
+        """
+        ...
+
+    def backfill_identity(self, identity: DurableDedupeIdentity) -> None:
+        """Attach recovered Fact metadata to an existing legacy identity atomically.
+
+        Only absent metadata may be filled; conflicting existing metadata must
+        raise and roll back. It must not create an unseen delivery identity.
+        For partial legacy evidence, restored persisted detail may fill an
+        unknown effective_local_date only if all other metadata stays identical;
+        a previously known date must never be overwritten.
+        An unknown dimension_key may be filled from persisted Observation or
+        Current evidence (or a dimension-free manifest's structural key), even
+        for identities with semantic_digest. Preserve every other known field;
+        a known dimension cannot be overwritten. Keep dimension metadata after
+        detail expiry so future corrections/retractions can preplan old locks.
+        """
         ...
 
     # -- 来源镜像 --------------------------------------------------------
@@ -234,6 +499,9 @@ class StoragePort(Protocol):
     def scrub_event_snapshots(
         self, *, subject_id: str, signal: str,
         source: str, source_event_id: str,
+        now: datetime, reason: str = "fact_retracted",
+        observation_ids: Sequence[str] | None = None,
+        canonical_fact_key: str | None = None,
     ) -> int:
         """把被撤回那条事实触发过的事件里的**原值**抹掉，返回改了几条。
 
@@ -245,9 +513,45 @@ class StoragePort(Protocol):
         整条删掉的话"这条提醒当初为什么发"就再也解释不清了。
         已经投递出去的消息不回收 —— 那是已经发生的事。
 
-        ⚠️ **可选方法。** 宿主没实现时 kit 跳过并照常完成撤回的其余部分 ——
-        那等于"事件记录里的旧值还留着"，是个已知缺口，不是故障。
+        REQUIRED, in the Fact mutation transaction under (50_events, subject,
+        signal). Match ALL fact_dependencies by subject/signal/source/source ID;
+        observation_ids restricts to superseded revisions; canonical_fact_key
+        restricts correction to the canonical Fact. Corrections invalidate all
+        existing references before any new revision Event can be enqueued. Legacy
+        entries without provenance must be conservatively invalidated for the
+        signal, never guessed by parsing reason text. Scrub to an audit allowlist
+        (no raw/nested values, derived reason or unrecognized extensions).
+        Pending/claimed before durable start -> invalidated; started -> unknown;
+        delivered stays delivered with invalidated_at/reason. Preserve receipts.
         """
+        ...
+
+    def list_rule_states(self, *, subject_id: str) -> Sequence[tuple[str, str, dict]]:
+        """Return (definition_id, scope_key, state) including archived versions.
+
+        Used to plan all replay resources BEFORE writes. State metadata must
+        retain signal even when the archived definition is unavailable.
+        """
+        ...
+
+    def begin_event_dispatch(self, *, event_id: str, claim_token: str,
+                             now: datetime) -> EventOutboxEntry | None:
+        """Atomic durable pre-wake gate, sharing the 50_events invalidation lock.
+
+        Require live current claim token, unexpired lease, no invalidation and
+        no previous start. Commit dispatch_started_at BEFORE returning the
+        current snapshot. Return None if lost; never call WakePort then.
+        Crashed/expired started attempts enter unknown, not a fresh claim.
+        """
+        ...
+
+    def mark_dispatch_unknown(self, *, event_id: str, claim_token: str) -> bool:
+        """Persist uncertain outcome under the same event key; no invented receipt.
+
+        UNKNOWN is not claimable. External receipt reconciliation is required
+        to resolve it; a missing response never proves enqueue_failed.
+        """
+        ...
         ...
 
     def list_retractions(
@@ -345,6 +649,8 @@ class StoragePort(Protocol):
 
         租约过期能被别人接管，是因为原持有者可能已经死了；而"到期才接管"
         保证了正常情况下同一个事件同时只有一个 worker 在处理。
+        Only unstarted claimed entries are reclaimable. An expired started
+        attempt becomes unknown/reconcile. Unknown is never automatically claimed.
         """
         ...
 
@@ -352,8 +658,8 @@ class StoragePort(Protocol):
         self, *, receipt: WakeReceipt, next_state: str,
         claim_token: str | None = None,
         next_attempt_at: datetime | None = None,
-    ) -> None:
-        """存回执并推进投递状态。返回 ``False`` 表示令牌过期、状态未改。
+    ) -> str | bool:
+        """Return the committed delivery state, or False for a stale/missing token.
 
         **必须和"兑现或释放冷却额度占位"在同一个事务里。** 分开的话，
         "已送达但额度没扣"和"额度扣了但状态还是 pending"两种错都会出现，
@@ -362,6 +668,12 @@ class StoragePort(Protocol):
         **``claim_token`` 对不上时只能记审计，不能改状态。** 旧 worker 租约
         过期、事件被别人接管之后它才返回 —— 让它推进状态，等于一次超时
         变成一次错误的覆盖，而且看起来完全正常。
+        Preserve immutable receipts idempotently, independent of Outbox scrub.
+        Serialize against invalidation on 50_events. Unknown may become delivered
+        only with a genuine accepted/duplicate receipt. An invalidated attempt's
+        explicit enqueue_failed becomes invalidated, never pending. Stale or
+        missing tokens cannot overwrite invalidated/unknown. Do not invent a
+        receipt for timeouts; mark_dispatch_unknown owns that case.
         """
         ...
 
@@ -372,6 +684,7 @@ class StoragePort(Protocol):
 
         **只给 worker 用。** 排查要看的是 suppressed / rejected 这些终态，
         那些事件按定义不在这里 —— 排查走 :meth:`list_events`。
+        Unknown/reconcile is excluded as well; list_events is its audit surface.
         """
         ...
 

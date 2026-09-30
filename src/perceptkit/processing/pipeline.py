@@ -21,27 +21,31 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Mapping, Sequence
 
 from ..contracts import receipt as _receipt
 from ..contracts.context import IngestContext
+from ..contracts.errors import RetryableProjectionError, LEGACY_REPORT_SEMANTICS_UNVERIFIABLE
 from ..contracts.records import (
     CONFLICT,
     IGNORE,
     REPLACE,
     CurrentProjection,
     DailyAggregate,
-    DurableDedupeIdentity,
+    _compare_revisions,
 )
-from ..contracts.report import ReportEnvelope
+from ..contracts.report import ReportEnvelope, canonical_semantics
 from ..manifest.types import SignalDefinition
-from ..ports.storage import StoragePort
+from ..ports.storage import StoragePort, require_aggregate_generation_storage
 from .retract import is_retracted
 from ..rules.types import EventDefinition
 from . import aggregate as _aggregate
 from .dispatch import evaluate_and_enqueue
 from .normalize import NormalizedObservation, _canonical, normalize_observations
+from .facts import decide_fact, durable_identity, detail_proves_revision
+from .mutation import acquire_ingest
+from .conflicts import record_conflict, blocked_by_pending, relative_jump_reason, resolve_pending
 
 #: 聚合算法的版本。改了口径就加这个数并重算，**不原地改写旧统计的语义** ——
 #: 否则同一张表里一半是老口径一半是新口径，而且看不出来。
@@ -76,7 +80,34 @@ class IngestOutcome:
 
     @property
     def ok(self) -> bool:
-        return not self.rejected and not self.conflicts
+        return (self.receipt.status in (_receipt.INGEST_ACCEPTED, _receipt.INGEST_DUPLICATE)
+                and not self.rejected and not self.conflicts)
+
+
+def _durable_rejections(rejected, rejection_codes, conflict_indexes=()):
+    """Merge one safe receipt issue per original Report array index."""
+    grouped: dict[int, tuple[str, list[str]]] = {}
+    for index, problems in rejected:
+        if index < 0:
+            raise ValueError("observation failure is missing its original report index")
+        code = rejection_codes[index]
+        prior_code, diagnostics = grouped.setdefault(index, (code, []))
+        if prior_code != code:
+            raise ValueError("one observation index cannot have multiple terminal issue codes")
+        diagnostics.extend(str(problem) for problem in problems)
+    for index in conflict_indexes:
+        if index < 0:
+            raise ValueError("fact conflict is missing its original report index")
+        code = _receipt.OBSERVATION_FACT_CONFLICT
+        prior_code, diagnostics = grouped.setdefault(index, (code, []))
+        if prior_code != code:
+            raise ValueError("one observation index cannot have multiple terminal issue codes")
+        diagnostics.append("fact_conflict")
+    return tuple(
+        _receipt.ObservationRejection(
+            index, code, tuple(dict.fromkeys(problems)))
+        for index, (code, problems) in sorted(grouped.items())
+    )
 
 
 def _epoch(dt: Any) -> float:
@@ -94,6 +125,8 @@ def ingest_report(
     timezone_fallback: str | None = None,
     max_observations: int = 200,
     max_payload_bytes: int = 256 * 1024,
+    definition_at=None,
+    archive_definition=None,
 ) -> IngestOutcome:
     """把一批上报走完前七步。
 
@@ -101,6 +134,7 @@ def ingest_report(
     上报，不设上限的话，一个构造过的 report 就能让单次 ingest 跑很久。
     超限**拒收整批**而不是截断 —— 截断会静默丢数据，比拒收难查得多。
     """
+    require_aggregate_generation_storage(storage)
     payload_digest = _batch_digest(report)
 
     # 真的量一下，而不是摆一个从不生效的参数。
@@ -135,12 +169,19 @@ def ingest_report(
             ))],
         )
 
+    # Fail closed on un-attributable pre-upgrade state before even claiming a
+    # Report. The owned planner repeats this check against fresh locked state.
+    from .rule_repair import repair_scopes
+    for signal in {o.signal for o in report.observations if o.signal in signals}:
+        repair_scopes(storage, subject=context.subject_id, signal=signal,
+                      definitions=definitions, definition_at=definition_at)
+
     # 🔴 【整批一个事务】。认领、全部观测、最终回执必须一起成功或一起不生效。
     #
     # 之前是"先认领、再逐条各自提交"：第 1 条提交后崩溃，重试会直接拿到
     # duplicate，剩下的观测【永久丢失】——批级幂等把一次中断伪装成了"已处理完"。
     # 代价是单个事务变长，所以 max_observations 是必须的,不是可选的。
-    with storage.transaction():
+    with storage.mutation_transaction() as mutation:
         # ① 批级幂等。同 identity 同摘要 -> 返回原结果不重复处理；
         #    同 identity 异摘要 -> conflict，不静默覆盖。
         claim = storage.claim_report(
@@ -151,7 +192,13 @@ def ingest_report(
             received_at=context.received_at,
         )
         if claim.status != _receipt.INGEST_ACCEPTED:
-            return IngestOutcome(receipt=claim)
+            if claim.status == _receipt.INGEST_CONFLICT and not claim.payload_digest.startswith("v2:"):
+                claim = replace(claim, error_code=LEGACY_REPORT_SEMANTICS_UNVERIFIABLE)
+            return IngestOutcome(
+                receipt=claim,
+                rejected=[(item.index, item.problems)
+                          for item in claim.observations_rejected],
+            )
 
         # ② 校验 + 标准化。
         normalized = normalize_observations(
@@ -161,23 +208,70 @@ def ingest_report(
             source=report.producer,
             timezone_fallback=timezone_fallback,
         )
+        rejection_codes = {
+            index: _receipt.OBSERVATION_VALIDATION_FAILED
+            for index, _ in normalized.rejected
+        }
+        normalized_rejections = _durable_rejections(
+            normalized.rejected, rejection_codes)
+        source_index_by_item = {
+            id(item): index
+            for item, index in zip(normalized.normalized, normalized.source_indexes)
+        }
         outcome = IngestOutcome(
             receipt=claim,
-            rejected=list(normalized.rejected),
+            rejected=[(item.index, item.problems) for item in normalized_rejections],
             warnings=list(normalized.warnings),
         )
+        acquire_ingest(mutation, storage, normalized.normalized, signals, definitions,
+                       AGGREGATION_VERSION, definition_at=definition_at)
+        if archive_definition is not None:
+            for definition in definitions:
+                archive_definition(definition)
+
+        # A batch is immutable: array order must never choose the winner among
+        # two different contents claiming the same Fact revision. Preflight all
+        # candidates before any Observation/projection writes; unrelated siblings
+        # retain their original processing order and independent outcome.
+        blocked = set()
+        fact_candidates: dict[str, list[NormalizedObservation]] = {}
+        for item in normalized.normalized:
+            if signals[item.stored.signal].identity_strategy != "source_event_id" or not item.stored.source_event_id:
+                continue
+            siblings = fact_candidates.setdefault(item.fact_key, [])
+            for other in siblings:
+                order = _compare_revisions(item.stored.source_revision, other.stored.source_revision)
+                if order is None or (order == 0 and item.semantic_digest != other.semantic_digest):
+                    # Equal content cannot supply the missing revision ordering.
+                    # Never choose an active opaque revision by arrival order.
+                    blocked.add(item.fact_key)
+                    break
+            siblings.append(item)
 
         for item in normalized.normalized:
+            if item.fact_key in blocked:
+                record_conflict(storage, item, kind="fact_revision", reason="ambiguous_batch_revision",
+                                now=context.received_at)
+                outcome.conflicts.append(item)
+                continue
             sig = signals[item.stored.signal]
             _apply_one(item, sig, context=context, storage=storage, outcome=outcome,
-                       definitions=definitions, extra_evaluators=extra_evaluators)
+                       definitions=definitions, extra_evaluators=extra_evaluators,
+                       mutation=mutation, definition_at=definition_at,
+                       source_index=source_index_by_item[id(item)],
+                       rejection_codes=rejection_codes)
 
-    outcome.receipt = _receipt.IngestReceipt(
-        subject_id=claim.subject_id, producer=claim.producer,
-        report_id=claim.report_id, payload_digest=claim.payload_digest,
-        received_at=claim.received_at, status=claim.status,
-        observations_applied=len(outcome.applied),
-    )
+        durable_rejections = _durable_rejections(
+            outcome.rejected,
+            rejection_codes,
+            [source_index_by_item[id(item)] for item in outcome.conflicts],
+        )
+        outcome.receipt = replace(
+            claim, status=_receipt.INGEST_ACCEPTED, error_code=None,
+            observations_applied=len(outcome.applied),
+            observations_rejected=durable_rejections,
+        )
+        storage.finalize_report(outcome.receipt)
     return outcome
 
 
@@ -199,7 +293,7 @@ def _repeats_declared_state(
     或者这条不是 observed，都照常写明细 —— 宁可多写一条，不可漏掉一次真正的
     状态变化。
     """
-    if item.stored.availability != "observed":
+    if item.stored.availability != "observed" or sig.current_policy == "none":
         return False
     # 🔴 来源给了这条事实自己的身份，它就是**一件独立的事**，不是保活重复。
     #
@@ -234,6 +328,10 @@ def _apply_one(
     outcome: IngestOutcome,
     definitions: Sequence[EventDefinition] = (),
     extra_evaluators: Mapping[str, Callable[..., Any]] | None = None,
+    mutation=None,
+    definition_at=None,
+    source_index: int = -1,
+    rejection_codes: dict[int, str] | None = None,
 ) -> None:
     """③~⑨：一条观测的落地，以及命中规则时写发件箱。
 
@@ -241,6 +339,8 @@ def _apply_one(
     不生效。分开写的话会出现"观测写了但去重身份没写"——下次重传就会重复累计。
     """
     stored = item.stored
+    if rejection_codes is None:
+        rejection_codes = {}
 
     # ②·5 来源撤回过的事实，不许被迟到的样本复活。
     #
@@ -259,16 +359,102 @@ def _apply_one(
     # ③ 观测级幂等。问的是【投递身份】不是【事实身份】——用事实身份去重会把
     #    "同一条事实的新版本"(电量的新读数、样本的修订)误判成重传丢掉。
     #    也不是问"这条观测还在不在"：明细可能已经按保留期删掉了。
-    #     ⚠️ 升级前落库的旧数据记的是**旧摘要**（身份里带着 occurred_at）。
-    #     只查新摘要的话，升级后同一条样本第一次重传会认不出来、再加一遍 ——
-    #     把"每次重传都翻倍"换成"升级当天翻一次"，那不叫修好。两个都查。
-    for digest in (item.identity_digest, item.legacy_identity_digest):
-        if digest and storage.has_seen_identity(
-            subject_id=context.subject_id, signal=stored.signal,
-            source=stored.source, digest=digest,
-        ):
+    # Source-identified facts are decided against durable revision evidence first.
+    # Legacy identities are migrated from persisted rows, never this upload time.
+    prior_revisions = []
+    if sig.identity_strategy == "source_event_id" and stored.source_event_id:
+        fact_decision, prior_revisions, reason = decide_fact(storage, item, sig)
+        if fact_decision == "conflict":
+            record_conflict(storage, item, kind="fact_revision", reason=reason or "same_fact_revision_different_content",
+                            now=context.received_at)
+            outcome.conflicts.append(item)
+            return
+        if fact_decision == "duplicate":
             outcome.duplicates.append(item)
             return
+        if reason:
+            outcome.warnings.append(f"{stored.signal}: {reason}")
+        if fact_decision in ("incomplete", "stale"):
+            if fact_decision == "incomplete":
+                for old in prior_revisions:
+                    if old.effective_local_date is not None:
+                        storage.mark_active_aggregate_incomplete(
+                            subject_id=stored.subject_id, signal=stored.signal,
+                            aggregation_kind="daily", local_date=old.effective_local_date,
+                            reason="fact_revision_details_incomplete",
+                            updated_at=context.received_at)
+            rejection_codes[source_index] = (
+                _receipt.OBSERVATION_FACT_REVISION_DETAILS_INCOMPLETE
+                if fact_decision == "incomplete"
+                else _receipt.OBSERVATION_STALE_FACT_REVISION
+            )
+            outcome.rejected.append((source_index, (f"{stored.signal}: {reason}",)))
+            return
+        if prior_revisions and sig.stores_history:
+            # Corrections require complete persisted evidence to subtract the
+            # previous active revision. Expired details cannot be manufactured.
+            from .retract import _all_observations, canonical_revisions, drop_retracted
+            details = _all_observations(storage, stored.subject_id, stored.signal)
+            if any(r.effective_local_date is None or not any(
+                detail_proves_revision(detail, r, item) for detail in details
+            ) for r in prior_revisions):
+                for old in prior_revisions:
+                    if old.effective_local_date is not None:
+                        storage.mark_active_aggregate_incomplete(
+                            subject_id=stored.subject_id, signal=stored.signal,
+                            aggregation_kind="daily", local_date=old.effective_local_date,
+                            reason="fact_revision_details_incomplete",
+                            updated_at=context.received_at)
+                outcome.rejected.append((
+                    source_index,
+                    (f"{stored.signal}: fact_revision_details_incomplete",),
+                ))
+                rejection_codes[source_index] = (
+                    _receipt.OBSERVATION_FACT_REVISION_DETAILS_INCOMPLETE)
+                return
+            active = drop_retracted(storage, canonical_revisions(details, sig),
+                                    subject_id=stored.subject_id, signal=stored.signal)
+            for day in {stored.effective_local_date, *(r.effective_local_date for r in prior_revisions)}:
+                count = sum(r.availability == "observed" and r.effective_local_date == day for r in active)
+                aggregates = storage.get_aggregate(subject_id=stored.subject_id, signal=stored.signal,
+                                                   start_date=day, end_date=day)
+                active_generation = storage.get_active_aggregate_generation(
+                    subject_id=stored.subject_id, signal=stored.signal,
+                    aggregation_kind="daily")
+                if active_generation is not None and any(
+                       a.generation_id == active_generation.generation_id
+                       and int(a.source_coverage.get("observations", 0)) > count for a in aggregates):
+                    storage.mark_active_aggregate_incomplete(
+                        subject_id=stored.subject_id, signal=stored.signal,
+                        aggregation_kind="daily", local_date=day,
+                        reason="fact_revision_details_incomplete",
+                        updated_at=context.received_at)
+                    outcome.rejected.append((
+                        source_index,
+                        (f"{stored.signal}: fact_revision_details_incomplete",),
+                    ))
+                    rejection_codes[source_index] = (
+                        _receipt.OBSERVATION_FACT_REVISION_DETAILS_INCOMPLETE)
+                    return
+    if storage.has_seen_identity(
+        subject_id=context.subject_id, signal=stored.signal,
+        source=stored.source, digest=item.identity_digest,
+    ):
+        outcome.duplicates.append(item)
+        return
+
+    if blocked_by_pending(storage, item):
+        record_conflict(storage, item, kind="pending_revision", reason="pending_conflict_requires_higher_revision",
+                        now=context.received_at)
+        outcome.conflicts.append(item)
+        return
+
+    jump_reason = relative_jump_reason(storage, item, sig, correction=bool(prior_revisions))
+    if jump_reason:
+        record_conflict(storage, item, kind="relative_jump", reason=jump_reason,
+                        now=context.received_at)
+        outcome.conflicts.append(item)
+        return
 
     # ④ 写观测。只留当前值的信号不写明细 —— 否则 current_only 名不副实。
     #
@@ -288,12 +474,8 @@ def _apply_one(
 
     # ⑤ 记住身份。并发下可能有另一个事务刚记过同一条 —— 那说明它赢了，
     #    我们退出，避免两边都往聚合里加一遍。
-    if not storage.remember_identity(DurableDedupeIdentity(
-        subject_id=context.subject_id,
-        signal=stored.signal,
-        source=stored.source,
-        source_event_identity_digest=item.identity_digest,
-        first_applied_at=context.received_at,
+    if not storage.remember_identity(durable_identity(
+        item, received_at=context.received_at,
         # ★ 问的是**聚合**永不永久，不是明细。
         #
         #   这条记录存在的全部理由就是「明细会过期、聚合可能永久」——
@@ -303,9 +485,10 @@ def _apply_one(
         #   之后一次重传就把永久聚合多加一遍，**加完没法回滚**。
         #   产品规范 §14-2 点名的正是这个场景。
         aggregate_scope=sig.key if sig.keeps_aggregates_forever else None,
+        dimension_key=(sig.dimension_key_for(stored.typed_value)
+                       if sig.current_policy == "latest" else None),
         # 永久聚合依赖的身份必须永久保留：明细删了之后，
         # 它是唯一还能挡住重放的东西。
-        retain_until=None,
     )):
         outcome.duplicates.append(item)
         return
@@ -319,31 +502,55 @@ def _apply_one(
     #    还在说「fresh，8000 步」—— 把一个已经读不到的值当成当前事实报出去。
     #    规范 §12-12 要的是两件事：不覆盖最后可靠数值，**并且**查询时能表达
     #    当前不可用。
-    decision = _update_current(item, sig, context=context, storage=storage,
-                               outcome=outcome)
+    decision = (_update_current(item, sig, context=context, storage=storage,
+                                outcome=outcome, correction=bool(prior_revisions))
+                if sig.current_policy == "latest" else None)
 
-    # 🔴 冲突时暂停一切派生。"到底哪份数据生效了"都说不清的时候，
-    #    再去更新聚合、推进规则状态、产生事件，只会把错误扩散。
-    if decision == CONFLICT:
+    # ⑦ 已接受事实独立参与聚合；Current 同时刻冲突不否定另一个 Fact。
+    if sig.stores_history:
+        if prior_revisions:
+            for day in {stored.effective_local_date, *(r.effective_local_date for r in prior_revisions)}:
+                _rebuild_corrected_day(storage, sig, context=context, day=day)
+        elif stored.availability == "observed":
+            _update_aggregate(item, sig, context=context, storage=storage)
+
+    if prior_revisions:
+        from .rule_repair import rebuild_rules, repair_scopes
+        storage.scrub_event_snapshots(
+            subject_id=stored.subject_id, signal=stored.signal, source=stored.source,
+            source_event_id=stored.source_event_id, canonical_fact_key=item.fact_key,
+            now=context.received_at, reason="fact_corrected")
+        days = {stored.effective_local_date, *(r.effective_local_date for r in prior_revisions)}
+        scopes = repair_scopes(storage, subject=stored.subject_id, signal=stored.signal,
+                               definitions=definitions, definition_at=definition_at, days=days)
+        rebuild_rules(storage, subject=stored.subject_id, signal=sig, scopes=scopes,
+                      extra_evaluators=extra_evaluators)
+        resolve_pending(storage, item, now=context.received_at)
         outcome.applied.append(item)
         return
-
-    # ⑦ 聚合。迟到的旧数据(IGNORE)【要】进历史 —— 它只是不该改当前值。
-    if sig.stores_history and stored.availability == "observed":
-        _update_aggregate(item, sig, context=context, storage=storage)
 
     # ⑧⑨ 求值 + 写发件箱。和上面同事务 —— 事件落地了但观测没落地(或反过来)，
     #    都会让"为什么会有这个事件"永远解释不清。
     #
-    #    只在 observed 且当前值真的推进了(REPLACE)时才跑值变化型规则：
+    #    值变化规则仍要求 Current 推进；occurrence 只依赖独立事实身份，
+    #    不能因为迟到或 Current 冲突漏掉。无 Current 的信号只求值 occurrence，
+    #    原始片段到达顺序不能充当 changed/threshold/delta 等规则的事实顺序。
     #    拿 no_data 去喂 `changed`，会把"100 → 没数据"当成一次变化，
     #    还会把 previous 推成 None，之后的 threshold_crossing 全废。
     #    迟到数据(IGNORE)同理 —— 它的 previous/current 讲的不是当前故事。
-    if definitions and decision == REPLACE and stored.availability == "observed":
+    eligible_definitions = [
+        definition for definition in definitions
+        if stored.availability == "observed" and (
+            definition.condition_type == "occurrence"
+            or decision == REPLACE
+        )
+    ]
+    if eligible_definitions:
         rules = evaluate_and_enqueue(
             item, context=context, storage=storage,
-            definitions=definitions, extra_evaluators=extra_evaluators,
+            definitions=eligible_definitions, extra_evaluators=extra_evaluators,
             signal_definition=sig,
+            mutation=mutation,
         )
         outcome.events.extend(rules.events)
         outcome.rule_misses.extend(rules.misses)
@@ -352,6 +559,7 @@ def _apply_one(
             ("*", f"未求值：availability={stored.availability}，当前值决策={decision}")
         )
 
+    resolve_pending(storage, item, now=context.received_at)
     outcome.applied.append(item)
 
 
@@ -367,6 +575,7 @@ def _update_current(
     context: IngestContext,
     storage: StoragePort,
     outcome: IngestOutcome,
+    correction: bool = False,
 ) -> str:
     """更新当前值，返回决策（``REPLACE`` / ``IGNORE`` / ``CONFLICT``）。
 
@@ -381,6 +590,8 @@ def _update_current(
     dimension = sig.dimension_key_for(stored.typed_value)
 
     for attempt in range(MAX_CAS_RETRIES):
+        candidate_item = item
+        stored = item.stored
         existing = None
         for candidate in storage.get_current(
             subject_id=context.subject_id, signals=[stored.signal],
@@ -389,10 +600,25 @@ def _update_current(
                 existing = candidate
                 break
 
-        decision = decide_current_update(
+        owns_current = (correction and existing is not None and
+                        (existing.source, existing.source_event_id) ==
+                        (stored.source, stored.source_event_id))
+        if owns_current and sig.stores_history and stored.availability == "observed":
+            from .retract import _all_observations, canonical_revisions, drop_retracted
+            pool = drop_retracted(storage, canonical_revisions(
+                _all_observations(storage, stored.subject_id, stored.signal), sig),
+                subject_id=stored.subject_id, signal=stored.signal)
+            pool = [row for row in pool if row.availability == "observed"
+                    and sig.dimension_key_for(row.typed_value) == dimension]
+            if pool:
+                stored = max(pool, key=lambda row: (row.occurred_at, row.observation_id))
+                from .normalize import _digest
+                candidate_item = replace(item, stored=stored,
+                                         content_digest=_digest(_canonical(stored.typed_value), stored.availability))
+        decision = REPLACE if owns_current else decide_current_update(
             new_occurred_at=stored.occurred_at,
             new_revision=stored.source_revision,
-            new_digest=item.content_digest,
+            new_digest=candidate_item.content_digest,
             existing=existing,
         )
         if decision == IGNORE:
@@ -428,17 +654,18 @@ def _update_current(
                 source_event_id=stored.source_event_id,
                 source_revision=stored.source_revision,
                 version=(existing.version + 1) if existing else 0,
-                content_digest=item.content_digest,
+                content_digest=candidate_item.content_digest,
+                timezone=stored.timezone,
+                timezone_source=stored.timezone_source,
+                source_units=stored.source_units,
+                source_values=stored.source_values,
             ),
             expected_version=existing.version if existing else -1,
         ):
-            return REPLACE
+            return REPLACE if stored.observation_id == item.stored.observation_id else IGNORE
         # 有人在我们读之后写了。重读、重新判断 —— 说不定这次该 IGNORE 了。
 
-    outcome.warnings.append(
-        f"{stored.signal}: 当前值连续 {MAX_CAS_RETRIES} 次写入竞争失败，本次放弃"
-    )
-    return IGNORE
+    raise RetryableProjectionError("current", stored.signal, MAX_CAS_RETRIES)
 
 
 def _update_aggregate(
@@ -454,53 +681,83 @@ def _update_aggregate(
     # 按当前算法版本挑。算法升级后旧版本的文档要留着(供对照/回滚),
     # 但绝不能拿旧口径的文档继续 fold 新数据 —— 那会得到一份两种口径混合的统计,
     # 而且看不出来。
-    existing = [
-        a for a in storage.get_aggregate(
-            subject_id=context.subject_id, signal=stored.signal,
-            start_date=day, end_date=day, aggregation_kind=kind,
-        )
-        if a.aggregation_version == AGGREGATION_VERSION
-    ]
-    prev = existing[0].typed_aggregate if existing else None
     # 计数器纪元由生产方在载荷里给（来源重置了计数就换一个）。它是 manifest
     # 声明的普通字段，这里只是把它当上下文取出来 —— 累计型靠它区分
     # 「重置」和「修订」，混了的话「重置到 0」会被当成错值吃掉。
     typed = stored.typed_value or {}
     epoch = typed.get("counter_epoch_id")
-    doc = _aggregate.fold_into_day(
-        prev, sig, typed, ts=_epoch(stored.occurred_at),
-        revision=stored.source_revision,
-        counter_epoch=str(epoch) if epoch is not None else None,
-    )
-    coverage = dict((existing[0].source_coverage if existing else {}) or {})
-    coverage["observations"] = int(coverage.get("observations", 0)) + 1
-    storage.put_aggregate(DailyAggregate(
-        subject_id=context.subject_id,
-        signal=stored.signal,
-        local_date=day,
-        aggregation_kind=kind,
-        aggregation_version=AGGREGATION_VERSION,
-        typed_aggregate=doc,
-        timezone_attribution=stored.timezone,
-        source_coverage=coverage,
-        updated_at=stored.received_at,
-    ))
+    active = storage.get_active_aggregate_generation(
+        subject_id=context.subject_id, signal=stored.signal, aggregation_kind=kind)
+    if active is not None and not (
+            active.requested_start_date <= day <= active.requested_end_date):
+        storage.account_active_aggregate_range(
+            subject_id=context.subject_id, signal=stored.signal,
+            aggregation_kind=kind,
+            start_date=min(active.requested_start_date, day),
+            end_date=max(active.requested_end_date, day),
+            updated_at=stored.received_at)
+        active = storage.get_active_aggregate_generation(
+            subject_id=context.subject_id, signal=stored.signal,
+            aggregation_kind=kind)
+    aggregation_version = active.aggregation_version if active else AGGREGATION_VERSION
+    generation_id = active.generation_id if active else None
+    for _ in range(MAX_CAS_RETRIES):
+        existing = next((
+            a for a in storage.get_aggregate(
+                subject_id=context.subject_id, signal=stored.signal,
+                start_date=day, end_date=day, aggregation_kind=kind,
+            ) if generation_id is not None and a.generation_id == generation_id
+        ), None)
+        doc = _aggregate.fold_into_day(
+            existing.typed_aggregate if existing else None, sig, typed,
+            ts=_epoch(stored.occurred_at), revision=stored.source_revision,
+            counter_epoch=str(epoch) if epoch is not None else None,
+        )
+        coverage = dict((existing.source_coverage if existing else {}) or {})
+        coverage["observations"] = int(coverage.get("observations", 0)) + 1
+        version = existing.version if existing else -1
+        if storage.compare_and_put_aggregate(DailyAggregate(
+            subject_id=context.subject_id,
+            signal=stored.signal,
+            local_date=day,
+            aggregation_kind=kind,
+            aggregation_version=aggregation_version,
+            typed_aggregate=doc,
+            generation_id=generation_id,
+            timezone_attribution=stored.timezone,
+            source_coverage=coverage,
+            updated_at=stored.received_at,
+            version=version + 1,
+        ), expected_version=version):
+            return
+    raise RetryableProjectionError("aggregate", stored.signal, MAX_CAS_RETRIES)
 
 
 def _batch_digest(report: ReportEnvelope) -> str:
-    from .normalize import _canonical, _digest
-    return _digest(
-        report.report_id,
-        report.producer,
-        _canonical([
-            {
-                "signal": o.signal, "occurred_at": o.occurred_at.isoformat(),
-                "availability": o.availability, "value": o.value,
-                "source_event_id": o.source_event_id,
-            }
-            for o in report.observations
-        ]),
-    )
+    from .normalize import _digest
+    return "v2:" + _digest(canonical_semantics(report.semantic_payload(), fingerprint_nonfinite=True))
+
+
+def _rebuild_corrected_day(storage, sig, *, context, day):
+    from .recompute import recompute_day
+    active = storage.get_active_aggregate_generation(
+        subject_id=context.subject_id, signal=sig.key, aggregation_kind="daily")
+    aggregation_version = active.aggregation_version if active else AGGREGATION_VERSION
+    generation_id = active.generation_id if active else None
+    for _ in range(MAX_CAS_RETRIES):
+        old = next((row for row in storage.get_aggregate(
+            subject_id=context.subject_id, signal=sig.key,
+            start_date=day, end_date=day, aggregation_kind="daily",
+        ) if generation_id is not None and row.generation_id == generation_id), None)
+        expected = old.version if old else -1
+        rebuilt = recompute_day(storage, sig, subject_id=context.subject_id,
+                                day=day, version=aggregation_version,
+                                updated_at=context.received_at,
+                                generation_id=generation_id)
+        if storage.compare_and_put_aggregate(replace(rebuilt, version=expected + 1),
+                                             expected_version=expected):
+            return
+    raise RetryableProjectionError("aggregate", sig.key, MAX_CAS_RETRIES)
 
 
 __all__ = ["IngestOutcome", "ingest_report", "AGGREGATION_VERSION"]

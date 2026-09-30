@@ -1,5 +1,56 @@
 # 变更记录
 
+## 0.10.0 — 2026-09-29
+
+This release closes the D01–D14 consistency contract. User-visible outcomes:
+
+- Multiple real facts no longer disappear because they share a timestamp or
+  signal. Current, timeline and daily aggregates each keep their own declared
+  meaning.
+- Reports are immutable delivery batches; corrections belong to fact revisions.
+  Exact retries are durable duplicates, while changed content under the same
+  report ID fails as a typed conflict.
+- Ingest, correction and retraction use one transactional ownership protocol.
+  A failed projection cannot leave an accepted fact with stale Current,
+  aggregate, rule state or outbox state.
+- Retracting or correcting a trigger rebuilds RuleState, invalidates unsent
+  effects, and removes stale values from delivered-event snapshots while
+  retaining the external-delivery audit.
+- Aggregate generations publish only after complete coverage is proven and an
+  atomic active-generation switch succeeds. Irrecoverable history is explicitly
+  incomplete and excluded from trend baselines.
+- Definition history is a production persistence contract, so a restarted Kit
+  can still explain events produced by an older rule version.
+
+### Current/export cutover
+
+- Public Current has one shape: `signal -> entries[]`, ordered by dimension key;
+  TTL, availability and privacy remain independent per dimension. Last-known also
+  returns entries, and empty/no-current signals return `[]`.
+- Export preserves all Current dimensions, renames `pending_events` to `events`
+  (all delivery states), drains every collection or proves cap+1 before reporting
+  truncation, and applies explicit time windows to aggregates/events/conflicts.
+- Conflict and aggregate storage reads add optional bounded pagination. Full
+  contract and Host migration checklist: [v0.10 Current/export](docs/current-export-v010.md).
+- Report receipts now persist sanitized per-observation failures. Mixed and
+  all-invalid Reports are accepted durable outcomes; valid siblings commit and
+  exact replay returns duplicate/applied=0 with the original item evidence.
+  Each item carries one closed machine code; diagnostic text never drives
+  recovery. Whole-batch preflight rejection and Report digest conflict remain
+  separate. A two-phase restart conformance must run from separate interpreters
+  over the same durable backend, so module/global caches cannot create a false
+  durability result.
+
+### Conflict, units and timezone contract
+
+- Pending Fact/anomaly conflicts now persist as queryable ConflictRecords;
+  strictly higher valid source revisions resolve them atomically with acceptance.
+- Per-field `units` converts before canonical range/jump checks. Original unit
+  evidence persists separately; implausible jumps cannot advance projections.
+- Explicit invalid IANA timezone rejects one observation; only omission can use
+  Host fallback, with persisted attribution source. Adapter migrations and
+  conformance obligations: [conflicts, units and timezone](docs/conflicts-units-timezone.md).
+
 ## 0.9.0 — 2026-09-23
 
 **外部审查（2026-09-14 / 09-17 / 09-21）里能在库内修的，全部修完。**

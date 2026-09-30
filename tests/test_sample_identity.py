@@ -156,14 +156,10 @@ def test_a_real_revision_still_gets_through():
 # 升级兼容：旧数据记的是旧身份，不许因此再加一遍
 # ---------------------------------------------------------------------------
 
-def test_an_identity_remembered_before_the_upgrade_still_blocks_a_re_upload():
-    """改投递身份会连带改摘要，**已经在库里的旧数据记的是旧摘要**。
+def test_an_exact_released_digest_still_blocks_replay_without_details():
+    """逐字节命中已持久化旧摘要就是证据，不需要从hash逆推原始时间。
 
-    只查新摘要的话，升级后同一条样本第一次重传认不出来、再加一遍 ——
-    等于把"每次重传都翻倍"换成"升级当天翻一次"，那不叫修好。
-    所以新旧两个摘要都查，命中任一个就算重传。
-
-    这条模拟升级前的状态：手工把旧摘要记进去，再重传一次。
+    不命中的新Fact不得被无关旧hash锁住；真实v0.8状态迁移另由A03验证。
     """
     from perceptkit.contracts.observation import Observation
     from perceptkit.contracts.records import DurableDedupeIdentity
@@ -199,5 +195,5 @@ def test_an_identity_remembered_before_the_upgrade_still_blocks_a_re_upload():
             "value": value,
         }],
     }, context=IngestContext("u", report_at))
-    assert out.duplicates, "升级前记过的那条投递，重传时没被认出来"
+    assert out.duplicates and not out.rejected
     assert not out.applied

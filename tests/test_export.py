@@ -53,7 +53,7 @@ def test_the_export_reaches_every_kind_of_thing_we_hold():
     assert dump["subject_id"] == "u1"
     assert "steps" in dump["observations"]
     assert "location_city" in dump["observations"]
-    assert dump["current"]["steps"]["last_known"]["step_count"] == 8000
+    assert dump["current"]["steps"][0]["last_known"]["step_count"] == 8000
     assert [e["title"] for e in dump["calendar_events"]] == ["牙医"]
     assert [r["title"] for r in dump["reminders"]] == ["交房租"]
 

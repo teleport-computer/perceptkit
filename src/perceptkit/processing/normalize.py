@@ -14,16 +14,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Any, Mapping
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..algorithms import attribution
 from ..contracts._time import to_iso
 from ..contracts.context import IngestContext
 from ..contracts.observation import Observation
+from ..contracts.report import canonical_semantics, observation_semantics
 from ..contracts.records import StoredObservation
 from ..manifest.types import FieldDefinition, SignalDefinition
+from ..manifest.units import convert, UnitError
 
 
 class AttributionError(ValueError):
@@ -60,8 +64,12 @@ class NormalizedObservation:
     content_digest: str
     #: 跨午夜的区间会摊到多天：``[(本地日期, 分钟数), ...]``。其余为空。
     day_slices: tuple[tuple[str, float], ...] = ()
-    #: 升级前这条投递会算出的身份。只用来认旧数据，见 ``identity_for``。
+    #: Released-layout fingerprint. Only an exact match with an actually
+    #: persisted digest proves replay; a nonmatch proves nothing about legacy
+    #: timestamps. Broader backfill uses persisted Fact evidence in facts.py.
     legacy_identity_digest: str | None = None
+    #: Full Fact revision semantics, separate from stable historical IDs.
+    semantic_digest: str | None = None
 
 
 def _canonical(value: Any) -> str:
@@ -138,6 +146,70 @@ def validate_value(sig: SignalDefinition, value: Mapping[str, Any] | None) -> li
     return problems
 
 
+def canonical_units(obs: Observation, sig: SignalDefinition):
+    """Per-field conversion precedes canonical type/range/anomaly checks."""
+    units = obs.extensions.get("units", {})
+    if not isinstance(units, dict):
+        return None, {}, {}, [f"{sig.key}: invalid_units: units must be an object"]
+    value = dict(obs.value) if obs.value is not None else None
+    known = sig.field_map()
+    problems = _numeric_problems(value, sig.key)
+    source_units, source_values = {}, {}
+    if problems:
+        return value, source_units, source_values, problems
+    for key, unit in units.items():
+        fd = known.get(key)
+        if (fd is None or fd.value_type not in ("integer", "number")
+                or not fd.unit or not isinstance(unit, str)
+                or unit not in (fd.unit, *fd.accepted_units)
+                or value is None or key not in value):
+            problems.append(f"{sig.key}.{key}: invalid_units: unsupported field or source unit")
+            continue
+        raw = value[key]
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            problems.append(f"{sig.key}.{key}: invalid_units: source value must be numeric")
+            continue
+        try:
+            converted = convert(raw, source=unit, target=fd.unit)
+            if not math.isfinite(converted):
+                raise ValueError("conversion produced a nonfinite number")
+        except UnitError as exc:
+            problems.append(f"{sig.key}.{key}: invalid_units: {exc}")
+            continue
+        except (OverflowError, ValueError):
+            problems.append(f"{sig.key}.{key}: invalid_numeric_value: conversion is not finite/representable")
+            continue
+        value[key] = (int(converted) if fd.value_type == "integer" and converted.is_integer()
+                      else converted)
+        # Restricted values never become durable audit data either.
+        if fd.privacy_class != "restricted":
+            source_units[key], source_values[key] = unit, raw
+    return value, source_units, source_values, problems
+
+
+def _numeric_problems(value, where):
+    """Reject invalid numeric leaves before conversion or semantic hashing.
+
+    Unknown/nested fields are included: even discarded values remain part of
+    immutable wire semantics. Only numeric representation errors are caught;
+    programmer errors from other conversion operations must still propagate.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            if math.isfinite(float(value)):
+                return []
+        except (OverflowError, ValueError):
+            pass
+        return [f"{where}: invalid_numeric_value: number must be finite and representable"]
+    if isinstance(value, dict):
+        return [problem for key, item in value.items()
+                for problem in _numeric_problems(item, f"{where}.{key}")]
+    if isinstance(value, (list, tuple)):
+        return [problem for index, item in enumerate(value)
+                for problem in _numeric_problems(item, f"{where}[{index}]")]
+    return []
+
+
 def sanitize_value(
     sig: SignalDefinition, value: Mapping[str, Any] | None,
 ) -> tuple[dict[str, Any] | None, list[str]]:
@@ -187,14 +259,25 @@ def resolve_timezone(
     夏令时 —— 纽约的 ``-04:00`` 和 ``-05:00`` 是同一个时区在不同季节，
     光看偏移分不出来，切换那天（那天有 25 小时）就会算错。
 
-    兜底策略本身还没和产品方对齐（见 OPEN-QUESTIONS B2），所以由调用方传进来，
-    不在这里写死。
+    D09：只有省略才可兜底；显式非法值必须拒收。宿主 fallback 本身非法则
+    是配置错误，整次操作回滚。
     """
-    if obs.timezone:
+    if obs.timezone is not None or obs.timezone_supplied:
+        validate_timezone(obs.timezone)
         return obs.timezone, "observation"
-    if fallback:
+    if fallback is not None:
+        validate_timezone(fallback, field="timezone_fallback")
         return fallback, "host_fallback"
-    return None, None
+    return None, "missing"
+
+
+def validate_timezone(zone, *, field="invalid_timezone"):
+    try:
+        if not isinstance(zone, str) or not zone:
+            raise ValueError("must be a non-empty IANA timezone")
+        ZoneInfo(zone)
+    except (ValueError, TypeError, ZoneInfoNotFoundError) as exc:
+        raise ValueError(f"{field}: invalid IANA timezone {zone!r}") from exc
 
 
 def effective_date(
@@ -344,9 +427,9 @@ def identity_for(
         delivery = _digest(fact, rev, content_digest)
     else:
         delivery = legacy
-    # 旧身份只在换算法的这一版用来**认旧数据**：升级前落库的那些记的是
-    # 带 occurred_at 的摘要，只查新摘要的话，升级后第一次重传会认不出来、
-    # 再加一遍。过完一个保留周期就可以删掉这一路。
+    # A matching remembered digest proves this exact released-layout payload;
+    # a nonmatch cannot reconstruct the old time. Ingest may additionally
+    # recover the old identity from persisted Observation/Current evidence.
     return delivery, fact, (legacy if legacy != delivery else None), problems
 
 
@@ -357,6 +440,9 @@ def identity_for(
 @dataclass(frozen=True)
 class NormalizeResult:
     normalized: tuple[NormalizedObservation, ...]
+    #: Original Report array index aligned with ``normalized``. Kept outside
+    #: NormalizedObservation so durable/public Fact shapes do not gain request metadata.
+    source_indexes: tuple[int, ...]
     #: 被拒的观测：``(在这批里的下标, 问题清单)``。其余照常处理。
     rejected: tuple[tuple[int, tuple[str, ...]], ...]
     #: 处理了但有话要说的（退回了备用策略之类）。不影响落库。
@@ -378,8 +464,12 @@ def normalize_observations(
     —— 那会让重放和测试都做不了）。不给时用去重身份当 id。
     """
     out: list[NormalizedObservation] = []
+    source_indexes: list[int] = []
     rejected: list[tuple[int, tuple[str, ...]]] = []
     warnings: list[str] = []
+
+    if timezone_fallback is not None:
+        validate_timezone(timezone_fallback, field="timezone_fallback")
 
     for index, obs in enumerate(observations):
         problems: list[str] = []
@@ -398,13 +488,15 @@ def normalize_observations(
                 f"manifest 版本 {sig.schema_version}"
             )
 
-        problems += validate_value(sig, obs.value)
+        canonical_value, source_units, source_values, unit_problems = canonical_units(obs, sig)
+        problems += unit_problems
+        problems += validate_value(sig, canonical_value)
         if problems:
             rejected.append((index, tuple(problems)))
             continue
 
         # 落库边界过滤：受限字段和未声明字段到此为止，不进 canonical value。
-        clean, dropped = sanitize_value(sig, obs.value)
+        clean, dropped = sanitize_value(sig, canonical_value)
         if dropped:
             warnings.append(f"{obs.signal}: 丢弃了 {', '.join(dropped)}")
 
@@ -417,14 +509,18 @@ def normalize_observations(
         if clock_warning:
             warnings.append(clock_warning)
 
-        tz_name, _ = resolve_timezone(obs, fallback=timezone_fallback)
+        try:
+            tz_name, tz_source = resolve_timezone(obs, fallback=timezone_fallback)
+        except ValueError as exc:
+            rejected.append((index, (str(exc),)))
+            continue
         if tz_name is None:
             warnings.append(
                 f"{obs.signal}: 没有时区，按 occurred_at 的偏移归属日期"
                 f"（夏令时切换当天可能算错）"
             )
         try:
-            day, slices, day_problems = effective_date(obs, sig, timezone_name=tz_name)
+            day, slices, day_problems = effective_date(replace(obs, value=canonical_value), sig, timezone_name=tz_name)
         except AttributionError as exc:
             rejected.append((index, (str(exc),)))
             continue
@@ -452,15 +548,20 @@ def normalize_observations(
                 timezone=tz_name,
                 source_event_id=obs.source_event_id,
                 source_revision=obs.source_revision,
+                source_units=source_units,
+                source_values=source_values,
+                timezone_source=tz_source,
             ),
             identity_digest=identity,
             legacy_identity_digest=legacy_identity,
             fact_key=fact_key,
             content_digest=content,
             day_slices=slices,
+            semantic_digest=_digest(canonical_semantics(observation_semantics(obs))),
         ))
+        source_indexes.append(index)
 
-    return NormalizeResult(tuple(out), tuple(rejected), tuple(warnings))
+    return NormalizeResult(tuple(out), tuple(source_indexes), tuple(rejected), tuple(warnings))
 
 
 __all__ = [

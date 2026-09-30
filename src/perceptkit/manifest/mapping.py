@@ -46,8 +46,11 @@ def reference_mapping(
         rows.append({
             "signal": key,
             "storage_mode": sig.storage_mode,
-            "objects": MODE_OBJECTS.get(sig.storage_mode, ()),
-            "current_ttl_sec": sig.current_ttl_sec,
+            "objects": tuple(
+                obj for obj in MODE_OBJECTS.get(sig.storage_mode, ())
+                if obj != "CurrentProjection" or sig.current_policy != "none"
+            ),
+            "current_ttl_sec": sig.current_ttl_sec if sig.current_policy != "none" else 0,
             "detail_retention": _days(sig.history_retention_days),
             "aggregate_retention": (
                 _days(sig.aggregate_retention_days)

@@ -8,9 +8,8 @@
     定时规则  规则状态标成"今天已触发"→ 写待发事件时崩了
               重试 → "今天已经触发过了" → 不再出事件 → 那次提醒永远不会发
 
-内存存储**没有真正的回滚**，所以这里不冒称验过了原子性 —— 它验的是
-库这一侧的义务：该包在同一个事务里的确实包了，以及重试能收尾。
-真正的回滚由宿主的数据库保证，要用真 PostgreSQL 两连接注入失败来验。
+内存 reference 使用快照回滚；这里仍不冒称验过数据库隔离 —— 它验的是
+Kit 的事务边界与重试义务。宿主仍需真 PostgreSQL 两连接注入失败来验。
 """
 from __future__ import annotations
 
@@ -155,3 +154,54 @@ def test_daily_evaluation_is_wrapped_too():
     before = s.transactions_opened          # 前面 ingest 自己也开过事务
     kit.evaluate_daily(subject_id="u", local_date=DAY, now=T0)
     assert s.transactions_opened > before, "evaluate_daily 自己一个事务都没开"
+
+
+def test_acceptance_A06_exhausted_current_cas_rolls_back_every_write_and_can_retry():
+    from contextlib import contextmanager
+    from copy import deepcopy
+    from test_acceptance_regressions_0_9 import T, ingest, observation, weight_rule
+
+    class RollbackStore(InMemoryStorage):
+        """A transactional port double, not a claim of real DB isolation.
+
+        Only inject CAS rejection; keep all other real storage side effects.
+        A transaction restores persisted collections if Kit raises an error.
+        """
+        fail_cas = True
+        persisted = ("reports", "observations", "identities", "current", "aggregates",
+                     "rule_state", "outbox", "receipts", "retractions")
+
+        @contextmanager
+        def transaction(self):
+            before = {key: deepcopy(getattr(self, key)) for key in self.persisted}
+            with super().transaction():
+                try:
+                    yield
+                except Exception:
+                    for key, value in before.items():
+                        setattr(self, key, value)
+                    raise
+
+        def compare_and_put_current(self, projection, *, expected_version):
+            if self.fail_cas:
+                return False
+            return super().compare_and_put_current(projection, expected_version=expected_version)
+
+    storage = RollbackStore()
+    kit = PerceptionKit(storage, definitions=[weight_rule()])
+    sample = observation({"weight_kg": 70})
+    error = None
+    try:
+        ingest(kit, [sample])
+    except Exception as caught:
+        error = caught
+    # Combined assertion reports every partial write, even when no error is
+    # raised. No exception class is invented ahead of the retryable contract.
+    visible = {key: len(getattr(storage, key)) for key in storage.persisted}
+    assert (error is not None, visible) == (True, dict.fromkeys(storage.persisted, 0)), {
+        "error": repr(error), "visible_after_failed_cas": visible,
+    }
+    storage.fail_cas = False
+    retry = ingest(kit, [sample])
+    assert len(retry.applied) == 1 and not retry.duplicates
+    assert kit.get_current(subject_id="u", signals=["health_weight"], now=T)["health_weight"][0].value == {"weight_kg": 70}

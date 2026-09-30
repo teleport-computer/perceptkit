@@ -328,12 +328,49 @@ def check_counting_strategies_can_actually_count(
     return problems
 
 
+def check_public_dimension_fields(
+    signals: Mapping[str, SignalDefinition],
+) -> list[str]:
+    """Current dimension identity is always public, independent of value projection.
+
+    A private/on-demand field cannot become public by participating in a key.
+    Reject that capability declaration rather than hash a low-entropy identifier
+    or silently discard dimension identity.
+    """
+    problems: list[str] = []
+    for key, sig in signals.items():
+        # current_policy=none reuses these fields only for internal aggregate
+        # buckets (sleep stages). It emits no public dimension identity.
+        if sig.current_policy == "none":
+            continue
+        for name in sig.dimension_fields:
+            fields = [f for f in sig.fields if f.key == name]
+            if len(fields) != 1:
+                problems.append(f"{key}: dimension_fields {name!r} must reference exactly one declared field")
+                continue
+            field = fields[0]
+            if (field.query_visibility != "always"
+                    or field.privacy_class not in {"public", "personal", "sensitive"}):
+                problems.append(
+                    f"{key}: dimension_fields {name!r} requires query_visibility='always' "
+                    "and a non-restricted privacy_class"
+                )
+    return problems
+
+
+def require_public_dimension_fields(signals: Mapping[str, SignalDefinition]) -> None:
+    """Enforce the same capability gate at executable custom-manifest entry points."""
+    problems = check_public_dimension_fields(signals)
+    if problems:
+        raise ValueError("Invalid public dimension manifest:\n" + "\n".join(problems))
+
+
 def validate_manifest(
     signals: Mapping[str, SignalDefinition],
     *,
     available_normalizers: Iterable[str] = (),
 ) -> list[str]:
-    """跑全部六条检查（产品规范 §8 列的五条 + 一条计数策略自洽），返回问题清单（空 = 通过）。
+    """跑结构、计数策略与公共维度身份检查，返回问题清单（空 = 通过）。
 
     返回列表而不是抛异常：一次看到全部缺口，比逐个修再重跑快得多。
     """
@@ -354,6 +391,7 @@ def validate_manifest(
     problems += check_wake_eligible_fields_have_comparators(signals)
     problems += check_projections_do_not_drift(signals)
     problems += check_counting_strategies_can_actually_count(signals)
+    problems += check_public_dimension_fields(signals)
     return problems
 
 
@@ -363,5 +401,7 @@ __all__ = [
     "check_named_implementations_exist",
     "check_wake_eligible_fields_have_comparators",
     "check_counting_strategies_can_actually_count",
+    "check_public_dimension_fields",
+    "require_public_dimension_fields",
     "validate_manifest",
 ]

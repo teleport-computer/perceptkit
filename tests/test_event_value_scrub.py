@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from perceptkit import IngestContext, PerceptionKit
 from perceptkit.conformance import InMemoryStorage
 from perceptkit.contracts.retraction import Retraction
@@ -81,3 +83,94 @@ def test_an_untouched_event_keeps_its_value():
     snaps = [e.fact_snapshot for e in s.outbox.values()]
     assert "72.0" in repr(snaps), "把没被删的事件也抹了"
     assert not any(x.get("retracted") for x in snaps)
+
+
+def _has_numeric_value(snapshot, value):
+    """Inspect every snapshot leaf, including derived human-readable reason.
+
+    Token boundaries avoid accidental matches in timestamps and hashed ids;
+    both 72 and 72.0 (and nested numeric values) are considered the same value.
+    """
+    import re
+    if isinstance(snapshot, dict):
+        return any(_has_numeric_value(x, value) for x in snapshot.values())
+    if isinstance(snapshot, (list, tuple)):
+        return any(_has_numeric_value(x, value) for x in snapshot)
+    if isinstance(snapshot, (int, float)) and not isinstance(snapshot, bool):
+        return snapshot == value
+    if isinstance(snapshot, str):
+        return re.search(rf"(?<![\w.]){int(value)}(?:\.0+)?(?![\w.])", snapshot) is not None
+    return False
+
+
+@pytest.mark.parametrize("number", [72, 72.0], ids=["integer", "float"])
+@pytest.mark.parametrize("trigger_source", ["ios", "scale"])
+def test_acceptance_A12_trigger_deleted_scrubs_entire_snapshot(number, trigger_source):
+    from test_acceptance_regressions_0_9 import fired_weight, retract
+    storage, kit = fired_weight(value=number, trigger_source=trigger_source)
+    old_event = next(iter(storage.outbox))
+    assert _has_numeric_value(storage.outbox[old_event].fact_snapshot, 72)
+    retract(kit, source=trigger_source)
+    snapshot = storage.outbox[old_event].fact_snapshot
+    assert not _has_numeric_value(snapshot, 72), snapshot
+
+
+@pytest.mark.parametrize("previous_source,trigger_source", [("ios", "ios"), ("scale", "ios"), ("ios", "scale")])
+def test_acceptance_A13_previous_deleted_scrubs_later_event(previous_source, trigger_source):
+    from test_acceptance_regressions_0_9 import fired_weight, retract
+    storage, kit = fired_weight(previous_source=previous_source, trigger_source=trigger_source)
+    old_event = next(iter(storage.outbox))
+    assert _has_numeric_value(storage.outbox[old_event].fact_snapshot, 70)
+    retract(kit, "previous", source=previous_source)
+    snapshot = storage.outbox[old_event].fact_snapshot
+    assert not _has_numeric_value(snapshot, 70), snapshot
+
+
+def test_acceptance_A12_other_source_same_fact_id_does_not_scrub_event():
+    from copy import deepcopy
+    from test_acceptance_regressions_0_9 import fired_weight, retract
+    storage, kit = fired_weight()
+    snapshots = deepcopy([e.fact_snapshot for e in storage.outbox.values()])
+    retract(kit, source="other-source")
+    assert [e.fact_snapshot for e in storage.outbox.values()] == snapshots
+
+
+def test_acceptance_A12_delivered_event_keeps_audit_but_scrubs_deleted_value():
+    from copy import deepcopy
+    from dataclasses import replace
+    from test_acceptance_regressions_0_9 import T, RecordingWake, fired_weight, retract
+
+    class AuditWake(RecordingWake):
+        def wake(self, event, attempt):
+            self.attempt = attempt
+            self.accepted_receipt = replace(
+                super().wake(event, attempt), runtime_ref="accepted-effect-1")
+            return self.accepted_receipt
+
+    storage, kit = fired_weight()
+    wake = AuditWake()
+    kit.wake = wake
+    kit.dispatch_pending(worker_id="worker", now=T + timedelta(hours=1))
+    event_id = next(iter(storage.outbox))
+    assert storage.outbox[event_id].delivery_state == "delivered"
+    assert len(wake.delivered) == 1
+    assert len(storage.receipts) == 1
+    receipt = storage.receipts[0]
+    assert receipt == wake.accepted_receipt
+    assert (receipt.event_id, receipt.attempt_id, receipt.status, receipt.runtime_ref) == (
+        event_id, wake.attempt.attempt_id, "accepted", "accepted-effect-1")
+    receipts_before = deepcopy(storage.receipts)
+    audit_fields = ("event_id", "dedupe_key", "definition_id", "definition_version",
+                    "occurred_at", "detected_at")
+    audit_before = tuple(getattr(storage.outbox[event_id], name) for name in audit_fields)
+    retract(kit)
+    assert storage.receipts == receipts_before, "retraction erased or rewrote external-effect receipts"
+    assert storage.outbox[event_id].delivery_state == "delivered"
+    kit.dispatch_pending(worker_id="worker", now=T + timedelta(hours=3))
+    assert len(wake.delivered) == 1
+    assert storage.receipts == receipts_before, "repeat dispatch lost or duplicated delivery audit"
+    entry = storage.outbox[event_id]
+    assert entry.delivery_state == "delivered"
+    assert tuple(getattr(entry, name) for name in audit_fields) == audit_before
+    assert wake.delivered[0].event_id == entry.event_id == storage.receipts[0].event_id
+    assert not _has_numeric_value(entry.fact_snapshot, 72), entry.fact_snapshot
